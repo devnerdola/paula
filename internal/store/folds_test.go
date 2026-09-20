@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // said stores a message to hang a summary and a memory on.
@@ -87,6 +88,78 @@ func TestAFoldStoresItsSummaryAndItsMemories(t *testing.T) {
 	}
 	if standing[0].Source != second.ID || standing[0].ReplacedBy != 0 {
 		t.Errorf("memory = %+v", standing[0])
+	}
+}
+
+func TestASummaryCoversTheMessageItWasWrittenUpTo(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	first := said(t, s, "my sister Ana lives in Porto")
+
+	// A summary written again covers what it covered before, however much later
+	// it was written: the time it carries is the conversation's, not its own.
+	written := now.Add(3 * time.Hour)
+	err := s.Fold(ctx, &Summary{
+		UptoMessageID: first.ID, Content: "they talked about Ana", CreatedAt: written,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.LatestSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CoversUpto.Equal(now) {
+		t.Errorf("summary covers up to %v, want the message at %v", got.CoversUpto, now)
+	}
+	if !got.CreatedAt.Equal(written) {
+		t.Errorf("summary was written at %v, want %v", got.CreatedAt, written)
+	}
+}
+
+// A number is given again once the row that held it is forgotten, so a fold
+// that read its memories before its model answered can name what has since
+// become its own row. A memory replaced by itself would stand for nothing and
+// be told to nobody.
+func TestAFoldCannotReplaceTheMemoryItIsWriting(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	first := said(t, s, "Ana lives in Porto")
+	was := []Memory{{Content: "Ana lives in Porto.", Source: first.ID, CreatedAt: now}}
+	err := s.Fold(ctx,
+		&Summary{UptoMessageID: first.ID, Content: "they talked", CreatedAt: now}, was)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Forget(ctx, was[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	second := said(t, s, "Ana moved to Lisbon")
+	next := []Memory{{
+		Content: "Ana lives in Lisbon.", Source: second.ID,
+		Replaces: []MemoryID{was[0].ID}, CreatedAt: now,
+	}}
+	err = s.Fold(ctx,
+		&Summary{UptoMessageID: second.ID, Content: "they talked", CreatedAt: now}, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next[0].ID != was[0].ID {
+		t.Fatalf("the memory was written as %d, want the number %d that was given again",
+			next[0].ID, was[0].ID)
+	}
+
+	standing, err := s.Memories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(standing) != 1 || standing[0].ID != next[0].ID {
+		t.Fatalf("memories = %+v, want the one the fold just wrote", standing)
+	}
+	if standing[0].ReplacedBy != 0 {
+		t.Errorf("the memory is replaced by %d, and it is itself", standing[0].ReplacedBy)
 	}
 }
 

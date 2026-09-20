@@ -86,6 +86,9 @@ seconds before she starts, so several quick messages become one reply.
 | `/models` | shows the model behind each role |
 | `/model chat NAME` | switches to another model and remembers it |
 | `/models reset` | forgets those choices |
+| `/summary` | what she was told of the conversation before the messages she still carries |
+| `/memory [QUERY]` | the ten newest memories, or the ten a question is about |
+| `/forget ID` | takes a memory away, and the ones it replaced |
 | `/stop` | stops the reply she is writing |
 | `/help` | lists all of this |
 | `/quit` | closes the terminal |
@@ -122,6 +125,19 @@ again, or memories turned into vectors.
 given, whether it was asked to reason and at which effort, and the reply
 itself. `-dump` adds the headers and the exact bytes in both directions, which
 is what you want when an API behaves strangely.
+
+`paula memory` is what she remembers, beside a `serve` that is running:
+
+```
+./paula memory list                    # the newest, with the number each is forgotten by
+./paula memory search where does Ana live   # the ones a question is about
+./paula memory forget 7                # takes it away, and the ones it replaced
+```
+
+Searching asks the `embed` model what the words mean, so it needs one in the
+file; listing and forgetting ask nothing of a model. Forgetting is about what
+she carries: the messages a memory was read from, and the summary, stay where
+they are.
 
 `paula models` prints what each runner says about the models you configured.
 `paula models -available` lists everything the runners offer, which is how you
@@ -272,16 +288,18 @@ block of its runner, and are listed with each runner above.
 |---|---|---|
 | `chat` | chats and accepts tools | yes |
 | `vision` | sees images | no |
-| `embed` | turns text into a vector | to serve |
+| `embed` | turns text into a vector | to serve, and to search |
 
 Without a `vision` model, pictures reach the chat model only if that model can
 see them itself.
 
 An `embed` model is what memories are searched by. A model that embeds writes
 nothing, so it is a model of its own: OpenRouter lists them apart from the rest
-and Paula reads both listings, and Venice marks them in the one it serves. Only
-`paula serve` asks for one, since it is the conversation that searches: every
-other command reads a conversation without searching it.
+and Paula reads both listings, and Venice marks them in the one it serves.
+`paula serve` asks for one before it starts, since the conversation embeds what
+each fold writes; so does `paula memory search`, which asks it what the words
+you are looking for mean. Every other command reads the memories without
+searching them, and runs on a file that names none.
 
 The chat role asks for tools although no request carries any yet. Tools are
 part of the work ahead, and a model that cannot take them is not worth

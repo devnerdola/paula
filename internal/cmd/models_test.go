@@ -22,17 +22,22 @@ func openrouterCatalogue(t *testing.T) *httptest.Server {
 	return openrouterCatalogueWhile(t, listing)
 }
 
+// openrouterAnswer is one of the OpenRouter answers captured for the runner's
+// own tests. Nothing a test here is held against is written by hand.
+func openrouterAnswer(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "runners", "openrouter", "testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // openrouterCatalogueWhile is openrouterCatalogue with a switch: once it is
 // turned off the listing refuses, while the key is still answered for.
 func openrouterCatalogueWhile(t *testing.T, listing *atomic.Bool) *httptest.Server {
 	t.Helper()
-	read := func(name string) []byte {
-		b, err := os.ReadFile(filepath.Join("..", "runners", "openrouter", "testdata", name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return b
-	}
+	read := func(name string) []byte { return openrouterAnswer(t, name) }
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/models":

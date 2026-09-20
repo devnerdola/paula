@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -116,6 +117,85 @@ func TestWhatIsSearchedIsWhatStandsAndWhatThisModelEmbedded(t *testing.T) {
 	other := Embedded{Runner: "openrouter", Model: "openai/text-embedding-3-small"}
 	if found, err := s.NearestMemories(ctx, other, []float32{1, 0, 0}, 10); err != nil || len(found) != 0 {
 		t.Errorf("found %+v, %v under a model that embedded nothing", found, err)
+	}
+}
+
+func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	first := remembers(t, s, "Ana lives in Porto", "Caio's sister Ana lives in Porto.")
+	second := remembers(t, s, "Ana moved to Lisbon", "Caio's sister Ana lives in Lisbon.", first.ID)
+	kept := remembers(t, s, "I fixed the bike", "Caio fixed the bicycle.")
+	err := s.Embed(ctx, bge, map[MemoryID][]float32{
+		first.ID: {1, 0, 0}, second.ID: {1, 0, 0}, kept.ID: {0, 0, 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gone, err := s.Forget(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) != 2 || gone[0].ID != first.ID || gone[1].ID != second.ID {
+		t.Fatalf("forgot %+v, want the memory and the one it replaced, oldest first", gone)
+	}
+
+	left, err := s.LatestMemories(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].ID != kept.ID {
+		t.Errorf("what is left is %+v, want the memory about the bicycle", left)
+	}
+	// The vectors go with them: nothing is near a memory that is not there.
+	near, err := s.NearestMemories(ctx, bge, []float32{1, 0, 0}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(near) != 1 || near[0].ID != kept.ID {
+		t.Errorf("found %+v, want only the memory that is left", near)
+	}
+	// What was said stays, and so does the summary.
+	if _, err := s.LatestSummary(ctx); err != nil {
+		t.Errorf("the summary went with the memory: %v", err)
+	}
+	if _, err := s.Message(ctx, second.Source); err != nil {
+		t.Errorf("the message went with the memory: %v", err)
+	}
+	if _, err := s.Forget(ctx, second.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("forgetting it again = %v, want not found", err)
+	}
+}
+
+func TestAMemoryForgottenWhileItIsEmbeddedLeavesTheRestEmbedded(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	going := remembers(t, s, "Ana lives in Lisbon", "Caio's sister Ana lives in Lisbon.")
+	kept := remembers(t, s, "I fixed the bike", "Caio fixed the bicycle.")
+
+	// A batch is read, and one of its memories is forgotten before the vectors
+	// come back. What is left of the batch is stored, and the memory that went
+	// takes its vector with it.
+	if _, err := s.Forget(ctx, going.ID); err != nil {
+		t.Fatal(err)
+	}
+	err := s.Embed(ctx, bge, map[MemoryID][]float32{
+		going.ID: {1, 0, 0}, kept.ID: {0, 0, 1},
+	})
+	if err != nil {
+		t.Fatalf("a memory that went took the batch with it: %v", err)
+	}
+
+	if waiting, err := s.MemoriesToEmbed(ctx, bge, 10); err != nil || len(waiting) != 0 {
+		t.Errorf("waiting = %+v, %v, want the batch stored", waiting, err)
+	}
+	found, err := s.NearestMemories(ctx, bge, []float32{0, 0, 1}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 1 || found[0].ID != kept.ID {
+		t.Errorf("found %+v, want the memory that is still there", found)
 	}
 }
 

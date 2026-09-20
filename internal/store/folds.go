@@ -15,9 +15,12 @@ type MemoryID int64
 // there.
 type Summary struct {
 	ID int64
-	// UptoMessageID is the newest message the summary covers. The messages
-	// after it are the ones a prompt still carries one by one.
+	// UptoMessageID is the newest message the summary covers, and CoversUpto is
+	// when that message was sent, which is read back with the summary rather
+	// than kept beside it. The messages after it are the ones a prompt still
+	// carries one by one.
 	UptoMessageID MessageID
+	CoversUpto    time.Time
 	Content       string
 	EntryID       EntryID
 	CreatedAt     time.Time
@@ -41,16 +44,27 @@ type Memory struct {
 	Replaces []MemoryID
 }
 
-const summaryColumns = `id, upto_message_id, content, entry_id, created_at`
+const summaryColumns = `summaries.id, upto_message_id, content,
+	summaries.entry_id, summaries.created_at, messages.created_at`
 
-const memoryColumns = `memories.id, content, source_message_id, replaced_by,
-	memories.entry_id, memories.created_at, messages.created_at`
+// summariesFrom is where a summary and the time it covers up to are read from:
+// the time is the message's, rather than a copy kept beside the summary.
+const summariesFrom = `FROM summaries
+	JOIN messages ON messages.id = summaries.upto_message_id`
+
+const memoryColumns = `memories.id, memories.content, source_message_id,
+	replaced_by, memories.entry_id, memories.created_at, messages.created_at`
+
+// memoriesFrom is where a memory and the day it was said are read from: the
+// day is the message's, rather than a copy kept beside the memory.
+const memoriesFrom = `FROM memories
+	JOIN messages ON messages.id = memories.source_message_id`
 
 // LatestSummary is the summary that counts, and reports ErrNotFound while the
 // conversation has never been folded.
 func (s *Store) LatestSummary(ctx context.Context) (*Summary, error) {
 	row := s.ro.QueryRowContext(ctx,
-		`SELECT `+summaryColumns+` FROM summaries ORDER BY id DESC LIMIT 1`)
+		`SELECT `+summaryColumns+` `+summariesFrom+` ORDER BY summaries.id DESC LIMIT 1`)
 	out, err := scanSummary(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -61,8 +75,7 @@ func (s *Store) LatestSummary(ctx context.Context) (*Summary, error) {
 // Memories are the memories that still stand, oldest first, which is the order
 // a prompt tells them in.
 func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`
-		  FROM memories JOIN messages ON messages.id = memories.source_message_id
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
 		 WHERE replaced_by IS NULL ORDER BY memories.id`)
 	if err != nil {
 		return nil, err
@@ -73,13 +86,55 @@ func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
 // LatestMemories are the memories that still stand, newest first, at most
 // limit of them: what she has been told most recently.
 func (s *Store) LatestMemories(ctx context.Context, limit int) ([]Memory, error) {
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`
-		  FROM memories JOIN messages ON messages.id = memories.source_message_id
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
 		 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
 	}
 	return scanMemories(rows)
+}
+
+// Forget deletes a memory and the ones it took the place of, which stand for
+// nothing once what replaced them is gone, and the vectors of all of them with
+// it. The summary and the messages stay: forgetting is about what she carries,
+// not about what was said. It returns what went, oldest first.
+func (s *Store) Forget(ctx context.Context, id MemoryID) ([]Memory, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	// What replaced a memory is newer than it, so the ones going are the one
+	// named and everything that walks back to it. The set is read in one step,
+	// which is what ends the walk: a memory already in it is not followed again.
+	rows, err := tx.QueryContext(ctx, `WITH RECURSIVE going(id) AS (
+			SELECT ?
+			UNION
+			SELECT memories.id FROM memories JOIN going ON memories.replaced_by = going.id
+		)
+		SELECT `+memoryColumns+` `+memoriesFrom+`
+		 WHERE memories.id IN (SELECT id FROM going)
+		 ORDER BY memories.id`, int64(id))
+	if err != nil {
+		return nil, err
+	}
+	out, err := scanMemories(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrNotFound
+	}
+
+	// The oldest goes first, since a memory points at the one that replaced it
+	// and nothing may point at a row that is gone.
+	for _, m := range out {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM memories WHERE id = ?`, int64(m.ID)); err != nil {
+			return nil, err
+		}
+	}
+	return out, tx.Commit()
 }
 
 // Fold stores what one step of a fold learned: the summary as it now reads,
@@ -139,13 +194,14 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 func scanSummary(row scanner) (*Summary, error) {
 	var out Summary
 	var upto, entry sql.NullInt64
-	var created int64
-	if err := row.Scan(&out.ID, &upto, &out.Content, &entry, &created); err != nil {
+	var created, covers int64
+	if err := row.Scan(&out.ID, &upto, &out.Content, &entry, &created, &covers); err != nil {
 		return nil, err
 	}
 	out.UptoMessageID = MessageID(id(upto))
 	out.EntryID = EntryID(id(entry))
 	out.CreatedAt = time.Unix(0, created)
+	out.CoversUpto = time.Unix(0, covers)
 	return &out, nil
 }
 

@@ -33,4 +33,8 @@ type Conversation interface {
 	Models(ctx context.Context) (conversation.Models, error)
 	SetModel(ctx context.Context, role config.Role, name string) error
 	ResetModels(ctx context.Context) error
+
+	Summary(ctx context.Context) (*store.Summary, error)
+	Memories(ctx context.Context, query string, limit int) ([]store.Memory, error)
+	Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error)
 }

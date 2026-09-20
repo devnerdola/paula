@@ -85,6 +85,18 @@ func (e *Engine) embedStep(ctx context.Context, m *model, by store.Embedded, wai
 	return nil
 }
 
+// Summary is what she has been told of the conversation before the messages a
+// prompt still carries, and nil while it has never been folded.
+func (e *Engine) Summary(ctx context.Context) (*store.Summary, error) {
+	return e.summary(ctx)
+}
+
+// Forget takes a memory away, and the ones it replaced with it. What was said
+// stays: this is about what she carries, not about the conversation.
+func (e *Engine) Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error) {
+	return e.store.Forget(ctx, id)
+}
+
 // Memories are the memories closest in meaning to a query, or the newest ones
 // when there is no query. They are what she has been told, whether or not a
 // prompt had room to tell her.

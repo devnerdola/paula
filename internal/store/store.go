@@ -89,7 +89,9 @@ func Open(dataDir string) (*Store, error) {
 var ErrNoConversation = errors.New("holds no conversation yet")
 
 // Read opens a database that is already there, and says so when it is not,
-// rather than leaving an empty one behind.
+// rather than leaving an empty one behind. What it refuses is starting a
+// conversation, not changing one: a command that writes what is there opens it
+// this way too.
 func Read(dataDir string) (*Store, error) {
 	return openStore(dataDir, false, migrations)
 }
@@ -105,8 +107,13 @@ func openStore(dataDir string, writable bool, list []migration) (*Store, error) 
 		return nil, err
 	}
 
+	// Every transaction on this connection writes, and one that begins by
+	// reading would have to take the write lock later: an upgrade that finds
+	// another run has written since is refused at once, which the busy timeout
+	// does not wait out. They take it up front instead.
 	db, err := sql.Open("sqlite", file(path)+
-		"?_pragma=busy_timeout(5000)"+
+		"?_txlock=immediate"+
+		"&_pragma=busy_timeout(5000)"+
 		"&_pragma=journal_mode(WAL)"+
 		"&_pragma=foreign_keys(1)")
 	if err != nil {

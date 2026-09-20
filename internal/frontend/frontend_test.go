@@ -35,6 +35,12 @@ type talk struct {
 	stopErr  error
 	setErr   error
 	behindAt conversation.Seq
+
+	summary   *store.Summary
+	memories  []store.Memory
+	asked     []string
+	forgot    []store.MemoryID
+	forgetErr error
 }
 
 func newTalk() *talk {
@@ -215,6 +221,32 @@ func (t *talk) ResetModels(context.Context) error {
 	defer t.mu.Unlock()
 	t.resets++
 	return nil
+}
+
+func (t *talk) Summary(context.Context) (*store.Summary, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.summary, nil
+}
+
+func (t *talk) Memories(_ context.Context, query string, limit int) ([]store.Memory, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.asked = append(t.asked, query)
+	if len(t.memories) > limit {
+		return t.memories[:limit], nil
+	}
+	return t.memories, nil
+}
+
+func (t *talk) Forget(_ context.Context, id store.MemoryID) ([]store.Memory, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.forgot = append(t.forgot, id)
+	if t.forgetErr != nil {
+		return nil, t.forgetErr
+	}
+	return t.memories, nil
 }
 
 // screen is an adapter that writes down everything it was asked to do.
@@ -663,6 +695,86 @@ func TestModelsReset(t *testing.T) {
 	defer tk.mu.Unlock()
 	if tk.resets != 1 {
 		t.Errorf("resets = %d", tk.resets)
+	}
+}
+
+func TestTheSummaryCommand(t *testing.T) {
+	s := newScreen(api.Features{Channel: "repl"})
+	tk := newTalk()
+	run(t, s, tk)
+
+	// Nothing has been folded away yet, so there is nothing to show.
+	s.inputs <- api.Input{Text: "/summary"}
+	waitFor(t, "the answer", func() bool { return len(s.messages()) == 1 })
+	if got := s.messages()[0].Text; got != "no summary yet" {
+		t.Errorf("message = %q", got)
+	}
+
+	// It was written again long after the conversation it covers, which is how
+	// a summary that outgrew its room is made shorter.
+	tk.mu.Lock()
+	tk.summary = &store.Summary{
+		Content:    "they talked about Lisbon",
+		CoversUpto: time.Date(2026, 9, 16, 20, 22, 0, 0, time.UTC),
+		CreatedAt:  time.Date(2026, 9, 18, 11, 5, 0, 0, time.UTC),
+	}
+	tk.mu.Unlock()
+
+	s.inputs <- api.Input{Text: "/summary"}
+	waitFor(t, "the summary", func() bool { return len(s.messages()) == 2 })
+	got := s.messages()[1].Text
+	want := "summary up to Wednesday, 16 September 2026, 20:22:\nthey talked about Lisbon"
+	if got != want {
+		t.Errorf("message = %q, want %q", got, want)
+	}
+}
+
+func TestTheMemoryCommands(t *testing.T) {
+	s := newScreen(api.Features{Channel: "repl"})
+	tk := newTalk()
+	run(t, s, tk)
+
+	s.inputs <- api.Input{Text: "/memory"}
+	waitFor(t, "the answer", func() bool { return len(s.messages()) == 1 })
+	if got := s.messages()[0].Text; got != "no memories yet" {
+		t.Errorf("message = %q", got)
+	}
+
+	said := time.Date(2026, 9, 14, 20, 22, 0, 0, time.UTC)
+	tk.mu.Lock()
+	tk.memories = []store.Memory{{ID: 7, Content: "Caio's sister lives in Lisbon.", SaidAt: said}}
+	tk.mu.Unlock()
+
+	// A memory is listed by the number it can be forgotten by, and the day it
+	// was said.
+	s.inputs <- api.Input{Text: "/memory lisbon"}
+	waitFor(t, "the memories", func() bool { return len(s.messages()) == 2 })
+	if got := s.messages()[1].Text; got != "#7 (said on Monday, 14 September 2026) Caio's sister lives in Lisbon." {
+		t.Errorf("message = %q", got)
+	}
+
+	s.inputs <- api.Input{Text: "/forget 7"}
+	waitFor(t, "what was forgotten", func() bool { return len(s.messages()) == 3 })
+	if got := s.messages()[2].Text; !strings.HasPrefix(got, "forgot:\n#7 ") {
+		t.Errorf("message = %q", got)
+	}
+
+	// A number is what it takes, and it says so when it is given anything else.
+	s.inputs <- api.Input{Text: "/forget everything"}
+	waitFor(t, "the answer", func() bool { return len(s.messages()) == 4 })
+	if got := s.messages()[3].Text; !strings.HasPrefix(got, "/forget takes the number") {
+		t.Errorf("message = %q", got)
+	}
+
+	tk.mu.Lock()
+	defer tk.mu.Unlock()
+	// What was typed after the command is what she is asked for; nothing after
+	// it is the newest.
+	if !slices.Equal(tk.asked, []string{"", "lisbon"}) {
+		t.Errorf("asked for %q, want the listing and then the query", tk.asked)
+	}
+	if !slices.Equal(tk.forgot, []store.MemoryID{7}) {
+		t.Errorf("forgot %v, want the memory that was named", tk.forgot)
 	}
 }
 

@@ -43,6 +43,18 @@ type command struct {
 	flags func(fs *flag.FlagSet) func(g *globals, args []string) error
 }
 
+// oneOfItsCommands is what a command that only gathers others runs. A word that
+// is none of them is named: it is a command that was misspelt, and printing the
+// table without saying so leaves whoever typed it looking for what changed.
+func oneOfItsCommands(fs *flag.FlagSet) func(*globals, []string) error {
+	return func(_ *globals, args []string) error {
+		if len(args) > 0 {
+			return usagef("unknown command %q", args[0])
+		}
+		return usagef("")
+	}
+}
+
 // commands is the command table. Adding a command takes its file and one line
 // here.
 func commands() []*command {
@@ -51,6 +63,7 @@ func commands() []*command {
 		replCommand(),
 		modelsCommand(),
 		turnsCommand(),
+		memoryCommand(),
 		personaCheckCommand(),
 		helpCommand(),
 	}

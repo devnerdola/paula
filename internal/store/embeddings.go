@@ -19,9 +19,7 @@ type Embedded struct {
 // MemoriesToEmbed are the memories that still stand and have no vector from
 // this model, oldest first, at most limit of them.
 func (s *Store) MemoriesToEmbed(ctx context.Context, by Embedded, limit int) ([]Memory, error) {
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`
-		  FROM memories
-		  JOIN messages ON messages.id = memories.source_message_id
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
 		  LEFT JOIN memory_embeddings e
 		    ON e.memory_id = memories.id AND e.runner = ? AND e.model = ?
 		 WHERE replaced_by IS NULL AND e.memory_id IS NULL
@@ -33,7 +31,8 @@ func (s *Store) MemoriesToEmbed(ctx context.Context, by Embedded, limit int) ([]
 }
 
 // Embed stores a vector for each memory, all of them together: a memory left
-// without one would be searched for and never found.
+// without one would be searched for and never found. A memory forgotten while
+// it was being embedded takes its vector with it rather than failing the rest.
 func (s *Store) Embed(ctx context.Context, by Embedded, vectors map[MemoryID][]float32) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -46,10 +45,11 @@ func (s *Store) Embed(ctx context.Context, by Embedded, vectors map[MemoryID][]f
 			return fmt.Errorf("memory %d was embedded as nothing", id)
 		}
 		_, err := tx.ExecContext(ctx, `INSERT INTO memory_embeddings
-			(memory_id, runner, model, vector) VALUES (?, ?, ?, ?)
+			(memory_id, runner, model, vector)
+			SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM memories WHERE id = ?)
 			ON CONFLICT(memory_id, runner, model) DO UPDATE SET
 				vector = excluded.vector`,
-			int64(id), by.Runner, by.Model, vectorBytes(v))
+			int64(id), by.Runner, by.Model, vectorBytes(v), int64(id))
 		if err != nil {
 			return err
 		}
@@ -64,9 +64,7 @@ func (s *Store) NearestMemories(ctx context.Context, by Embedded, to []float32, 
 	if len(to) == 0 || limit <= 0 {
 		return nil, nil
 	}
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`, e.vector
-		  FROM memories
-		  JOIN messages ON messages.id = memories.source_message_id
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`, e.vector `+memoriesFrom+`
 		  JOIN memory_embeddings e
 		    ON e.memory_id = memories.id AND e.runner = ? AND e.model = ?
 		 WHERE replaced_by IS NULL`, by.Runner, by.Model)

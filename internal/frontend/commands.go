@@ -3,11 +3,13 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/frontend/api"
+	"nerdola.dev/x/paula/internal/store"
 )
 
 // commands are the ones every frontend answers.
@@ -15,6 +17,9 @@ func (s *Session) commands() []api.Command {
 	out := []api.Command{
 		{Name: "models", Args: "[reset]", Short: "which model serves each role"},
 		{Name: "model", Args: "ROLE NAME", Short: "have a role served by a model"},
+		{Name: "summary", Short: "what she was told of the conversation before this"},
+		{Name: "memory", Args: "[QUERY]", Short: "what she remembers, or what of it a question is about"},
+		{Name: "forget", Args: "ID", Short: "take a memory away"},
 		{Name: "stop", Short: "stop the reply being written"},
 	}
 	out = append(out, s.features.Commands...)
@@ -36,6 +41,12 @@ func (s *Session) command(ctx context.Context, text string) (bool, error) {
 		return true, s.models(ctx, args)
 	case "model":
 		return true, s.setModel(ctx, args)
+	case "summary":
+		return true, s.summary(ctx)
+	case "memory":
+		return true, s.memories(ctx, args)
+	case "forget":
+		return true, s.forget(ctx, args)
 	case "stop":
 		return true, s.stop(ctx)
 	case "help":
@@ -69,6 +80,60 @@ func (s *Session) setModel(ctx context.Context, args string) error {
 		return s.failed(ctx, err)
 	}
 	return s.say(ctx, fmt.Sprintf("%s: %s", role, name))
+}
+
+// memoriesShown is how many memories a frontend lists at once.
+const memoriesShown = 10
+
+func (s *Session) summary(ctx context.Context) error {
+	summary, err := s.conv.Summary(ctx)
+	if err != nil {
+		return s.failed(ctx, err)
+	}
+	if summary == nil {
+		return s.say(ctx, "no summary yet")
+	}
+	// What it covers is the message it was written up to, which stands where it
+	// is while the summary itself is written again.
+	return s.say(ctx, fmt.Sprintf("summary up to %s:\n%s",
+		summary.CoversUpto.Format("Monday, 2 January 2006, 15:04"), summary.Content))
+}
+
+func (s *Session) memories(ctx context.Context, query string) error {
+	found, err := s.conv.Memories(ctx, query, memoriesShown)
+	if err != nil {
+		return s.failed(ctx, err)
+	}
+	if len(found) == 0 {
+		if query != "" {
+			return s.say(ctx, "no memories match")
+		}
+		return s.say(ctx, "no memories yet")
+	}
+	return s.say(ctx, memoryLines(found))
+}
+
+func (s *Session) forget(ctx context.Context, args string) error {
+	id, err := strconv.ParseInt(args, 10, 64)
+	if err != nil || id <= 0 {
+		return s.say(ctx, "/forget takes the number of a memory, such as /forget 3")
+	}
+	gone, err := s.conv.Forget(ctx, store.MemoryID(id))
+	if err != nil {
+		return s.failed(ctx, err)
+	}
+	return s.say(ctx, "forgot:\n"+memoryLines(gone))
+}
+
+// memoryLines is how memories are listed: the number to forget one by, the day
+// it was said, and what it says.
+func memoryLines(memories []store.Memory) string {
+	var b strings.Builder
+	for _, m := range memories {
+		fmt.Fprintf(&b, "#%d (said on %s) %s\n",
+			m.ID, m.SaidAt.Format("Monday, 2 January 2006"), m.Content)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (s *Session) stop(ctx context.Context) error {
