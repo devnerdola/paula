@@ -156,7 +156,7 @@ func TestTheOldestOfAConversationPastTheContextIsLeftOut(t *testing.T) {
 		r.say(t, fmt.Sprintf("message %d: %s", i, long))
 	}
 
-	req := f.asked()
+	req := f.replied()
 	mine := said(req, api.RoleUser)
 	if len(mine) == 0 || len(mine) >= 12 {
 		t.Fatalf("the prompt holds %d of my messages, want some of the twelve", len(mine))
@@ -190,7 +190,7 @@ func TestTheExchangeSheIsAnsweringGoesWhateverItTakes(t *testing.T) {
 
 	// A context that holds nothing still holds what she is answering, since
 	// leaving it out would answer nothing.
-	if mine := said(f.asked(), api.RoleUser); len(mine) != 1 || mine[0] != "three" {
+	if mine := said(f.replied(), api.RoleUser); len(mine) != 1 || mine[0] != "three" {
 		t.Errorf("the prompt holds %q of my messages, want the one she is answering", mine)
 	}
 }

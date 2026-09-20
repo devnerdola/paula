@@ -94,7 +94,7 @@ func TestAConversationPastItsShareIsFolded(t *testing.T) {
 	// The next reply is told what the fold wrote, and carries only the
 	// messages the summary leaves behind.
 	r.say(t, "and then?")
-	req := f.asked()
+	req := f.replied()
 	card := text(req.Messages[0])
 	if !strings.Contains(card, "Earlier in your conversation with Caio:\nthey said things") {
 		t.Errorf("the system message is %q, want the summary in it", card)
@@ -132,6 +132,134 @@ func TestAPromptThatLeftSomethingOutIsFolded(t *testing.T) {
 		s, err := r.store.LatestSummary(context.Background())
 		return err == nil && s != nil
 	})
+}
+
+// growing answers a fold with a summary of its own, and a compaction with
+// again, so a test can say how long each of the two writes is.
+func growing(reply, summary, again string) func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
+	return func(_ context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		out := reply
+		switch purpose(req) {
+		case store.PurposeMemories:
+			out = `{"memories":[]}`
+		case store.PurposeSummary:
+			out = summary
+		case store.PurposeCompaction:
+			out = again
+		}
+		if err := fn(api.Chunk{Kind: api.ChunkText, Text: out}); err != nil {
+			return nil, err
+		}
+		return &api.Result{FinishReason: "stop"}, nil
+	}
+}
+
+func TestASummaryPastItsRoomIsWrittenAgain(t *testing.T) {
+	// A summary far longer than the system message has room for, so the fold
+	// that writes it leaves it over its room.
+	long := "they talked about " + strings.Repeat("all sorts of things and ", 300)
+	f := &fakeRunner{model: chatModel(), chat: growing("hm", long, "they talked.")}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	talkPast(t, r)
+	waitFor(t, "the summary to be written again", func() bool {
+		s, err := r.store.LatestSummary(ctx)
+		return err == nil && s != nil && s.Content == "they talked."
+	})
+
+	// It was written again from itself, with nothing added, and it still
+	// covers the messages the one before it covered.
+	written := f.sentFor(store.PurposeCompaction)
+	if len(written) == 0 {
+		t.Fatal("the summary was never written again")
+	}
+	last := written[len(written)-1]
+	said := text(mine(last))
+	if !strings.Contains(said, "Summary so far:") {
+		t.Errorf("the request said %q, want the summary it is written from", said)
+	}
+	if strings.Contains(said, "Messages to add:") {
+		t.Errorf("the request said %q, want nothing added to it", said)
+	}
+	// It asks by a prompt of its own: the one a fold uses names messages that
+	// a compaction is never given.
+	asked := text(last.Messages[0])
+	if !strings.Contains(asked, "from the summary alone") {
+		t.Errorf("the prompt was %q, want the one for a summary written from itself", asked)
+	}
+	if strings.Contains(asked, "messages to add") {
+		t.Errorf("the prompt was %q, want one that asks for no messages", asked)
+	}
+}
+
+func TestASummaryWrittenAgainFoldsNothingThatFits(t *testing.T) {
+	long := "they talked about " + strings.Repeat("all sorts of things and ", 300)
+	f := &fakeRunner{model: chatModel(), chat: growing("hm", long, "they talked.")}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	// Enough said to sit between what a fold leaves behind and what makes one
+	// due: a fold takes exchanges from anything above the first, and only the
+	// second says one is due at all.
+	said := strings.Repeat("a long thing to say ", 20)
+	for i := range 6 {
+		r.say(t, fmt.Sprintf("message %d: %s", i, said))
+	}
+	if len(f.sentFor(store.PurposeMemories)) != 0 {
+		t.Fatal("the messages were folded before the summary was there to be written again")
+	}
+
+	// A summary far past its room, covering the oldest message alone, so the
+	// messages left are inside their share while it is not inside its room.
+	messages, err := r.store.Messages(ctx, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.store.Fold(ctx, &store.Summary{
+		UptoMessageID: messages[0].ID, Content: long, CreatedAt: r.clock.Now(),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.say(t, "and then?")
+	waitFor(t, "the summary to be written again", func() bool {
+		return len(f.sentFor(store.PurposeCompaction)) > 0
+	})
+	// Folding here would take exchanges the prompt can still carry and add
+	// them to the very summary that has outgrown its room.
+	if got := f.sentFor(store.PurposeMemories); len(got) != 0 {
+		t.Errorf("%d exchanges were folded, want none: only the summary was past what it has", len(got))
+	}
+}
+
+func TestASummaryThatComesBackNoShorterIsDropped(t *testing.T) {
+	// Written again, the summary comes back longer than it was: storing it
+	// would leave the conversation carrying more than before. It is stored as
+	// the model wrote it, less the space around it, so the one it is held
+	// against is trimmed too.
+	long := strings.TrimSpace("they talked about " + strings.Repeat("all sorts of things and ", 300))
+	f := &fakeRunner{model: chatModel(), chat: growing("hm", long, long+" and then some more")}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	talkPast(t, r)
+	waitFor(t, "the summary to be written again", func() bool {
+		return len(f.sentFor(store.PurposeCompaction)) > 0
+	})
+	waitFor(t, "the work to be taken as a failure", func() bool {
+		return strings.Contains(r.log.String(), "keeping the conversation inside the context")
+	})
+
+	summary, err := r.store.LatestSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Content != long {
+		t.Errorf("the summary is %d characters, want the %d it was written from",
+			len(summary.Content), len(long))
+	}
 }
 
 func TestAFoldAnswersNoMessage(t *testing.T) {
@@ -186,7 +314,7 @@ func TestAMemoryOfAMessageThatWasNotShownFailsTheFold(t *testing.T) {
 		r.say(t, fmt.Sprintf("message %d: %s", i, long))
 	}
 	waitFor(t, "the fold to fail", func() bool {
-		return strings.Contains(r.log.String(), "folding the oldest of the conversation away")
+		return strings.Contains(r.log.String(), "keeping the conversation inside the context")
 	})
 
 	// Nothing of a step that failed is kept: a summary covering messages whose
@@ -246,6 +374,32 @@ func TestASummaryCoversNothingLeftBehind(t *testing.T) {
 	}
 	if got := coversUpto(taken, []store.Message{{ID: 3, Role: store.RoleUser}}); got != 2 {
 		t.Errorf("covered up to %d, want the last of the chunk", got)
+	}
+}
+
+func TestACardThatFillsItsShareIsSaidAtStartup(t *testing.T) {
+	rendered, err := fullCard().Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	card := size([]api.Message{api.Text(api.RoleSystem, rendered)}, startRatio, 0)
+	f := &fakeRunner{model: chatModel(), chat: says("hey")}
+
+	// The share of the context the system message has is the card itself, so
+	// nothing is left for the memories or the summary.
+	tight := openReplyWith(t, f, sized(f, 2*card))
+	written := tight.log.String()
+	if !strings.Contains(written, "the card leaves the system message no room") {
+		t.Errorf("the log holds %q, want the card said out loud", written)
+	}
+	if !strings.Contains(written, "level=WARN") {
+		t.Errorf("the log holds %q, want it at the level a run shows", written)
+	}
+
+	// Room enough, and nothing is said.
+	roomy := openReplyWith(t, f, sized(f, 8*card))
+	if written := roomy.log.String(); strings.Contains(written, "the card leaves") {
+		t.Errorf("the log holds %q, want nothing said of a card that fits", written)
 	}
 }
 

@@ -107,6 +107,32 @@ func (f *fakeRunner) asked() api.ChatRequest {
 	return f.requests[len(f.requests)-1]
 }
 
+// replied is the last request of a reply, which is not always the last
+// request: a fold works beside the conversation and sends its own.
+func (f *fakeRunner) replied() api.ChatRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := len(f.requests) - 1; i >= 0; i-- {
+		if purpose(f.requests[i]) == store.PurposeReply {
+			return f.requests[i]
+		}
+	}
+	return api.ChatRequest{}
+}
+
+// sentFor is every request of one purpose, in the order they went out.
+func (f *fakeRunner) sentFor(want string) []api.ChatRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []api.ChatRequest
+	for _, req := range f.requests {
+		if purpose(req) == want {
+			out = append(out, req)
+		}
+	}
+	return out
+}
+
 // says answers with one chunk of text.
 func says(text string) func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
 	return func(_ context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {

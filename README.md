@@ -366,6 +366,21 @@ card is written, newest first; the summary takes the rest. Nothing is thrown
 away: the conversation itself keeps every message, and `paula turns` shows
 every fold and what it asked.
 
+**A summary past its room is written again.** Folding adds to it, so it grows.
+When it no longer fits what is left of the system message, she writes it again
+from itself, with nothing added, and it goes on covering the same messages.
+That follows a fold, in the same background work, and runs on its own when the
+messages are not due one. One that comes back no
+shorter is dropped, so the summary it was written from stands, and it waits
+like a failure rather than asking the same thing again.
+
+A card big enough to fill `system_ratio` of the context on its own leaves
+nothing for either: no memory is ever shown and the summary is never written
+again, however long it grows. `serve` says so at startup, at `warn`, with the
+card's size and the share it filled. It still runs — the prompt holds itself
+to the context by leaving the oldest exchanges out — but raise `system_ratio`,
+give the model a larger `context`, or write a shorter card.
+
 **What still does not fit is left out.** Past the context, the oldest exchanges
 of the prompt are dropped — the messages you sent since her previous reply, and
 that reply, go together, so she is never shown an answer without the messages

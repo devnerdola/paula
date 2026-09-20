@@ -52,9 +52,11 @@ type attempt struct {
 	upto    store.MessageID
 	channel string
 	// foldDue says the messages this attempt's prompt carried took more than
-	// their share of the context. The goroutine building the prompt is the one
-	// that knows; the loop reads it once the attempt is done.
-	foldDue bool
+	// their share of the context, and compactDue that the summary it opened
+	// with took more than its room. The goroutine building the prompt is the
+	// one that knows; the loop reads them once the attempt is done.
+	foldDue    bool
+	compactDue bool
 
 	cancel context.CancelFunc
 	state  atomic.Int32
@@ -257,6 +259,8 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 	if err := e.recover(ctx); err != nil {
 		return nil, nil, err
 	}
+
+	e.checkRoom(ctx)
 
 	// The loop's state is built before the loop runs, so a caller that posts
 	// or waits as soon as Open returns finds it ready.
@@ -500,23 +504,39 @@ func (l *loop) folded(r folded) {
 	}
 	l.foldWait = min(max(2*l.foldWait, foldWait), foldMost)
 	l.foldAfter = l.e.clock.Now().Add(l.foldWait)
-	l.e.log.Warn("folding the oldest of the conversation away",
+	l.e.log.Warn("keeping the conversation inside the context",
 		"error", r.err, "next try in", l.foldWait)
 }
 
-// maybeFold starts a fold when the messages of the prompt that just went out
-// took more than their share of the context. It runs beside the loop: the
-// conversation answers while it works.
+// maybeFold starts the work that keeps the prompt inside the context, when the
+// prompt that just went out says it is due: the messages took more than their
+// share, or the summary took more than its room. It runs beside the loop, so
+// the conversation answers while it works.
 func (l *loop) maybeFold(ctx context.Context, a *attempt) {
 	e := l.e
-	if !a.foldDue || l.folding || e.clock.Now().Before(l.foldAfter) {
+	if !a.foldDue && !a.compactDue {
+		return
+	}
+	if l.folding || e.clock.Now().Before(l.foldAfter) {
 		return
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	l.folding, l.foldCancel = true, cancel
+	fold := a.foldDue
 	go func() {
 		defer cancel()
-		e.folds <- folded{err: e.fold(ctx)}
+		// A fold is what makes the summary longer, so the summary is written
+		// again after it rather than before. One the messages are not due
+		// takes exchanges that are still inside their share and adds them to
+		// the very summary that has outgrown its room.
+		var err error
+		if fold {
+			err = e.fold(ctx)
+		}
+		if err == nil {
+			err = e.compact(ctx)
+		}
+		e.folds <- folded{err: err}
 	}()
 }
 

@@ -64,6 +64,12 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	limit := m.limit()
 	system, history := e.split(m)
 	card := e.systemMessage(memories, summary, system, ratio)
+	// The summary is told whole, so nothing else notices when it has outgrown
+	// what is left of the system message once the card and the memories are
+	// written. This is where both numbers are known.
+	if room := e.summaryRoom(m, memories, ratio); room > 0 && summary != nil {
+		a.compactDue = size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0) > room
+	}
 	if len(kept) == 0 {
 		return []api.Message{card}, nil
 	}
@@ -99,9 +105,11 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	// known exactly: these are the messages, rendered as the model reads them.
 	// One that left something out says it outright, since what it carried is
 	// held to the context and would sit under the share for ever while the
-	// conversation grew past it.
+	// conversation grew past it — unless the system message is what is over,
+	// and then folding would take messages the prompt could still carry and
+	// make the summary that is over even longer.
 	if history > 0 {
-		a.foldDue = dropped > 0 || taken-head > history
+		a.foldDue = taken-head > history || (dropped > 0 && head <= system)
 	}
 
 	out := []api.Message{card}

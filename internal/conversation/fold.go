@@ -32,6 +32,19 @@ const summaryPrompt = `You keep the summary of a conversation between CHAR and U
 - Use at most WORDS words, in LANGUAGE, in the third person and past tense.
 - Reply with the summary only.`
 
+// compactionPrompt is what a summary that has outgrown its room is written
+// again by. It is given the summary and nothing else, so it says what to let
+// go of rather than what to add, and says not to add anything: a rewrite is
+// where a model is most tempted to fill a gap it cannot see.
+const compactionPrompt = `You keep the summary of a conversation between CHAR and USER, who text each other.
+- The summary below has outgrown the room it has. Write it again, shorter, from the summary alone.
+- Keep what still bears on them: what they did and decided, what is still ahead of them, how things stand between them, and the days and times already written down.
+- Let go of the rest: passing remarks, detail that changes nothing now, and anything said twice.
+- Take the most from the oldest parts and the least from the newest.
+- Add nothing that is not there already, and leave nothing in that the words you have do not cover.
+- Use at most WORDS words, in LANGUAGE, in the third person and past tense.
+- Reply with the summary only.`
+
 // foldWait is how long the next fold waits after one failed, doubling up to
 // foldMost. Rate limits and outages usually clear within minutes, and replies
 // go on meanwhile.
@@ -53,6 +66,77 @@ func (e *Engine) fold(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// compact writes the summary again from itself when it has outgrown the room
+// it has of the system message. A fold is what makes it longer, so this
+// follows one.
+func (e *Engine) compact(ctx context.Context) error {
+	m, err := e.roleModel(ctx, config.RoleChat)
+	if err != nil {
+		return err
+	}
+	summary, err := e.summary(ctx)
+	if err != nil || summary == nil {
+		return err
+	}
+	memories, err := e.store.Memories(ctx)
+	if err != nil {
+		return err
+	}
+	ratio := e.ratios.ratio(m.Name)
+	room := e.summaryRoom(m, memories, ratio)
+	was := size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0)
+	if room <= 0 || was <= room {
+		// Nothing bounds the system message, or the summary is inside what it
+		// has. Either way there is nothing to write again.
+		return nil
+	}
+
+	entry := &store.Entry{StartedAt: e.clock.Now()}
+	if err := e.store.StartEntry(ctx, entry); err != nil {
+		return err
+	}
+	a := &attempt{entry: entry}
+
+	written, err := e.summarise(ctx, a, m, summary, nil, room)
+	now := was
+	if err == nil {
+		now = size([]api.Message{api.Text(api.RoleSystem, written)}, ratio, 0)
+		if now >= was {
+			// It kept its length, so the one it was written from stands rather
+			// than being replaced by something no shorter. Writing it again
+			// straight away would ask the same thing of the same model and get
+			// the same answer; the wait a failure earns is what stops that.
+			err = fmt.Errorf("the summary is %d tokens, no shorter than it was, and its room is %d", now, room)
+		}
+	}
+	if err == nil {
+		// It covers the same messages as the one it was written from, since
+		// nothing was added to it.
+		err = e.store.Fold(context.WithoutCancel(ctx), &store.Summary{
+			UptoMessageID: summary.UptoMessageID,
+			Content:       written,
+			EntryID:       entry.ID,
+			CreatedAt:     e.clock.Now(),
+		}, nil)
+	}
+	entry.EndedAt = e.clock.Now()
+	entry.Status = store.StatusDone
+	if err != nil {
+		entry.Status = store.StatusFailed
+		entry.Error = err.Error()
+	}
+	if eerr := e.store.EndEntry(context.WithoutCancel(ctx), entry); eerr != nil && err == nil {
+		err = eerr
+	}
+	if err != nil {
+		return err
+	}
+
+	e.log.Info("the summary is written again", "entry", entry.ID,
+		"tokens", now, "was", was, "room", room)
+	return nil
 }
 
 // foldStep folds one chunk: the oldest whole exchanges the messages can spare
@@ -289,7 +373,8 @@ func (e *Engine) remember(ctx context.Context, a *attempt, m *model, stored []st
 	return out, nil
 }
 
-// summarise asks the model to write the summary again, with the chunk added.
+// summarise asks the model to write the summary again, with the chunk added,
+// or to write it again from itself when there is no chunk.
 func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *store.Summary, chunk []store.Message, room int) (string, error) {
 	var b strings.Builder
 	if summary != nil && summary.Content != "" {
@@ -297,11 +382,18 @@ func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *s
 		b.WriteString(summary.Content)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("Messages to add:\n")
-	b.WriteString(e.chunkText(chunk))
+	// A compaction adds nothing, so it leaves out the section that would list
+	// what to add, and asks by a prompt of its own: the one a fold uses names
+	// messages it would not be given.
+	prompt, purpose := compactionPrompt, store.PurposeCompaction
+	if len(chunk) > 0 {
+		prompt, purpose = summaryPrompt, store.PurposeSummary
+		b.WriteString("Messages to add:\n")
+		b.WriteString(e.chunkText(chunk))
+	}
 
-	text, err := e.answer(ctx, a, m, store.PurposeSummary,
-		e.fill(summaryPrompt, e.words(b.String(), room, e.ratios.ratio(m.Name))), b.String())
+	text, err := e.answer(ctx, a, m, purpose,
+		e.fill(prompt, e.words(b.String(), room, e.ratios.ratio(m.Name))), b.String())
 	if err != nil {
 		return "", err
 	}

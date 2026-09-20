@@ -24,6 +24,9 @@ const (
 	PurposeCaption  = "caption"
 	PurposeMemories = "memories"
 	PurposeSummary  = "summary"
+	// PurposeCompaction is a summary written again from itself, with no
+	// messages added, because it outgrew the room it has.
+	PurposeCompaction = "compaction"
 )
 
 // EntryID numbers the entries of the turn log.

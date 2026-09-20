@@ -1,10 +1,12 @@
 package conversation
 
 import (
+	"context"
 	"math"
 	"sync"
 	"unicode/utf8"
 
+	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 )
@@ -89,6 +91,31 @@ func (e *Engine) split(m *model) (system, history int) {
 	}
 	system = share(limit, e.cfg.SystemRatio)
 	return system, limit - system
+}
+
+// checkRoom says at startup when the card fills the share of the context the
+// system message has, leaving nothing for what a fold writes: memories then
+// take a share of nothing and the summary is never written again, however long
+// it grows. The run goes on, since the prompt still holds itself to the
+// context by leaving the oldest exchanges out, and a card is the owner's to
+// write.
+func (e *Engine) checkRoom(ctx context.Context) {
+	m, err := e.roleModel(ctx, config.RoleChat)
+	if err != nil {
+		// A setup with no chat model is said out loud by the startup checks.
+		return
+	}
+	system, _ := e.split(m)
+	if system <= 0 {
+		// Nothing says what the model holds, so nothing is divided.
+		return
+	}
+	card := size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, e.ratios.ratio(m.Name), 0)
+	if card < system {
+		return
+	}
+	e.log.Warn("the card leaves the system message no room for memories or the summary",
+		"model", m.Name, "card", card, "share", system, "context", m.limit())
 }
 
 // limit is the context a prompt is held to: what the file sets for the model,
