@@ -108,7 +108,8 @@ thrown away; the next `serve` answers the message you were waiting on.
 ## Looking at what happened
 
 `paula turns` lists what she did, newest first, with the tokens and the cost of
-each — a reply, or a fold of the oldest of the conversation:
+each: a reply, a fold of the oldest of the conversation, a summary written
+again, or memories turned into vectors.
 
 ```
 ./paula turns
@@ -387,6 +388,18 @@ again, however long it grows. `serve` says so at startup, at `warn`, with the
 card's size and the share it filled. It still runs — the prompt holds itself
 to the context by leaving the oldest exchanges out — but raise `system_ratio`,
 give the model a larger `context`, or write a shorter card.
+
+**Memories are found by what they mean.** The `embed` model turns each of them
+into a vector, a hundred at a time, in the same background work that folds and
+writes the summary again — so a question finds the memory it is about without
+sharing a word with it. A vector is kept under the model that made it: change
+the model and they are made again, rather than measured against a space they
+were never in.
+
+The two run beside each other, each waiting its own wait after a failure of its
+own. A host that is away for the model that embeds, or merely slow with a long
+backlog, does not hold up the fold, which is what keeps the prompt inside the
+context; and a fold that fails does not stop the memories from being embedded.
 
 **What still does not fit is left out.** Past the context, the oldest exchanges
 of the prompt are dropped — the messages you sent since her previous reply, and

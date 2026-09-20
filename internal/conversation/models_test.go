@@ -94,6 +94,45 @@ func TestAModelChosenForARoleIsKept(t *testing.T) {
 	}
 }
 
+// What serves a role is one question, asked the same way by the run that
+// answers, by the command that searches the memories, and by the check that
+// holds a run to what it needs. A model the conversation was given serves the
+// role wherever the file's default stands, and where the file names none.
+func TestWhatServesARoleIsWhatTheConversationWasGiven(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hey you")}
+	set := sized(f, 2000)
+	other := alsoEmbeds(set, "others", "some/others")
+	r := openReplyWith(t, f, set)
+	ctx := context.Background()
+
+	m, err := RoleModel(ctx, r.store, set, config.RoleEmbed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m == nil || m.Name != set.Defaults[config.RoleEmbed].Name {
+		t.Fatalf("embed is served by %+v, want the file's default", m)
+	}
+
+	if err := r.SetModel(ctx, config.RoleEmbed, other.Name); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := RoleModel(ctx, r.store, set, config.RoleEmbed); err != nil || m == nil || m.Name != other.Name {
+		t.Fatalf("embed is served by %+v, %v, want the model it was given", m, err)
+	}
+
+	// The file naming no default for the role leaves what it was given, which
+	// is what serves it.
+	delete(set.Defaults, config.RoleEmbed)
+	if m, err := RoleModel(ctx, r.store, set, config.RoleEmbed); err != nil || m == nil || m.Name != other.Name {
+		t.Fatalf("embed is served by %+v, %v, want the model it was given", m, err)
+	}
+	// A role nothing serves is answered as nothing, for whoever asked to say
+	// what it means.
+	if m, err := RoleModel(ctx, r.store, set, config.RoleVision); err != nil || m != nil {
+		t.Errorf("vision is served by %+v, %v, want nothing", m, err)
+	}
+}
+
 func TestTheModelsMenuOfASetupWithNoRunners(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hey you")}
 	r := openReplyWith(t, f, nil)

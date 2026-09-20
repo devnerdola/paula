@@ -270,8 +270,10 @@ func writePrompt(w io.Writer, r store.Request) {
 		fmt.Fprintln(w, pruned)
 		return
 	}
+	// A request that carries no messages is not a prompt: an embedding is what
+	// it was asked to turn into vectors, and it is shown as it was sent.
 	p, ok := api.ReadPrompt(r.RequestBody)
-	if !ok {
+	if !ok || len(p.Messages) == 0 {
 		if len(r.RequestBody) > 0 {
 			fmt.Fprintf(w, "%s\n", r.RequestBody)
 		}

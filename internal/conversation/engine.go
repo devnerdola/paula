@@ -164,7 +164,7 @@ type Engine struct {
 	waits     chan waitRequest
 	standings chan standingRequest
 	done      chan doneRequest
-	folds     chan folded
+	worked    chan worked
 
 	closing sync.Once
 	closed  chan struct{}
@@ -251,7 +251,7 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		waits:     make(chan waitRequest),
 		standings: make(chan standingRequest),
 		done:      make(chan doneRequest),
-		folds:     make(chan folded),
+		worked:    make(chan worked),
 		closed:    make(chan struct{}),
 		ended:     make(chan struct{}),
 	}
@@ -422,13 +422,36 @@ type loop struct {
 	pending  bool
 	waiters  []chan Seq
 
-	// folding says a fold is running beside the loop, and foldAfter when the
-	// next one may start: a fold that failed waits, doubling up to foldMost,
-	// since a host that refused one step refuses the next.
-	folding    bool
-	foldCancel context.CancelFunc
-	foldWait   time.Duration
-	foldAfter  time.Time
+	// keeping is the work that holds the prompt to the context, and embedding
+	// the work that turns what a fold wrote into vectors. They are asked of
+	// different models, so each runs beside the loop on its own and each waits
+	// its own wait after a failure of its own: a host away for one says nothing
+	// about the other, and one that is slow holds up only itself.
+	keeping   work
+	embedding work
+}
+
+// work is one piece of background work: whether it is out, how to cut it short,
+// and when the next try may start. A piece that failed waits, doubling up to
+// foldMost, since a host that refused one step refuses the next.
+type work struct {
+	out    bool
+	cancel context.CancelFunc
+	wait   time.Duration
+	after  time.Time
+}
+
+// due reports whether this piece may start now: nothing of it is out, and
+// whatever wait its last failure earned is over.
+func (w *work) due(now time.Time) bool {
+	return !w.out && !now.Before(w.after)
+}
+
+// start marks the piece as out and returns the context it runs under.
+func (w *work) start(ctx context.Context) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
+	w.out, w.cancel = true, cancel
+	return ctx
 }
 
 func (l *loop) run() {
@@ -452,11 +475,15 @@ func (l *loop) run() {
 				}
 				l.finish(ctx, req)
 			}
-			if l.folding {
-				// A fold is cut short by the run ending, and what it had
-				// written stands: the entry it left says how far it got.
-				l.foldCancel()
-				l.folded(<-e.folds)
+			// Work behind a reply is cut short by the run ending, and what it
+			// had written stands: the entry each piece left says how far it got.
+			for _, w := range []*work{&l.keeping, &l.embedding} {
+				if w.out {
+					w.cancel()
+				}
+			}
+			for l.keeping.out || l.embedding.out {
+				l.take(<-e.worked)
 			}
 			l.pending = false
 			l.wake()
@@ -488,47 +515,74 @@ func (l *loop) run() {
 		case req := <-e.done:
 			l.finish(ctx, req)
 
-		case r := <-e.folds:
-			l.folded(r)
+		case r := <-e.worked:
+			l.take(r)
+			if !r.embedding && l.embedding.due(e.clock.Now()) {
+				// A fold is the only thing that writes memories, and what it
+				// wrote has no vector until this runs. It is looked at as soon
+				// as the fold is done rather than left to the next reply, which
+				// may be a long time coming.
+				l.embed(ctx)
+			}
 		}
 	}
 }
 
-// folded takes a fold back. One that failed sets how long the next waits.
-func (l *loop) folded(r folded) {
-	l.folding = false
-	l.foldCancel = nil
-	if r.err == nil || errors.Is(r.err, context.Canceled) {
-		l.foldWait = 0
-		return
+// take marks a piece of work as no longer out. What it failed at sets how long
+// the next try of that piece waits, and says nothing about the other.
+func (l *loop) take(r worked) {
+	w, what := &l.keeping, "keeping the conversation inside the context"
+	if r.embedding {
+		w, what = &l.embedding, "embedding the memories"
 	}
-	l.foldWait = min(max(2*l.foldWait, foldWait), foldMost)
-	l.foldAfter = l.e.clock.Now().Add(l.foldWait)
-	l.e.log.Warn("keeping the conversation inside the context",
-		"error", r.err, "next try in", l.foldWait)
+	w.out, w.cancel = false, nil
+	w.wait, w.after = l.waitAfter(w.wait, r.err, what)
 }
 
-// maybeFold starts the work that keeps the prompt inside the context, when the
-// prompt that just went out says it is due: the messages took more than their
-// share, or the summary took more than its room. It runs beside the loop, so
-// the conversation answers while it works.
-func (l *loop) maybeFold(ctx context.Context, a *attempt) {
+// waitAfter is how long the next try of one piece of work waits, and the time
+// it may start at. Work that did not fail waits for nothing.
+func (l *loop) waitAfter(was time.Duration, err error, what string) (time.Duration, time.Time) {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return 0, time.Time{}
+	}
+	wait := min(max(2*was, foldWait), foldMost)
+	l.e.log.Warn(what, "error", err, "next try in", wait)
+	return wait, l.e.clock.Now().Add(wait)
+}
+
+// behind starts the work that runs behind a reply. Each piece runs beside the
+// loop on its own, so the conversation answers while they work and neither
+// waits for the other.
+func (l *loop) behind(ctx context.Context, a *attempt) {
+	now := l.e.clock.Now()
+	// Keeping the prompt inside the context is due when the prompt that just
+	// went out says so: the messages took more than their share, or the summary
+	// took more than its room.
+	if (a.foldDue || a.compactDue) && l.keeping.due(now) {
+		l.keep(ctx, a.foldDue)
+	}
+	// Embedding is due whenever it is not already running: what is waiting for
+	// a vector is a question for the store, which answers it in one indexed
+	// query, rather than something the loop keeps track of. A fold of this run
+	// has just written memories, a run before this one may have left some, and
+	// a model given the role since leaves every one of them without a vector of
+	// the model serving now.
+	if l.embedding.due(now) {
+		l.embed(ctx)
+	}
+}
+
+// keep starts the work that holds the prompt to the context.
+func (l *loop) keep(ctx context.Context, fold bool) {
 	e := l.e
-	if !a.foldDue && !a.compactDue {
-		return
-	}
-	if l.folding || e.clock.Now().Before(l.foldAfter) {
-		return
-	}
-	ctx, cancel := context.WithCancel(ctx)
-	l.folding, l.foldCancel = true, cancel
-	fold := a.foldDue
+	ctx = l.keeping.start(ctx)
+	cancel := l.keeping.cancel
 	go func() {
 		defer cancel()
 		// A fold is what makes the summary longer, so the summary is written
-		// again after it rather than before. One the messages are not due
-		// takes exchanges that are still inside their share and adds them to
-		// the very summary that has outgrown its room.
+		// again after it rather than before. One the messages are not due takes
+		// exchanges that are still inside their share and adds them to the very
+		// summary that has outgrown its room.
 		var err error
 		if fold {
 			err = e.fold(ctx)
@@ -536,7 +590,18 @@ func (l *loop) maybeFold(ctx context.Context, a *attempt) {
 		if err == nil {
 			err = e.compact(ctx)
 		}
-		e.folds <- folded{err: err}
+		e.worked <- worked{err: err}
+	}()
+}
+
+// embed starts the work that turns the memories without a vector into vectors.
+func (l *loop) embed(ctx context.Context) {
+	e := l.e
+	ctx = l.embedding.start(ctx)
+	cancel := l.embedding.cancel
+	go func() {
+		defer cancel()
+		e.worked <- worked{embedding: true, err: e.embed(ctx)}
 	}()
 }
 
@@ -571,6 +636,7 @@ func (l *loop) start(ctx context.Context) error {
 			l.debounce.Reset(e.cfg.Debounce.Duration())
 		}
 	}
+
 	return nil
 }
 
@@ -703,7 +769,7 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 	// However the reply ended, its prompt is what says whether the messages
 	// have outgrown their share. One that failed for being too long is the
 	// case a fold is most needed in.
-	l.maybeFold(ctx, a)
+	l.behind(ctx, a)
 
 	switch status {
 	case store.StatusRestarted:

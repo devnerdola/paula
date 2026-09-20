@@ -67,17 +67,19 @@ func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	return scanMemories(rows)
+}
 
-	var out []Memory
-	for rows.Next() {
-		m, err := scanMemory(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *m)
+// LatestMemories are the memories that still stand, newest first, at most
+// limit of them: what she has been told most recently.
+func (s *Store) LatestMemories(ctx context.Context, limit int) ([]Memory, error) {
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`
+		  FROM memories JOIN messages ON messages.id = memories.source_message_id
+		 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return scanMemories(rows)
 }
 
 // Fold stores what one step of a fold learned: the summary as it now reads,
@@ -110,7 +112,7 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 		res, err := tx.ExecContext(ctx, `INSERT INTO memories
 			(content, source_message_id, entry_id, created_at)
 			VALUES (?, ?, ?, ?)`,
-			m.Content, nullID(m.Source), nullID(m.EntryID), m.CreatedAt.UnixNano())
+			m.Content, int64(m.Source), nullID(m.EntryID), m.CreatedAt.UnixNano())
 		if err != nil {
 			return err
 		}
@@ -120,9 +122,13 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 		}
 		m.ID = MemoryID(stored)
 		for _, replaced := range m.Replaces {
+			// A memory takes the place of one older than itself. The fold read
+			// the memories it replaces before it asked its model, and a number
+			// is given again once the row that held it is forgotten, so a step
+			// that took long enough can name what is now its own row.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE memories SET replaced_by = ? WHERE id = ?`,
-				int64(m.ID), int64(replaced)); err != nil {
+				`UPDATE memories SET replaced_by = ? WHERE id = ? AND id < ?`,
+				int64(m.ID), int64(replaced), int64(m.ID)); err != nil {
 				return err
 			}
 		}
@@ -143,11 +149,26 @@ func scanSummary(row scanner) (*Summary, error) {
 	return &out, nil
 }
 
-func scanMemory(row scanner) (*Memory, error) {
+func scanMemories(rows *sql.Rows) ([]Memory, error) {
+	defer rows.Close()
+	var out []Memory
+	for rows.Next() {
+		m, err := scanMemory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *m)
+	}
+	return out, rows.Err()
+}
+
+// scanMemory reads a memory, and after it whatever else the query asked for.
+func scanMemory(row scanner, extra ...any) (*Memory, error) {
 	var out Memory
 	var source, replaced, entry sql.NullInt64
 	var created, said int64
-	if err := row.Scan(&out.ID, &out.Content, &source, &replaced, &entry, &created, &said); err != nil {
+	into := append([]any{&out.ID, &out.Content, &source, &replaced, &entry, &created, &said}, extra...)
+	if err := row.Scan(into...); err != nil {
 		return nil, err
 	}
 	out.Source = MessageID(id(source))

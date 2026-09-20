@@ -106,4 +106,14 @@ func TestAFoldThatCannotBeStoredLeavesNothingBehind(t *testing.T) {
 	if _, err := s.LatestSummary(ctx); !errors.Is(err, ErrNotFound) {
 		t.Errorf("summary error = %v, want the step to have left nothing", err)
 	}
+
+	// A memory of no message at all is the same refusal: it is read back beside
+	// the day it was said, which is the message's, so one naming none would be
+	// listed by nothing and searched by nothing.
+	err = s.Fold(ctx,
+		&Summary{UptoMessageID: first.ID, Content: "they said hey", CreatedAt: now},
+		[]Memory{{Content: "nothing real", CreatedAt: now}})
+	if err == nil {
+		t.Fatal("a memory of no message was stored")
+	}
 }

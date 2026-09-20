@@ -53,8 +53,14 @@ const (
 	foldMost = 10 * time.Minute
 )
 
-// folded is what one fold reports back to the loop.
-type folded struct{ err error }
+// worked is one piece of the work behind a reply reporting back to the loop.
+// Keeping the prompt inside the context and embedding the memories are told
+// apart: they are asked of different models, and a host that is away for one
+// has nothing to say about the other.
+type worked struct {
+	embedding bool
+	err       error
+}
 
 // fold folds the oldest of the conversation away, a step at a time, until what
 // is left fits the share of the context the messages have. It runs beside the
@@ -93,34 +99,50 @@ func (e *Engine) compact(ctx context.Context) error {
 		return nil
 	}
 
-	entry := &store.Entry{StartedAt: e.clock.Now()}
-	if err := e.store.StartEntry(ctx, entry); err != nil {
-		return err
-	}
-	a := &attempt{entry: entry}
-
-	written, err := e.summarise(ctx, a, m, summary, nil, room)
 	now := was
-	if err == nil {
+	entry, err := e.inEntry(ctx, func(a *attempt) error {
+		written, err := e.summarise(ctx, a, m, summary, nil, room)
+		if err != nil {
+			return err
+		}
 		now = size([]api.Message{api.Text(api.RoleSystem, written)}, ratio, 0)
 		if now >= was {
 			// It kept its length, so the one it was written from stands rather
 			// than being replaced by something no shorter. Writing it again
 			// straight away would ask the same thing of the same model and get
 			// the same answer; the wait a failure earns is what stops that.
-			err = fmt.Errorf("the summary is %d tokens, no shorter than it was, and its room is %d", now, room)
+			return fmt.Errorf("the summary is %d tokens, no shorter than it was, and its room is %d", now, room)
 		}
-	}
-	if err == nil {
 		// It covers the same messages as the one it was written from, since
 		// nothing was added to it.
-		err = e.store.Fold(context.WithoutCancel(ctx), &store.Summary{
+		return e.store.Fold(context.WithoutCancel(ctx), &store.Summary{
 			UptoMessageID: summary.UptoMessageID,
 			Content:       written,
-			EntryID:       entry.ID,
+			EntryID:       a.entry.ID,
 			CreatedAt:     e.clock.Now(),
 		}, nil)
+	})
+	if err != nil {
+		return err
 	}
+
+	e.log.Info("the summary is written again", "entry", entry.ID,
+		"tokens", now, "was", was, "room", room)
+	return nil
+}
+
+// inEntry runs one piece of the work behind a reply in an entry of its own: a
+// fold, a summary written again, or a batch of memories turned into vectors.
+// None of them answers a message, so the entry names none and what the
+// conversation has been answered up to is untouched by it. What the work
+// learned about itself outlives the context it was cut off in, so the entry is
+// closed whichever way it went.
+func (e *Engine) inEntry(ctx context.Context, work func(*attempt) error) (*store.Entry, error) {
+	entry := &store.Entry{StartedAt: e.clock.Now()}
+	if err := e.store.StartEntry(ctx, entry); err != nil {
+		return nil, err
+	}
+	err := work(&attempt{entry: entry})
 	entry.EndedAt = e.clock.Now()
 	entry.Status = store.StatusDone
 	if err != nil {
@@ -130,13 +152,7 @@ func (e *Engine) compact(ctx context.Context) error {
 	if eerr := e.store.EndEntry(context.WithoutCancel(ctx), entry); eerr != nil && err == nil {
 		err = eerr
 	}
-	if err != nil {
-		return err
-	}
-
-	e.log.Info("the summary is written again", "entry", entry.ID,
-		"tokens", now, "was", was, "room", room)
-	return nil
+	return entry, err
 }
 
 // foldStep folds one chunk: the oldest whole exchanges the messages can spare
@@ -178,26 +194,12 @@ func (e *Engine) foldStep(ctx context.Context) (bool, error) {
 		return false, nil
 	}
 
-	entry := &store.Entry{StartedAt: e.clock.Now()}
-	if err := e.store.StartEntry(ctx, entry); err != nil {
-		return false, err
-	}
-	// A fold is an entry of its own, and answers no message: what it writes is
-	// the summary and the memories, never a reply. Its entry names no message,
-	// so what the conversation has been answered up to is untouched by it.
-	a := &attempt{entry: entry}
-
-	more, err := e.foldOnce(ctx, a, m, summary, groups, sizes, chunk, ratio)
-	entry.EndedAt = e.clock.Now()
-	entry.Status = store.StatusDone
-	if err != nil {
-		entry.Status = store.StatusFailed
-		entry.Error = err.Error()
-	}
-	// What a fold learned about itself outlives the context it was cut off in.
-	if eerr := e.store.EndEntry(context.WithoutCancel(ctx), entry); eerr != nil && err == nil {
-		return false, eerr
-	}
+	var more bool
+	_, err = e.inEntry(ctx, func(a *attempt) error {
+		var err error
+		more, err = e.foldOnce(ctx, a, m, summary, groups, sizes, chunk, ratio)
+		return err
+	})
 	return more, err
 }
 
