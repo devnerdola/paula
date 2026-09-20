@@ -53,6 +53,7 @@ func TestDefaults(t *testing.T) {
 		PrefillCancel: true,
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
+		ImageTokens:   1000,
 		LogKeep:       500,
 	}
 	if c.Engine != want {
@@ -170,6 +171,7 @@ func TestValidationErrors(t *testing.T) {
 		{"runners is not a mapping", "runners: [a, b]\ndefault_models:\n  chat: a\n", "runners: want a mapping"},
 		{"image max px", minimal + "\nengine:\n  image_max_px: -1\n", "engine.image_max_px: -1 is below zero"},
 		{"image turns", minimal + "\nengine:\n  image_turns: -1\n", "engine.image_turns: -1 is below zero"},
+		{"image tokens", minimal + "\nengine:\n  image_tokens: -1\n", "engine.image_tokens: -1 is below zero"},
 		{"log keep", minimal + "\nengine:\n  log_keep: -1\n", "engine.log_keep: -1 is below zero"},
 		{"bad duration", minimal + "\nengine:\n  debounce: soon\n", "engine.debounce: \"soon\" is not a duration"},
 		{"duration that is not text", minimal + "\nengine:\n  debounce: [1, 2]\n", "engine.debounce: want a duration"},

@@ -225,8 +225,9 @@ A model needs a `runner` and the `id` that runner knows it by. It may also set
 `context`, and any of the settings below.
 
 Without a `context`, Paula uses the largest the catalogue reports. The number
-is never sent to the API. It is what `paula models` shows, and what a host
-pinned with `routing.only` is held against.
+is never sent to the API. It is what `paula models` shows, what a host pinned
+with `routing.only` is held against, and what a prompt is held to. Where
+neither the file nor the catalogue gives one, a prompt is held to nothing.
 
 `paula models` holds each model against the catalogue: the runner serves it,
 its reasoning settings fit what it does, and it accepts every parameter she
@@ -286,6 +287,7 @@ configuring for it.
 | `prefill_cancel` | `true` | a new message restarts a reply that has written nothing yet |
 | `image_turns` | `2` | how many recent messages send their picture as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
+| `image_tokens` | `1000` | tokens counted for each picture sent as a picture; set it to what the host bills for one |
 | `log_keep` | `500` | how many replies keep the bodies of their requests |
 
 ### Frontends
@@ -342,10 +344,21 @@ stays unanswered. Your next message, or the next `serve`, picks it up. Nothing
 is answered twice: every stored reply records which messages it answered.
 
 **The prompt is the conversation.** It opens with one system message, the card.
-Then comes every message in order, each reply after what it answers. Nothing is
-summarised or folded away, so a conversation that grows past the model's
-context starts failing. Raise `context`, move to a larger model, or start a new
-`data_dir`.
+Then comes every message in order, each reply after what it answers.
+
+**What no longer fits is left out.** A prompt is measured against the model's
+`context`, or the largest its catalogue reports. Past it, the oldest exchanges
+are dropped — the messages you sent since her previous reply, and that reply,
+go together, so she is never shown an answer without the messages it answered.
+What she is answering now is sent whatever it takes. Nothing is summarised yet,
+so what falls off the front is gone from the prompt; the conversation itself
+keeps everything.
+
+Measuring means counting tokens, which only the host can do exactly. Paula
+starts at a token every 3.5 characters, which counts a little high, and
+corrects it per model from the count an answer comes back with. A prompt that
+carried a picture corrects nothing, since the picture is in the count and not
+in the characters. Every picture sent as a picture counts `image_tokens`.
 
 **The time is told, not written into a message.** Before each message of yours
 stands a system message of its own: `The next message was sent at Saturday, 19

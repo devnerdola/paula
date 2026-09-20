@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -145,6 +146,27 @@ type replyEngine struct {
 	runner *fakeRunner
 	clock  *fakeClock
 	store  *store.Store
+	log    *logged
+}
+
+// logged is what the engine wrote to its log, for a test that holds it to
+// something it says. The engine writes from the goroutine of a reply and the
+// test reads from its own, so both go through the lock.
+type logged struct {
+	mu      sync.Mutex
+	written strings.Builder
+}
+
+func (l *logged) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.Write(p)
+}
+
+func (l *logged) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.written.String()
 }
 
 func openReply(t *testing.T, f *fakeRunner) *replyEngine {
@@ -164,18 +186,20 @@ func openReplyWith(t *testing.T, f *fakeRunner, set *runners.Setup) *replyEngine
 	t.Cleanup(func() { st.Close() })
 
 	c := newClock()
+	written := &logged{}
 	e, err := Open(context.Background(), Options{
 		Store:   st,
 		Runners: set,
 		Persona: fullCard(),
 		Engine:  config.DefaultEngine(),
 		Clock:   c,
+		Log:     slog.New(slog.NewTextHandler(written, nil)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { e.Close() })
-	return &replyEngine{Engine: e, runner: f, clock: c, store: st}
+	return &replyEngine{Engine: e, runner: f, clock: c, store: st, log: written}
 }
 
 func (r *replyEngine) say(t *testing.T, text string) {

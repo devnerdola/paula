@@ -148,6 +148,9 @@ type Engine struct {
 	clock    Clock
 	log      *slog.Logger
 	events   *events
+	// ratios is what a character of a prompt costs, which every request that
+	// comes back counted says more about.
+	ratios ratios
 
 	posts     chan postRequest
 	stops     chan stopRequest

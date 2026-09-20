@@ -47,17 +47,59 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 
 	// The card is the whole of what a reply is told about her, and stands for
 	// every reply of the run.
-	out := []api.Message{api.Text(api.RoleSystem, e.rendered)}
+	card := api.Text(api.RoleSystem, e.rendered)
+	if len(kept) == 0 {
+		return []api.Message{card}, nil
+	}
+
 	inline := e.inlineFrom(kept, m)
-	for i, msg := range kept {
-		// Every message she was sent is told the time before it: when an older
-		// one was sent, and what time it is now before the one she is
-		// answering, whose last line is then what was said rather than a time.
-		// Each of those stands once it is written, so a host that keeps a
-		// prompt keeps all of it but the time before the last message.
+	last := kept[len(kept)-1].ID
+	ratio := e.ratios.ratio(m.Name)
+	limit := m.limit()
+	taken := size([]api.Message{card}, ratio, e.cfg.ImageTokens)
+
+	// The newest exchange is built first and the older ones are added while
+	// they fit, so nothing older than the first that does not fit is built: no
+	// picture of one is loaded, and none is sent to be described.
+	groups := exchanges(kept)
+	built := make([][]api.Message, 0, len(groups))
+	dropped := 0
+	for i := len(groups) - 1; i >= 0; i-- {
+		msgs := e.exchange(ctx, a, groups[i], inline, last)
+		// The exchange being answered goes whatever it takes, since leaving it
+		// out would answer nothing.
+		if n := size(msgs, ratio, e.cfg.ImageTokens); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
+			taken += n
+			built = append(built, msgs)
+			continue
+		}
+		dropped = i + 1
+		break
+	}
+	if dropped > 0 {
+		e.log.Warn("the oldest of the conversation is left out of the prompt",
+			"entry", a.entry.ID, "exchanges", dropped, "context", limit, "tokens", taken)
+	}
+
+	out := []api.Message{card}
+	for i := len(built) - 1; i >= 0; i-- {
+		out = append(out, built[i]...)
+	}
+	return out, nil
+}
+
+// exchange is the messages of one exchange as the model reads them. Every
+// message she was sent is told the time before it: when an older one was sent,
+// and what time it is now before the one she is answering, whose last line is
+// then what was said rather than a time. Each of those stands once it is
+// written, so a host that keeps a prompt keeps all of it but the time before
+// the last message.
+func (e *Engine) exchange(ctx context.Context, a *attempt, group []store.Message, inline, last store.MessageID) []api.Message {
+	out := make([]api.Message, 0, 2*len(group))
+	for _, msg := range group {
 		if msg.Role == store.RoleUser {
 			var when string
-			if i == len(kept)-1 {
+			if msg.ID == last {
 				when = e.now()
 			} else {
 				when = e.sentAt(msg.CreatedAt)
@@ -66,7 +108,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		}
 		out = append(out, e.message(ctx, a, msg, inline))
 	}
-	return out, nil
+	return out
 }
 
 // ordered puts a reply right after the messages it answers, which is not where
