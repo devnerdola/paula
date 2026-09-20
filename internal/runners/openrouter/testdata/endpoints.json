@@ -1,0 +1,242 @@
+{
+  "data": {
+    "id": "deepseek/deepseek-v4-pro-0813",
+    "name": "DeepSeek: DeepSeek V4 Pro 0813",
+    "created": 1786549364,
+    "description": "DeepSeek V4 Pro 0813 is a large-scale mixture-of-experts model from DeepSeek. This is the GA release of DeepSeek V4 Pro.",
+    "architecture": {
+      "tokenizer": "DeepSeek",
+      "instruct_type": null,
+      "modality": "text->text",
+      "input_modalities": [
+        "text"
+      ],
+      "output_modalities": [
+        "text"
+      ]
+    },
+    "endpoints": [
+      {
+        "name": "Ionstream | deepseek/deepseek-v4-pro-20260813",
+        "model_id": "deepseek/deepseek-v4-pro-0813",
+        "model_name": "DeepSeek: DeepSeek V4 Pro 0813",
+        "context_length": 1048576,
+        "pricing": {
+          "prompt": "0.00000096",
+          "completion": "0.00000288",
+          "input_cache_read": "0.000000088",
+          "discount": 0
+        },
+        "provider_name": "Ionstream",
+        "tag": "ionstream",
+        "quantization": "unknown",
+        "max_completion_tokens": 943718,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "frequency_penalty",
+          "presence_penalty",
+          "stop",
+          "seed",
+          "response_format",
+          "tools",
+          "tool_choice",
+          "structured_outputs",
+          "reasoning_effort"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": true,
+          "function": true
+        },
+        "status": 0,
+        "uptime_last_30m": 95.1967771924388,
+        "uptime_last_5m": 89.10505836575877,
+        "uptime_last_1d": 98.6866900867785,
+        "supports_implicit_caching": false,
+        "supports_voice_cloning": false,
+        "latency_last_30m": {
+          "p50": 3851,
+          "p75": 7053.25,
+          "p90": 12083,
+          "p99": 43581.40000000001
+        },
+        "throughput_last_30m": {
+          "p50": 18,
+          "p75": 28,
+          "p90": 40,
+          "p99": 63
+        },
+        "perf_last_30m_by_workload": {
+          "text_generation": {
+            "latency": {
+              "p50": 3870,
+              "p75": 7058,
+              "p90": 12154.400000000003,
+              "p99": 43597.720000000016
+            },
+            "throughput": {
+              "p50": 18,
+              "p75": 29,
+              "p90": 40,
+              "p99": 62.820000000000164
+            },
+            "request_count": 3019
+          }
+        }
+      },
+      {
+        "name": "StreamLake | deepseek/deepseek-v4-pro-20260813",
+        "model_id": "deepseek/deepseek-v4-pro-0813",
+        "model_name": "DeepSeek: DeepSeek V4 Pro 0813",
+        "context_length": 1024000,
+        "pricing": {
+          "prompt": "0.0000009834",
+          "completion": "0.0000029502",
+          "input_cache_read": "0.00000003278",
+          "discount": 0.255
+        },
+        "provider_name": "StreamLake",
+        "tag": "streamlake",
+        "quantization": "unknown",
+        "max_completion_tokens": 384000,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "response_format",
+          "tools",
+          "tool_choice",
+          "logprobs",
+          "top_logprobs",
+          "reasoning_effort"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": false,
+          "function": false
+        },
+        "status": 0,
+        "uptime_last_30m": 99.71109652002626,
+        "uptime_last_5m": 99.72170686456401,
+        "uptime_last_1d": 99.30356143033487,
+        "supports_implicit_caching": false,
+        "supports_voice_cloning": false,
+        "latency_last_30m": {
+          "p50": 2754,
+          "p75": 3848,
+          "p90": 5492.4000000000015,
+          "p99": 15862.299999999957
+        },
+        "throughput_last_30m": {
+          "p50": 64,
+          "p75": 84,
+          "p90": 99,
+          "p99": 128
+        },
+        "perf_last_30m_by_workload": {
+          "text_generation": {
+            "latency": {
+              "p50": 2760,
+              "p75": 3846.5,
+              "p90": 5487.599999999999,
+              "p99": 15902.60000000001
+            },
+            "throughput": {
+              "p50": 64,
+              "p75": 84,
+              "p90": 98,
+              "p99": 128
+            },
+            "request_count": 7559
+          }
+        }
+      },
+      {
+        "name": "Novita | deepseek/deepseek-v4-pro-20260813",
+        "model_id": "deepseek/deepseek-v4-pro-0813",
+        "model_name": "DeepSeek: DeepSeek V4 Pro 0813",
+        "context_length": 1048576,
+        "pricing": {
+          "prompt": "0.00000099",
+          "completion": "0.00000297",
+          "input_cache_read": "0.000000033",
+          "discount": 0.25
+        },
+        "provider_name": "Novita",
+        "tag": "novita/fp8",
+        "quantization": "fp8",
+        "max_completion_tokens": 393216,
+        "max_prompt_tokens": null,
+        "supported_parameters": [
+          "reasoning",
+          "include_reasoning",
+          "max_tokens",
+          "temperature",
+          "top_p",
+          "stop",
+          "frequency_penalty",
+          "presence_penalty",
+          "seed",
+          "top_k",
+          "repetition_penalty",
+          "response_format",
+          "tools",
+          "tool_choice",
+          "reasoning_effort"
+        ],
+        "supports_tool_choice": {
+          "none": true,
+          "auto": true,
+          "required": true,
+          "function": true
+        },
+        "status": 0,
+        "uptime_last_30m": 99.9748490945674,
+        "uptime_last_5m": 100,
+        "uptime_last_1d": 99.88655684463946,
+        "supports_implicit_caching": false,
+        "supports_voice_cloning": false,
+        "latency_last_30m": {
+          "p50": 2217,
+          "p75": 3020,
+          "p90": 4505.700000000001,
+          "p99": 15640.869999999988
+        },
+        "throughput_last_30m": {
+          "p50": 70,
+          "p75": 94,
+          "p90": 143,
+          "p99": 162
+        },
+        "perf_last_30m_by_workload": {
+          "text_generation": {
+            "latency": {
+              "p50": 2205,
+              "p75": 3020.5,
+              "p90": 4560.400000000001,
+              "p99": 15724.249999999985
+            },
+            "throughput": {
+              "p50": 70,
+              "p75": 93,
+              "p90": 143,
+              "p99": 161.3699999999999
+            },
+            "request_count": 3964
+          }
+        }
+      }
+    ]
+  }
+}

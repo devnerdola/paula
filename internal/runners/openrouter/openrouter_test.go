@@ -1,0 +1,819 @@
+package openrouter
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/logs"
+	"nerdola.dev/x/paula/internal/runners/api"
+)
+
+func read(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// catalogue answers the two listings from the captured ones.
+func catalogue(t *testing.T) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Write(read(t, "models.json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func runner(t *testing.T, url string, body string) *Runner {
+	t.Helper()
+	return runnerFor(t, url, body, api.Host{})
+}
+
+// runnerFor builds a runner of a configuration under a host of its own, for a
+// test that watches what the runner tells the host.
+func runnerFor(t *testing.T, url string, body string, h api.Host) *Runner {
+	t.Helper()
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paula.yaml")
+	file := "persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\n    url: " + url + "/v1\n"
+	for _, line := range strings.Split(body, "\n") {
+		if line != "" {
+			file += "    " + line + "\n"
+		}
+	}
+	file += "models:\n  chat:\n    runner: openrouter\n    id: x\ndefault_models:\n  chat: chat\n"
+	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := Open("openrouter", cfg.Runners[0].Section, h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func model(t *testing.T, r *Runner, id string) api.Model {
+	t.Helper()
+	m, err := r.Model(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return *m
+}
+
+// What Paula makes of each entry of the captured listing.
+func TestCatalogue(t *testing.T) {
+	r := runner(t, catalogue(t).URL, "")
+
+	// A model that reasons, sees images, takes tools and answers a schema.
+	m := model(t, r, "~deepseek/deepseek-flash-latest")
+	if !m.Chat || !m.Vision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
+		t.Errorf("%s = %+v", m.ID, m)
+	}
+	if m.Mandatory {
+		t.Errorf("%s reads as always reasoning", m.ID)
+	}
+	if m.Context != 1048576 {
+		t.Errorf("%s has context %d, want the listing's", m.ID, m.Context)
+	}
+	if !slices.Equal(m.Efforts, []string{"low", "high", "max"}) {
+		t.Errorf("%s efforts = %v, want the listing's in the documented order", m.ID, m.Efforts)
+	}
+	if slices.Contains(m.Efforts, "none") {
+		t.Errorf("%s efforts = %v, want none left out", m.ID, m.Efforts)
+	}
+
+	// A model whose reasoning cannot be turned off.
+	if m := model(t, r, "~openai/gpt-astra-latest"); !m.Mandatory || !m.Reasoning {
+		t.Errorf("%s = %+v, want it always reasoning", m.ID, m)
+	}
+
+	// A model that does not reason.
+	m = model(t, r, "inference-net/schematron-v2-turbo")
+	if m.Reasoning || m.Mandatory || len(m.Efforts) != 0 {
+		t.Errorf("%s = %+v, want no reasoning", m.ID, m)
+	}
+
+	// A model that reasons without listing efforts.
+	if m := model(t, r, "inclusionai/ling-3.0-flash-vl"); !m.Reasoning || len(m.Efforts) != 0 {
+		t.Errorf("%s = %+v, want reasoning with no efforts", m.ID, m)
+	}
+
+	models, err := r.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The listing of the models she can talk to is the whole catalogue.
+	if len(models) != 5 {
+		t.Errorf("models = %d, want the five the listing holds", len(models))
+	}
+}
+
+func TestCatalogueIsReadOnce(t *testing.T) {
+	var reads int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reads++
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(read(t, "models.json"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r := runner(t, ts.URL, "")
+	for range 3 {
+		if _, err := r.Models(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if reads != 1 {
+		t.Errorf("reads = %d, want the listing read once", reads)
+	}
+}
+
+// The answer is served no-store, and the models it names are what every
+// configured model is held to, so a second runner over the same data directory
+// asks the API again.
+func TestEveryRunReadsTheListing(t *testing.T) {
+	var (
+		mu    sync.Mutex
+		reads int
+	)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reads++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(read(t, "models.json"))
+	}))
+	t.Cleanup(ts.Close)
+
+	for range 2 {
+		r := runner(t, ts.URL, "")
+		models, err := r.Models(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(models) == 0 {
+			t.Fatal("the run read an empty catalogue")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if reads != 2 {
+		t.Errorf("the listing was read %d times, want it read by each run", reads)
+	}
+}
+
+func TestUnknownModel(t *testing.T) {
+	r := runner(t, catalogue(t).URL, "")
+	if _, err := r.Model(context.Background(), "nope/nope"); err == nil {
+		t.Fatal("Model succeeded")
+	}
+}
+
+// The stream is the one a reply with reasoning came back in, as OpenRouter sent
+// it.
+func TestStreamOfACapturedReply(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "")
+
+	var text, reasoning strings.Builder
+	res, err := r.Chat(context.Background(), api.ChatRequest{Model: "m"}, func(c api.Chunk) error {
+		switch c.Kind {
+		case api.ChunkText:
+			text.WriteString(c.Text)
+		case api.ChunkReasoning:
+			reasoning.WriteString(c.Text)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text.Len() == 0 {
+		t.Error("no text came out of the stream")
+	}
+	if reasoning.String() != res.Reasoning {
+		t.Errorf("the reasoning chunks and the result disagree")
+	}
+	if res.Reasoning == "" {
+		t.Error("no reasoning came out of the stream")
+	}
+	if res.FinishReason != "stop" {
+		t.Errorf("finish reason = %q", res.FinishReason)
+	}
+	if res.Provider == "" {
+		t.Error("the serving provider was not read")
+	}
+	if res.Usage.PromptTokens == 0 || res.Usage.CompletionTokens == 0 {
+		t.Errorf("usage = %+v", res.Usage)
+	}
+	if res.Usage.ReasoningTokens == 0 {
+		t.Errorf("usage = %+v, want the reasoning tokens", res.Usage)
+	}
+	if res.Usage.Cost == 0 {
+		t.Errorf("usage = %+v, want the cost", res.Usage)
+	}
+}
+
+func TestCapturedErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		file   string
+		status int
+		code   string
+		want   string
+	}{
+		{"a model that does not exist", "error_bad_model.json", 400, "", "is not a valid model ID"},
+		{"a key that does not exist", "error_unauthorized.json", 401, "", "User not found."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := read(t, tc.file)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				w.Write(body)
+			}))
+			t.Cleanup(ts.Close)
+			r := runner(t, ts.URL, "")
+
+			_, err := r.Chat(context.Background(), api.ChatRequest{Model: "m"}, func(api.Chunk) error { return nil })
+			var e *api.APIError
+			if !errors.As(err, &e) {
+				t.Fatalf("error = %v, want an APIError", err)
+			}
+			if e.Status != tc.status || e.Code != tc.code {
+				t.Errorf("error = %+v", e)
+			}
+			if !strings.Contains(e.Message, tc.want) {
+				t.Errorf("message = %q, want %q in it", e.Message, tc.want)
+			}
+		})
+	}
+}
+
+func TestEndpointsCheck(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/v1/models":
+			w.Write(read(t, "models.json"))
+		case strings.HasSuffix(r.URL.Path, "/endpoints"):
+			w.Write(read(t, "endpoints.json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+
+	const id = "deepseek/deepseek-v4-pro-0813"
+	needs := api.Needs{Chat: true, Tools: true}
+
+	// A host the listing holds, which takes everything.
+	r := runner(t, ts.URL, "provider:\n  routing:\n    only: [ionstream]")
+	s := api.Settings{Reasoning: api.ReasoningSettings{Mode: api.ReasoningOn}, Provider: providerOf(t, r)}
+	if err := check(context.Background(), r, api.Checked{ID: id, Settings: s, Needs: needs}); err != nil {
+		t.Errorf("Check = %v, want it to pass", err)
+	}
+
+	// A base slug covers its variants, so novita matches novita/fp8, which
+	// takes everything but a minimum probability.
+	r = runner(t, ts.URL, "provider:\n  routing:\n    only: [novita]")
+	s.Provider = providerOf(t, r)
+	if err := check(context.Background(), r, api.Checked{ID: id, Settings: s, Needs: needs}); err != nil {
+		t.Errorf("Check = %v, want novita/fp8 to match novita", err)
+	}
+	picky := s
+	picky.Sampling.MinP = new(0.1)
+	err := check(context.Background(), r, api.Checked{ID: id, Settings: picky, Needs: needs})
+	if err == nil {
+		t.Fatal("Check passed")
+	}
+	if !strings.Contains(err.Error(), "novita/fp8 takes no min_p") {
+		t.Errorf("error = %v", err)
+	}
+
+	// A host that serves the model with a smaller context than the file asks
+	// for is a problem, however it was found to take every parameter.
+	r = runner(t, ts.URL, "provider:\n  routing:\n    only: [streamlake]")
+	s.Provider = providerOf(t, r)
+	err = check(context.Background(), r, api.Checked{ID: id, Settings: s, Needs: api.Needs{Chat: true, Tools: true, Context: 1048576}})
+	if err == nil {
+		t.Fatal("Check passed")
+	}
+	if !strings.Contains(err.Error(), "holding 1024000") {
+		t.Errorf("error = %v, want the context the host holds", err)
+	}
+
+	// A host the listing does not hold.
+	r = runner(t, ts.URL, "provider:\n  routing:\n    only: [nowhere]")
+	s.Provider = providerOf(t, r)
+	err = check(context.Background(), r, api.Checked{ID: id, Settings: s, Needs: needs})
+	if err == nil {
+		t.Fatal("Check passed")
+	}
+	if !strings.Contains(err.Error(), "no endpoint of the model") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// check is what the runner found wrong with a model, as one error to read.
+func check(ctx context.Context, r *Runner, m api.Checked) error {
+	return errors.Join(r.Check(ctx, m)...)
+}
+
+func providerOf(t *testing.T, r *Runner) config.Section {
+	t.Helper()
+	return r.Settings().Provider
+}
+
+func TestCheckHoldsTheSettingsAgainstTheCatalogue(t *testing.T) {
+	r := runner(t, catalogue(t).URL, "")
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name  string
+		id    string
+		s     api.Settings
+		needs api.Needs
+		want  string
+	}{
+		{
+			"reasoning off on a model that always reasons",
+			"~openai/gpt-astra-latest",
+			api.Settings{Reasoning: api.ReasoningSettings{Mode: api.ReasoningOff}},
+			api.Needs{}, "the model always reasons",
+		},
+		{
+			"reasoning on a model that does not reason",
+			"inference-net/schematron-v2-turbo",
+			api.Settings{Reasoning: api.ReasoningSettings{Mode: api.ReasoningOn}},
+			api.Needs{}, "the model does not reason",
+		},
+		{
+			"an effort the model does not list",
+			"deepseek/deepseek-v4-pro-0813",
+			api.Settings{Reasoning: api.ReasoningSettings{Effort: "medium"}},
+			api.Needs{}, "is not one of",
+		},
+		{
+			"a sampling setting the model does not take",
+			"~openai/gpt-astra-latest",
+			api.Settings{Sampling: api.SamplingSettings{TopK: new(40)}},
+			api.Needs{}, "does not take top_k",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := check(ctx, r, api.Checked{ID: tc.id, Settings: tc.s, Needs: tc.needs})
+			if err == nil {
+				t.Fatalf("Check passed, want %q", tc.want)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want %q in it", err, tc.want)
+			}
+		})
+	}
+
+	s := api.Settings{
+		Reasoning: api.ReasoningSettings{Mode: api.ReasoningOn, Effort: "high"},
+		Sampling:  api.SamplingSettings{Temperature: new(0.8)},
+		Output:    api.OutputSettings{MaxTokens: new(2048)},
+	}
+	needs := api.Needs{Chat: true, Tools: true}
+	if err := check(ctx, r, api.Checked{ID: "deepseek/deepseek-v4-pro-0813", Settings: s, Needs: needs}); err != nil {
+		t.Errorf("Check = %v, want it to pass", err)
+	}
+}
+
+func TestOpenWithoutAToken(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paula.yaml")
+	os.WriteFile(path, []byte("persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\nmodels:\n  chat:\n    runner: openrouter\n    id: x\ndefault_models:\n  chat: chat\n"), 0o600)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open("openrouter", cfg.Runners[0].Section, api.Host{})
+	if err == nil {
+		t.Fatal("Open succeeded")
+	}
+	if !strings.Contains(err.Error(), "OPENROUTER_API_KEY is not set") {
+		t.Errorf("error = %v", err)
+	}
+}
+
+// Redacting a value that short would mangle ordinary text, so it would reach
+// the log as it is: it is refused rather than used.
+func TestOpenWithAKeyTooShortToBeOne(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "sk-1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paula.yaml")
+	os.WriteFile(path, []byte("persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\nmodels:\n  chat:\n    runner: openrouter\n    id: x\ndefault_models:\n  chat: chat\n"), 0o600)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open("openrouter", cfg.Runners[0].Section, api.Host{}); err == nil {
+		t.Fatal("Open succeeded")
+	} else if !strings.Contains(err.Error(), "too short to be a key") {
+		t.Errorf("error = %v, want it to say the value is no key", err)
+	}
+}
+
+func TestOpenRejectsUnknownKeys(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "paula.yaml")
+	os.WriteFile(path, []byte("persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\n    family: deepseek\nmodels:\n  chat:\n    runner: openrouter\n    id: x\ndefault_models:\n  chat: chat\n"), 0o600)
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open("openrouter", cfg.Runners[0].Section, api.Host{})
+	if err == nil {
+		t.Fatal("Open succeeded")
+	}
+	if !strings.Contains(err.Error(), "family: unknown key") {
+		t.Errorf("error = %v", err)
+	}
+	if !strings.HasPrefix(err.Error(), "runners.openrouter: ") {
+		t.Errorf("error = %q, want the key path first", err)
+	}
+}
+
+func TestACatalogueThatFailedIsAskedAgain(t *testing.T) {
+	var asked int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked++
+		if asked == 1 {
+			http.Error(w, `{"error":{"message":"upstream is away"}}`, http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(read(t, "models.json"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r := runner(t, ts.URL, "retries: 0")
+	ctx := context.Background()
+	if _, err := r.Models(ctx); err == nil {
+		t.Fatal("the first read succeeded")
+	}
+	models, err := r.Models(ctx)
+	if err != nil {
+		t.Fatalf("the catalogue was never read again: %v", err)
+	}
+	if len(models) == 0 {
+		t.Error("the catalogue is empty")
+	}
+}
+
+// An API that says the key back in an error is recorded without it: the token a
+// runner opens with is a secret of the run, whatever writes it.
+func TestAKeyAnAPISaysBackIsNotRecorded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":{"message":"no such key: test-token-abcdefgh","code":401}}`)
+	}))
+	t.Cleanup(ts.Close)
+	secrets := new(logs.Secrets)
+	r := runnerFor(t, ts.URL, "", api.Host{Secrets: secrets})
+
+	kept := &records{}
+	_, err := r.Chat(context.Background(), api.ChatRequest{Model: "m", Recorder: kept},
+		func(api.Chunk) error { return nil })
+	if err == nil {
+		t.Fatal("the API answered a key it refused")
+	}
+	if len(kept.ended) != 1 {
+		t.Fatalf("records = %d, want one", len(kept.ended))
+	}
+	rec := kept.ended[0]
+	if strings.Contains(rec.Error, "test-token-abcdefgh") {
+		t.Errorf("the record holds the key: %q", rec.Error)
+	}
+	if !strings.Contains(rec.Error, logs.Mask) {
+		t.Errorf("error = %q, want the key replaced", rec.Error)
+	}
+	for _, a := range rec.Attempts {
+		if strings.Contains(a.Error, "test-token-abcdefgh") {
+			t.Errorf("an attempt holds the key: %q", a.Error)
+		}
+	}
+}
+
+// records keeps what a runner reported, the way the conversation does.
+type records struct{ ended []*api.Record }
+
+func (r *records) StartRequest(context.Context, *api.Record) error { return nil }
+
+func (r *records) EndRequest(_ context.Context, rec *api.Record) error {
+	r.ended = append(r.ended, rec)
+	return nil
+}
+
+// The host that served a reply, how it ended and what it cost are what paula
+// turns reads back.
+func TestWhatAnAnswerSaysOfItselfIsRecorded(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "")
+
+	kept := &records{}
+	res, err := r.Chat(context.Background(), api.ChatRequest{Model: "m", Recorder: kept},
+		func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept.ended) != 1 {
+		t.Fatalf("records = %d, want one", len(kept.ended))
+	}
+
+	rec := kept.ended[0]
+	if rec.Provider != res.Provider || rec.Provider == "" {
+		t.Errorf("provider = %q, want the one the answer named", rec.Provider)
+	}
+	if rec.FinishReason != res.FinishReason || rec.FinishReason == "" {
+		t.Errorf("finish = %q", rec.FinishReason)
+	}
+	if rec.Usage == nil || *rec.Usage != res.Usage {
+		t.Fatalf("usage = %+v, want what the answer reported", rec.Usage)
+	}
+	if rec.Usage.PromptTokens == 0 || rec.Usage.CompletionTokens == 0 {
+		t.Errorf("usage = %+v", rec.Usage)
+	}
+	if rec.Usage.Cost == 0 || rec.Usage.Cost != res.Usage.Cost {
+		t.Errorf("cost = %v, want what it cost", rec.Usage.Cost)
+	}
+}
+
+// Many readers share one read, and each gets a copy of its own.
+func TestTheCatalogueIsReadOnceUnderManyReaders(t *testing.T) {
+	var reads atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			reads.Add(1)
+			w.Write(read(t, "models.json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "")
+
+	var wg sync.WaitGroup
+	lists := make([][]api.Model, 8)
+	errs := make([]error, 8)
+	for i := range lists {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			lists[i], errs[i] = r.Models(context.Background())
+		}()
+	}
+	wg.Wait()
+
+	for i := range lists {
+		if errs[i] != nil {
+			t.Fatalf("read %d: %v", i, errs[i])
+		}
+		if len(lists[i]) != len(lists[0]) {
+			t.Fatalf("read %d gave %d models, want %d", i, len(lists[i]), len(lists[0]))
+		}
+	}
+	if reads.Load() != 1 {
+		t.Errorf("the catalogue was read %d times", reads.Load())
+	}
+
+	// What one reader does with its own list is not what the next one gets.
+	slices.Reverse(lists[0])
+	again, err := r.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again[0].ID == lists[0][0].ID && len(again) > 1 {
+		t.Error("a reader that sorted its list sorted the runner's")
+	}
+}
+
+// A model may take the block its runner writes, so the key path has to be given
+// in full.
+func TestAProblemInsideTheProviderIsNamedInFull(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	path := filepath.Join(t.TempDir(), "paula.yaml")
+	file := "persona: paula.yaml\nrunners:\n  r:\n    type: openrouter\n    provider:\n      nope: 1\n" +
+		"models:\n  a:\n    runner: r\n    id: x\ndefault_models:\n  chat: a\n"
+	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open("r", cfg.Runners[0].Section, api.Host{})
+	if err == nil {
+		t.Fatal("Open succeeded")
+	}
+	if !strings.Contains(err.Error(), "runners.r.provider") {
+		t.Errorf("error = %v, want the key it is written under", err)
+	}
+}
+
+// The settings this API names differently go where it documents them, not where
+// an OpenAI body would carry them.
+func TestTheRequestBodyCarriesWhatOnlyOpenRouterDocuments(t *testing.T) {
+	var body []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r := runner(t, ts.URL, `
+provider:
+  sampling:
+    top_a: 0.2
+    logit_bias:
+      "123": -5
+  cache:
+    control:
+      type: ephemeral
+      ttl: 5m
+  service_tier: flex
+  reasoning:
+    max_tokens: 2048
+  routing:
+    only: [ionstream]
+    zdr: true
+`)
+	s := r.Settings()
+	s.Reasoning = api.ReasoningSettings{Mode: api.ReasoningOn, Effort: "high"}
+	_, err := r.Chat(context.Background(), api.ChatRequest{
+		Model:    "some/model",
+		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+		Settings: s,
+	}, func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sent struct {
+		TopA      float64        `json:"top_a"`
+		LogitBias map[string]int `json:"logit_bias"`
+		Cache     struct {
+			Type string `json:"type"`
+			TTL  string `json:"ttl"`
+		} `json:"cache_control"`
+		Tier      string `json:"service_tier"`
+		Reasoning struct {
+			Enabled   *bool  `json:"enabled"`
+			Effort    string `json:"effort"`
+			MaxTokens int    `json:"max_tokens"`
+		} `json:"reasoning"`
+		Provider struct {
+			Only []string `json:"only"`
+			ZDR  bool     `json:"zdr"`
+		} `json:"provider"`
+	}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatalf("the body was not read back: %v (%s)", err, body)
+	}
+	if sent.TopA != 0.2 || sent.LogitBias["123"] != -5 {
+		t.Errorf("sampling = %+v", sent)
+	}
+	if sent.Cache.Type != "ephemeral" || sent.Cache.TTL != "5m" || sent.Tier != "flex" {
+		t.Errorf("cache and tier = %+v, %q", sent.Cache, sent.Tier)
+	}
+	if sent.Reasoning.Enabled == nil || !*sent.Reasoning.Enabled ||
+		sent.Reasoning.Effort != "high" || sent.Reasoning.MaxTokens != 2048 {
+		t.Errorf("reasoning = %+v", sent.Reasoning)
+	}
+	if !slices.Equal(sent.Provider.Only, []string{"ionstream"}) || !sent.Provider.ZDR {
+		t.Errorf("provider = %+v", sent.Provider)
+	}
+}
+
+// Nothing else means no effort and no summary.
+func TestReasoningOffCarriesNothingElse(t *testing.T) {
+	var body []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r := runner(t, ts.URL, "")
+	s := r.Settings()
+	s.Reasoning = api.ReasoningSettings{Mode: api.ReasoningOff, Effort: "high"}
+	if _, err := r.Chat(context.Background(), api.ChatRequest{
+		Model:    "some/model",
+		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+		Settings: s,
+	}, func(api.Chunk) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var sent struct {
+		Reasoning map[string]any `json:"reasoning"`
+	}
+	if err := json.Unmarshal(body, &sent); err != nil {
+		t.Fatal(err)
+	}
+	if len(sent.Reasoning) != 1 || sent.Reasoning["enabled"] != false {
+		t.Errorf("reasoning = %+v, want it off and nothing else", sent.Reasoning)
+	}
+}
+
+func TestRetryAfterAsADateAndAsZero(t *testing.T) {
+	var hook hooks
+	now := time.Date(2026, 9, 17, 6, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		header string
+		want   time.Duration
+	}{
+		{"a date", now.Add(90 * time.Second).UTC().Format(http.TimeFormat), 90 * time.Second},
+		{"no wait at all", "0", 0},
+		{"nothing sensible", "soon", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := http.Header{"Retry-After": {tc.header}}
+			got, again := hook.Retry(now, http.StatusTooManyRequests, h)
+			if !again {
+				t.Fatal("the request is not sent again")
+			}
+			if got != tc.want {
+				t.Errorf("wait = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	if _, again := hook.Retry(now, http.StatusNotFound, http.Header{}); again {
+		t.Error("a status the API does not ask to retry is sent again")
+	}
+}
+
+// An entry that says little is not a model that can do nothing.
+func TestAListingThatSaysLittle(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"data":[{"id":"quiet/model","architecture":`+
+			`{"input_modalities":["text"],"output_modalities":["text"]}}]}`)
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "")
+
+	m, err := r.Model(context.Background(), "quiet/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Context != 0 {
+		t.Errorf("context = %d, want none given", m.Context)
+	}
+	if m.Parameters != nil {
+		t.Errorf("parameters = %v, want none listed", m.Parameters)
+	}
+
+	// A setting is not held against a model whose listing names none.
+	s := api.Settings{Sampling: api.SamplingSettings{Temperature: new(0.8)}}
+	if err := check(context.Background(), r, api.Checked{ID: "quiet/model", Settings: s, Needs: api.Needs{Chat: true}}); err != nil {
+		t.Errorf("Check = %v, want it to pass", err)
+	}
+}

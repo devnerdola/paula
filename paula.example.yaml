@@ -1,0 +1,37 @@
+# Copy this file to paula.yaml and edit it. The README documents every key,
+# with its default.
+
+persona: personas/paula.yaml
+
+runners:
+  openrouter:
+    type: openrouter
+    # The provider block holds the settings that only this API documents. They
+    # apply to every model of the runner, and a model can override them.
+    provider:
+      routing:
+        zdr: true
+
+  venice:
+    type: venice
+
+models:
+  pro:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+    context: 262144
+    sampling:
+      temperature: 0.8
+    reasoning:
+      effort: high
+
+  flash:
+    runner: venice
+    id: deepseek-v4-1-flash
+
+default_models:
+  chat: pro
+  vision: flash
+
+frontends:
+  repl:

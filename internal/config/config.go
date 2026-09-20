@@ -1,0 +1,389 @@
+// Package config reads the files Paula is configured by, rejecting keys Paula
+// does not know. It reads paula.yaml itself, and holds the rules a file of
+// Paula's is read under -- every problem at once, each named by the key it is
+// written at -- which the character card is read by too.
+package config
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"go.yaml.in/yaml/v3"
+)
+
+// Role is what a model is chosen for.
+type Role string
+
+const (
+	RoleChat   Role = "chat"
+	RoleVision Role = "vision"
+)
+
+// Roles are every role, in the order they are shown.
+var Roles = []Role{RoleChat, RoleVision}
+
+// Config is a loaded paula.yaml.
+type Config struct {
+	Path          string
+	Dir           string
+	Persona       string
+	DataDir       string
+	Runners       []Runner
+	Models        []Model
+	DefaultModels DefaultModels
+	Engine        Engine
+	Frontends     []Frontend
+}
+
+// Runner is one entry of the runners mapping. Its section holds every key,
+// including the type, for the runner package to decode.
+type Runner struct {
+	Name    string
+	Type    string
+	Section Section
+}
+
+// Model is one entry of the models mapping, in the order it was written.
+type Model struct {
+	Name    string
+	Runner  string
+	ID      string
+	Context int
+	Section Section
+}
+
+// Frontend is one entry of the frontends mapping.
+type Frontend struct {
+	Name    string
+	Section Section
+}
+
+// FrontendSection is the section a frontend of that name was written under, and
+// an unwritten section when the file names none: a command that reaches one
+// frontend asks for it rather than looking through them.
+func (c *Config) FrontendSection(name string) Section {
+	for _, f := range c.Frontends {
+		if f.Name == name {
+			return f.Section
+		}
+	}
+	return Section{}
+}
+
+type DefaultModels struct {
+	Chat   string `yaml:"chat"`
+	Vision string `yaml:"vision"`
+}
+
+func (d DefaultModels) Get(r Role) string {
+	switch r {
+	case RoleChat:
+		return d.Chat
+	case RoleVision:
+		return d.Vision
+	}
+	return ""
+}
+
+type Engine struct {
+	Debounce      Duration `yaml:"debounce"`
+	PrefillCancel bool     `yaml:"prefill_cancel"`
+	ImageTurns    int      `yaml:"image_turns"`
+	ImageMaxPx    int      `yaml:"image_max_px"`
+	LogKeep       int      `yaml:"log_keep"`
+}
+
+// DefaultEngine is the engine section a file that writes none gets.
+func DefaultEngine() Engine {
+	return Engine{
+		Debounce:      Duration(2 * time.Second),
+		PrefillCancel: true,
+		ImageTurns:    2,
+		ImageMaxPx:    1024,
+		LogKeep:       500,
+	}
+}
+
+// Duration is a time.Duration written the way time.ParseDuration reads it.
+type Duration time.Duration
+
+func (d Duration) Duration() time.Duration { return time.Duration(d) }
+func (d Duration) String() string          { return time.Duration(d).String() }
+
+// UnmarshalYAML reports the line the duration was written on, so the error can
+// name the key it belongs to.
+func (d *Duration) UnmarshalYAML(n *yaml.Node) error {
+	var s string
+	if err := n.Decode(&s); err != nil {
+		return fmt.Errorf("line %d: want a duration such as 2s or 1m30s", n.Line)
+	}
+	v, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("line %d: %q is not a duration such as 2s or 1m30s", n.Line, s)
+	}
+	*d = Duration(v)
+	return nil
+}
+
+var modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+type file struct {
+	Persona       string        `yaml:"persona"`
+	DataDir       string        `yaml:"data_dir"`
+	Runners       yaml.Node     `yaml:"runners"`
+	Models        yaml.Node     `yaml:"models"`
+	DefaultModels DefaultModels `yaml:"default_models"`
+	Engine        Engine        `yaml:"engine"`
+	Frontends     yaml.Node     `yaml:"frontends"`
+}
+
+// Find returns the configuration file to read: the given path, then
+// $PAULA_CONFIG, then paula.yaml in the working directory.
+func Find(path string) string {
+	if path != "" {
+		return path
+	}
+	if p := os.Getenv("PAULA_CONFIG"); p != "" {
+		return p
+	}
+	return "paula.yaml"
+}
+
+// Load reads the configuration file and reports every problem it holds.
+func Load(path string) (*Config, error) {
+	path = Find(path)
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Dir(abs)
+
+	root, err := Root(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	f := file{Engine: DefaultEngine()}
+	if err := root.Decode(&f); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+
+	c := &Config{
+		Path:          path,
+		Dir:           dir,
+		Persona:       Resolve(dir, f.Persona),
+		DataDir:       dataDir(dir, f.DataDir),
+		DefaultModels: f.DefaultModels,
+		Engine:        f.Engine,
+	}
+	p := &problems{path: path}
+
+	if f.Persona == "" {
+		p.addf("persona: no character card is set")
+	}
+	c.Runners = readRunners(p, &f.Runners)
+	c.Models = readModels(p, &f.Models, c.Runners)
+	c.Frontends = readFrontends(p, &f.Frontends)
+	checkDefaultModels(p, c)
+	checkEngine(p, c.Engine)
+
+	if err := p.err(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// dataDir is where the conversation is kept: what the file says, or a data
+// directory beside the file.
+func dataDir(dir, set string) string {
+	if set == "" {
+		return filepath.Join(dir, "data")
+	}
+	return Resolve(dir, set)
+}
+
+// readRunners reads the runners mapping, keeping every key of a runner for its
+// own package to decode.
+func readRunners(p *problems, n *yaml.Node) []Runner {
+	entries, err := entries(n, "runners")
+	if err != nil {
+		p.add(err)
+	}
+	var out []Runner
+	for _, e := range entries {
+		var head struct {
+			Type string `yaml:"type"`
+		}
+		if err := peek(e.section, &head); err != nil {
+			p.add(err)
+		}
+		if head.Type == "" {
+			p.addf("runners.%s.type: no type is set", e.name)
+		}
+		out = append(out, Runner{Name: e.name, Type: head.Type, Section: e.section})
+	}
+	if len(out) == 0 {
+		p.addf("runners: at least one runner is needed")
+	}
+	return out
+}
+
+// readModels reads the models mapping, in the order it was written, and holds
+// every model to a name, a runner that is there, and an id.
+func readModels(p *problems, n *yaml.Node, runners []Runner) []Model {
+	entries, err := entries(n, "models")
+	if err != nil {
+		p.add(err)
+	}
+	var out []Model
+	for _, e := range entries {
+		if !modelName.MatchString(e.name) {
+			p.addf("models.%s: a name holds letters, digits, dots, underscores and dashes, and starts with a letter or a digit", e.name)
+		}
+		var head struct {
+			Runner  string `yaml:"runner"`
+			ID      string `yaml:"id"`
+			Context int    `yaml:"context"`
+		}
+		if err := peek(e.section, &head); err != nil {
+			p.add(err)
+		}
+		if head.Runner == "" {
+			p.addf("models.%s.runner: no runner is set", e.name)
+		} else if !hasRunner(runners, head.Runner) {
+			p.addf("models.%s.runner: no runner is called %q", e.name, head.Runner)
+		}
+		if head.ID == "" {
+			p.addf("models.%s.id: no id is set", e.name)
+		}
+		if head.Context < 0 {
+			p.addf("models.%s.context: %d is below zero", e.name, head.Context)
+		}
+		out = append(out, Model{
+			Name:    e.name,
+			Runner:  head.Runner,
+			ID:      head.ID,
+			Context: head.Context,
+			Section: e.section,
+		})
+	}
+	return out
+}
+
+func readFrontends(p *problems, n *yaml.Node) []Frontend {
+	entries, err := entries(n, "frontends")
+	if err != nil {
+		p.add(err)
+		return nil
+	}
+	var out []Frontend
+	for _, e := range entries {
+		out = append(out, Frontend{Name: e.name, Section: e.section})
+	}
+	return out
+}
+
+// checkDefaultModels holds every role to a model the file names.
+func checkDefaultModels(p *problems, c *Config) {
+	if c.DefaultModels.Chat == "" {
+		p.addf("default_models.chat: no model is set")
+	}
+	for _, role := range Roles {
+		name := c.DefaultModels.Get(role)
+		if name != "" && c.Model(name) == nil {
+			p.addf("default_models.%s: no model is called %q", role, name)
+		}
+	}
+}
+
+// Model returns the configured model of that name.
+func (c *Config) Model(name string) *Model {
+	for i := range c.Models {
+		if c.Models[i].Name == name {
+			return &c.Models[i]
+		}
+	}
+	return nil
+}
+
+func checkEngine(p *problems, e Engine) {
+	if e.Debounce < 0 {
+		p.addf("engine.debounce: %s is below zero", e.Debounce)
+	}
+	if e.ImageTurns < 0 {
+		p.addf("engine.image_turns: %d is below zero", e.ImageTurns)
+	}
+	if e.ImageMaxPx < 0 {
+		p.addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)
+	}
+	if e.LogKeep < 0 {
+		p.addf("engine.log_keep: %d is below zero", e.LogKeep)
+	}
+}
+
+// peek reads the few keys a section is looked at for before its own package
+// decodes it. The keys it has no field for are left to that package.
+func peek(s Section, v any) error {
+	if s.node == nil {
+		return nil
+	}
+	if err := s.node.Decode(v); err != nil {
+		return s.problem(s.named(err))
+	}
+	return nil
+}
+
+func hasRunner(rs []Runner, name string) bool {
+	for _, r := range rs {
+		if r.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// Resolve reads a path the way the configuration file means it: relative to
+// the file's directory, and ~/ from the home directory.
+func Resolve(dir, p string) string {
+	switch {
+	case p == "":
+		return ""
+	case strings.HasPrefix(p, "~/"):
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return p
+		}
+		return filepath.Join(home, p[2:])
+	case filepath.IsAbs(p):
+		return p
+	}
+	return filepath.Join(dir, p)
+}
+
+type problems struct {
+	path string
+	list []error
+}
+
+func (p *problems) add(err error)                { p.list = append(p.list, err) }
+func (p *problems) addf(format string, a ...any) { p.add(fmt.Errorf(format, a...)) }
+
+func (p *problems) err() error {
+	if len(p.list) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s:", p.path)
+	for _, err := range p.list {
+		fmt.Fprintf(&b, "\n  %s", err)
+	}
+	return errors.New(b.String())
+}
