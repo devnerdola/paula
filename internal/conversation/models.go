@@ -35,6 +35,28 @@ func SavedModel(ctx context.Context, s *store.Store, role config.Role) (string, 
 	return s.Get(ctx, store.KeyModel(string(role)))
 }
 
+// RoleModel is the model that serves a role in this conversation: the one it
+// was given, and the file's default while it was given none. It answers nil
+// for a role nothing serves, which is not by itself a failure: whoever asks
+// says what it means for them.
+func RoleModel(ctx context.Context, s *store.Store, set *runners.Setup, role config.Role) (*runners.Configured, error) {
+	if set == nil {
+		return nil, nil
+	}
+	name, saved, err := SavedModel(ctx, s, role)
+	if err != nil {
+		return nil, err
+	}
+	if saved {
+		// A name that is no longer in the file is not a model any more, and
+		// what the file says now stands in its place.
+		if m := set.Model(name); m != nil {
+			return m, nil
+		}
+	}
+	return set.Defaults[role], nil
+}
+
 // SavedModels is the model saved for every role, for a command that reads the
 // conversation without opening it.
 func SavedModels(ctx context.Context, s *store.Store) (map[config.Role]string, error) {

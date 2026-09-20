@@ -29,15 +29,9 @@ func (e *Engine) roleModel(ctx context.Context, role config.Role) (*model, error
 	if e.runners == nil {
 		return nil, errors.New("no runner is set up")
 	}
-	chosen := e.runners.Defaults[role]
-	name, saved, err := SavedModel(ctx, e.store, role)
+	chosen, err := RoleModel(ctx, e.store, e.runners, role)
 	if err != nil {
 		return nil, err
-	}
-	if saved {
-		if m := e.runners.Model(name); m != nil {
-			chosen = m
-		}
 	}
 	if chosen == nil {
 		return nil, fmt.Errorf("%w for %s", errNoModel, role)

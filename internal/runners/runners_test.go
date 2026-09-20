@@ -30,6 +30,10 @@ func openrouterCatalogue(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v1/models":
 			w.Write(read("models.json"))
+		case "/v1/embeddings/models":
+			// The models that embed are listed apart from the ones that write,
+			// and a catalogue is both.
+			w.Write(read("embedding_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (openrouter/testdata/SOURCES.md). Health reads

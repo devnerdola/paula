@@ -271,9 +271,16 @@ block of its runner, and are listed with each runner above.
 |---|---|---|
 | `chat` | chats and accepts tools | yes |
 | `vision` | sees images | no |
+| `embed` | turns text into a vector | to serve |
 
 Without a `vision` model, pictures reach the chat model only if that model can
 see them itself.
+
+An `embed` model is what memories are searched by. A model that embeds writes
+nothing, so it is a model of its own: OpenRouter lists them apart from the rest
+and Paula reads both listings, and Venice marks them in the one it serves. Only
+`paula serve` asks for one, since it is the conversation that searches: every
+other command reads a conversation without searching it.
 
 The chat role asks for tools although no request carries any yet. Tools are
 part of the work ahead, and a model that cannot take them is not worth
@@ -421,9 +428,11 @@ shows only what it has not shown.
 
 **Every turn is recorded.** Each reply is an entry, and an entry holds the
 requests it made: the reply itself, and a look at any picture she was sent.
-Each request keeps its headers, bodies, timings, tokens and cost. Bodies older
-than the latest `log_keep` entries are dropped, and the rest stays. `paula
-turns` is the window into it.
+Each request keeps its headers, bodies, timings, tokens and cost, and shows a
+dash for a cost the host did not report. What a request turned into vectors is
+kept, and the vectors themselves are not: they are megabytes of numbers, and
+the conversation holds them already. Bodies older than the latest `log_keep`
+entries are dropped, and the rest stays. `paula turns` is the window into it.
 
 ## Your data
 

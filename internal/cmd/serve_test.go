@@ -68,8 +68,12 @@ models:
   talk:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
+  vectors:
+    runner: openrouter
+    id: openai/text-embedding-3-small
 default_models:
   chat: talk
+  embed: vectors
 `)
 	code, _, errOut := exec(t, "-config", cfg, "serve")
 	if code != 1 {
@@ -77,6 +81,60 @@ default_models:
 	}
 	if !strings.Contains(errOut, "serve is already running on "+dir) {
 		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+// The conversation searches its memories by what they mean, so a run of it
+// asks for a model that embeds. Nothing else does.
+func TestServeAsksForAModelThatEmbeds(t *testing.T) {
+	dir := shortDir(t)
+	ts := openrouterCatalogue(t)
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	cfg := configFile(t, `
+data_dir: `+dir+`
+runners:
+  openrouter:
+    type: openrouter
+    url: `+ts.URL+`/v1
+models:
+  talk:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+  vectors:
+    runner: openrouter
+    id: openai/text-embedding-3-small
+default_models:
+  chat: talk
+frontends:
+  repl:
+`)
+	// A conversation of its own, so that reading it below is reading
+	// something rather than what a refused run happened to leave behind.
+	held, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held.Close()
+
+	code, _, errOut := exec(t, "-config", cfg, "serve")
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut, "default_models.embed: no model is set") {
+		t.Errorf("stderr = %q, want it to name the key", errOut)
+	}
+	// It is refused before anything is asked of a model, so no entry is left
+	// half open and no frontend was ever listening.
+	if code, out, errOut := exec(t, "-config", cfg, "turns"); code != 0 {
+		t.Errorf("turns = %d, stderr %s", code, errOut)
+	} else if !strings.Contains(out, "ID") {
+		t.Errorf("turns = %q, want the empty table of a conversation that did nothing", out)
+	}
+
+	// Reading the conversation asks for no model that embeds: nothing there
+	// searches it.
+	if code, _, errOut := exec(t, "-config", cfg, "turns"); code != 0 {
+		t.Errorf("turns = %d, stderr %s", code, errOut)
 	}
 }
 
@@ -153,8 +211,12 @@ models:
   talk:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
+  vectors:
+    runner: openrouter
+    id: openai/text-embedding-3-small
 default_models:
   chat: talk
+  embed: vectors
 engine:
   debounce: 10ms
 frontends:

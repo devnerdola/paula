@@ -111,10 +111,14 @@ func TestCatalogue(t *testing.T) {
 		t.Errorf("%s = %+v, want no reasoning", m.ID, m)
 	}
 
-	// An embedding model is not one she can use, so it is not in the catalogue
-	// at all: the listing holds one, and asking for it says it is not served.
-	if _, err := r.Model(context.Background(), "text-embedding-bge-m3"); err == nil {
-		t.Error("an embedding model was served as a model Paula can use")
+	// A model that embeds. It writes nothing, so the catalogue says that and
+	// no more of it.
+	m = model(t, r, "text-embedding-bge-m3")
+	if !m.Embeddings || m.Chat || m.Vision || m.Tools || m.Reasoning {
+		t.Errorf("%s = %+v, want a model that only embeds", m.ID, m)
+	}
+	if m.Context != 8192 {
+		t.Errorf("%s has context %d, want what it takes in", m.ID, m.Context)
 	}
 
 	if _, err := r.Model(context.Background(), "nope"); err == nil {
@@ -173,6 +177,34 @@ func TestEveryRunReadsTheListing(t *testing.T) {
 	defer mu.Unlock()
 	if reads != 2 {
 		t.Errorf("the listing was read %d times, want it read by each run", reads)
+	}
+}
+
+// The answer is the one a request of two strings came back with.
+func TestEmbeddingOfACapturedAnswer(t *testing.T) {
+	r := runner(t, answers(t, "application/json", "embedding.json").URL, "")
+
+	said := []string{"Caio's sister Ana lives in Lisbon", "Caio cooks for friends on saturdays"}
+	out, err := r.Embed(context.Background(), api.EmbedRequest{Model: "m", Input: said})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One vector for each string, in the order they were sent, all of the
+	// width the model embeds at.
+	if len(out.Vectors) != len(said) {
+		t.Fatalf("vectors = %d, want one for each of the %d strings", len(out.Vectors), len(said))
+	}
+	for i, v := range out.Vectors {
+		if len(v) != len(out.Vectors[0]) {
+			t.Errorf("vector %d is %d wide, want %d", i, len(v), len(out.Vectors[0]))
+		}
+	}
+	if slices.Equal(out.Vectors[0], out.Vectors[1]) {
+		t.Error("two different strings embedded the same")
+	}
+	// An embedding writes nothing, so what it cost is what it read.
+	if out.Usage.PromptTokens == 0 || out.Usage.CompletionTokens != 0 {
+		t.Errorf("usage = %+v", out.Usage)
 	}
 }
 

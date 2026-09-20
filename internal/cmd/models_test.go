@@ -43,6 +43,16 @@ func openrouterCatalogueWhile(t *testing.T, listing *atomic.Bool) *httptest.Serv
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(read("models.json"))
+		case "/v1/embeddings/models":
+			// The models that embed are listed apart from the ones that write,
+			// and a catalogue is both.
+			if !listing.Load() {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"error":{"message":"listing is down","code":500}}`))
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(read("embedding_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (runners/openrouter/testdata/SOURCES.md). Health

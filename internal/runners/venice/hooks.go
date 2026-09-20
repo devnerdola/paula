@@ -48,6 +48,11 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	return nil
 }
 
+// EmbedBody carries nothing of its own: what venice_parameters holds is about
+// writing a reply, and the endpoint that turns text into vectors documents
+// none of it.
+func (hooks) EmbedBody(map[string]any, api.EmbedRequest) error { return nil }
+
 func reasoningObject(s api.Settings) map[string]any {
 	out := map[string]any{}
 	switch s.Reasoning.Mode {

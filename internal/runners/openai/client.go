@@ -44,6 +44,10 @@ const (
 type Hooks interface {
 	// Body adds the runner's own fields to a chat request body.
 	Body(body map[string]any, req api.ChatRequest) error
+	// EmbedBody does the same for a request that turns text into vectors. Most
+	// of what a chat request carries has no meaning here; where the request may
+	// be routed has the same meaning it always had.
+	EmbedBody(body map[string]any, req api.EmbedRequest) error
 	// Chunk reads the runner's own fields of a stream chunk. The reasoning
 	// text it returns is passed on, and it fills in what it knows of the
 	// result.
@@ -125,6 +129,11 @@ type ask struct {
 	header   http.Header
 	read     func(io.Reader, *api.Record) error
 	recorder api.Recorder
+	// dropAnswer leaves the bytes the host answered with out of the record. An
+	// answer that is a number for every dimension of every input runs to
+	// megabytes, and a dump of it says nothing the request and what it cost do
+	// not. An answer that is an error is kept whatever this says.
+	dropAnswer bool
 }
 
 // Get asks a JSON endpoint and decodes the answer into out.
@@ -198,6 +207,94 @@ func (c *Client) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chun
 		return nil, err
 	}
 	return res, nil
+}
+
+// embedded is the shape both APIs answer an embedding request in.
+type embedded struct {
+	Data []struct {
+		// Index is which input the vector is for. A host that says nothing
+		// leaves it nil rather than reading as the first input.
+		Index     *int      `json:"index"`
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+	Usage struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage"`
+}
+
+// Embed turns each string into a vector. The answer is a whole body rather
+// than a stream, so it is held to the request timeout like a listing is.
+func (c *Client) Embed(ctx context.Context, req api.EmbedRequest) (*api.EmbedResult, error) {
+	if len(req.Input) == 0 {
+		return &api.EmbedResult{}, nil
+	}
+	body := map[string]any{"model": req.Model, "input": req.Input}
+	if err := c.Hooks.EmbedBody(body, req); err != nil {
+		return nil, err
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+
+	out := &api.EmbedResult{Vectors: make([][]float32, len(req.Input))}
+	ctx, cancel := c.limited(ctx)
+	defer cancel()
+	err = c.send(ctx, ask{
+		method:     http.MethodPost,
+		path:       "/embeddings",
+		model:      req.Model,
+		body:       b,
+		recorder:   req.Recorder,
+		dropAnswer: true,
+		read: func(r io.Reader, rec *api.Record) error {
+			raw, err := io.ReadAll(r)
+			if err != nil {
+				return err
+			}
+			var answer embedded
+			if err := json.Unmarshal(raw, &answer); err != nil {
+				return err
+			}
+			if len(answer.Data) == 0 {
+				// An error written where the vectors belong is the shape an
+				// error with a status of its own has, and says what went wrong
+				// rather than leaving it to read as a vector that is missing.
+				if e := c.Hooks.Error(http.StatusOK, raw); e != nil {
+					return e
+				}
+			}
+			for i, e := range answer.Data {
+				// A host answers in the order it was asked, and says that order
+				// anyway; what it says is what counts, and where it says
+				// nothing the order it answered in is what is left.
+				at := i
+				if e.Index != nil {
+					at = *e.Index
+				}
+				if at < 0 || at >= len(out.Vectors) {
+					return fmt.Errorf("the answer holds a vector for input %d of %d", at, len(req.Input))
+				}
+				if out.Vectors[at] != nil {
+					return fmt.Errorf("the answer holds two vectors for input %d of %d", at, len(req.Input))
+				}
+				out.Vectors[at] = e.Embedding
+			}
+			for i, v := range out.Vectors {
+				if len(v) == 0 {
+					return fmt.Errorf("the answer holds no vector for input %d of %d", i, len(req.Input))
+				}
+			}
+			// An embedding writes nothing, so what it cost is what it read.
+			out.Usage = api.Usage{PromptTokens: answer.Usage.PromptTokens}
+			record(rec, "", "", out.Usage)
+			return nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // send makes a request, retrying the statuses the runner names, and records
@@ -380,11 +477,17 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 		return resp.StatusCode, c.apiError(resp.StatusCode, seen.Bytes())
 	}
 
-	err = cut(ctx, a.read(tee, rec))
+	// An answer that is not kept is not copied either: megabytes of numbers
+	// would be held twice over, once to be read and once to be thrown away.
+	from := io.Reader(tee)
+	if a.dropAnswer {
+		from = idle
+	}
+	err = cut(ctx, a.read(from, rec))
 	if !errors.Is(err, errCallback) && !errors.Is(err, ErrIdle) {
 		// What is left of a stream is read so the whole answer is recorded,
 		// unless the caller has stopped taking it or the host went quiet.
-		_, _ = io.Copy(io.Discard, tee)
+		_, _ = io.Copy(io.Discard, from)
 	}
 	rec.ResponseBody = seen.Bytes()
 	idle.arrived(headers)

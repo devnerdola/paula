@@ -122,6 +122,8 @@ func RoleNeeds(role config.Role) api.Needs {
 		return api.Needs{Chat: true, Tools: true}
 	case config.RoleVision:
 		return api.Needs{Vision: true}
+	case config.RoleEmbed:
+		return api.Needs{Embeddings: true}
 	}
 	return api.Needs{}
 }

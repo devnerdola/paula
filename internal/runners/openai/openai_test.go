@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -75,6 +76,7 @@ func asked(ctx context.Context, c *Client, rec api.Recorder) error {
 // runner that documents nothing of its own where a test sets none.
 type parts struct {
 	body  func(map[string]any, api.ChatRequest) error
+	embed func(map[string]any, api.EmbedRequest) error
 	chunk func([]byte, *api.Result) (string, error)
 	retry func(time.Time, int, http.Header) (time.Duration, bool)
 	fail  func(int, []byte) *api.APIError
@@ -85,6 +87,13 @@ func (p parts) Body(body map[string]any, req api.ChatRequest) error {
 		return nil
 	}
 	return p.body(body, req)
+}
+
+func (p parts) EmbedBody(body map[string]any, req api.EmbedRequest) error {
+	if p.embed == nil {
+		return nil
+	}
+	return p.embed(body, req)
 }
 
 func (p parts) Chunk(raw []byte, res *api.Result) (string, error) {
@@ -688,6 +697,170 @@ func TestACallbackThatStopsTakingTheAnswer(t *testing.T) {
 	}
 	if chunks != 1 {
 		t.Errorf("chunks = %d, want the stream left after the first", chunks)
+	}
+}
+
+// A host may answer the vectors in any order, and says which input each one
+// belongs to. What it says is what counts.
+func TestVectorsComeBackWhereTheirInputIs(t *testing.T) {
+	ts, s := newServer(t, answer(200, `{"object":"list","data":[`+
+		`{"index":1,"object":"embedding","embedding":[0.5,0.25]},`+
+		`{"index":0,"object":"embedding","embedding":[1,0]}],`+
+		`"usage":{"prompt_tokens":7,"total_tokens":7}}`))
+	c, _ := client(t, ts.URL, parts{})
+
+	out, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first", "second"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(out.Vectors[0], []float32{1, 0}) {
+		t.Errorf("the first vector = %v, want the one for input 0", out.Vectors[0])
+	}
+	if !slices.Equal(out.Vectors[1], []float32{0.5, 0.25}) {
+		t.Errorf("the second vector = %v, want the one for input 1", out.Vectors[1])
+	}
+	if out.Usage.PromptTokens != 7 {
+		t.Errorf("usage = %+v, want what the answer says", out.Usage)
+	}
+	if len(s.bodies) != 1 || !strings.Contains(s.bodies[0], `"input":["first","second"]`) {
+		t.Errorf("the request said %q, want both strings in one", s.bodies)
+	}
+}
+
+// The vectors run to megabytes of numbers, and the conversation keeps them
+// already, so the record of a turn holds what was embedded and not what came
+// back. An answer that could not be read is kept, since that is all there is
+// to read it back from.
+func TestAnEmbeddingKeepsWhatWasAskedAndNotTheVectors(t *testing.T) {
+	ts, _ := newServer(t, answer(200, `{"object":"list","data":[`+
+		`{"index":0,"object":"embedding","embedding":[1,0]}],`+
+		`"usage":{"prompt_tokens":7,"total_tokens":7}}`))
+	c, _ := client(t, ts.URL, parts{})
+
+	rec := &recorder{}
+	_, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first"}, Recorder: rec,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rec.ended) != 1 {
+		t.Fatalf("records = %d ended", len(rec.ended))
+	}
+	r := rec.ended[0]
+	if !strings.Contains(string(r.RequestBody), `"input":["first"]`) {
+		t.Errorf("request body = %s, want what was embedded", r.RequestBody)
+	}
+	if len(r.ResponseBody) != 0 {
+		t.Errorf("response body = %q, want the vectors left out", r.ResponseBody)
+	}
+	if r.Status != 200 || r.Usage.PromptTokens != 7 {
+		t.Errorf("record = %+v, want what the answer cost", r)
+	}
+
+	// An answer that is an error is what says why, so it is kept whole.
+	bad, _ := newServer(t, answer(400, `{"error":{"message":"no such model"}}`))
+	c, _ = client(t, bad.URL, parts{})
+	rec = &recorder{}
+	if _, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first"}, Recorder: rec,
+	}); err == nil {
+		t.Fatal("a 400 was taken as an answer")
+	}
+	if len(rec.ended) != 1 || !strings.Contains(string(rec.ended[0].ResponseBody), "no such model") {
+		t.Errorf("response body = %q, want what the host said went wrong", rec.ended[0].ResponseBody)
+	}
+}
+
+// A host that says which input each vector is for is taken at its word; one
+// that says nothing answered in the order it was asked. Two vectors for one
+// input would leave another input with none, which is not an answer.
+func TestVectorsOfAnAnswerThatNumbersNothing(t *testing.T) {
+	ts, _ := newServer(t, answer(200, `{"object":"list","data":[`+
+		`{"object":"embedding","embedding":[1,0]},`+
+		`{"object":"embedding","embedding":[0.5,0.25]}],`+
+		`"usage":{"prompt_tokens":7}}`))
+	c, _ := client(t, ts.URL, parts{})
+
+	out, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first", "second"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(out.Vectors[0], []float32{1, 0}) || !slices.Equal(out.Vectors[1], []float32{0.5, 0.25}) {
+		t.Errorf("vectors = %v, want them in the order they were asked for", out.Vectors)
+	}
+
+	twice, _ := newServer(t, answer(200, `{"object":"list","data":[`+
+		`{"index":0,"object":"embedding","embedding":[1,0]},`+
+		`{"index":0,"object":"embedding","embedding":[0,1]}],`+
+		`"usage":{"prompt_tokens":7}}`))
+	c, _ = client(t, twice.URL, parts{})
+	_, err = c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first", "second"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "two vectors for input 0") {
+		t.Errorf("error = %v, want it to say one input was answered twice", err)
+	}
+}
+
+// A 200 that carries an error object instead of vectors says what went wrong.
+// Read as an answer it would report a vector as missing, which sends whoever
+// is looking at the turn after the wrong thing.
+func TestAnEmbeddingAnsweredWithAnErrorAt200(t *testing.T) {
+	ts, _ := newServer(t, answer(200, `{"error":{"message":"input is too long","code":400}}`))
+	c, _ := client(t, ts.URL, parts{
+		fail: func(_ int, body []byte) *api.APIError {
+			var out struct {
+				Error struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			if json.Unmarshal(body, &out) != nil || out.Error.Message == "" {
+				return nil
+			}
+			return &api.APIError{Status: 400, Message: out.Error.Message}
+		},
+	})
+
+	_, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "input is too long") {
+		t.Errorf("error = %v, want what the host said went wrong", err)
+	}
+}
+
+// A vector short of one is not an answer: what is missing would otherwise be
+// stored as a memory embedded at the origin, which everything is far from.
+func TestAnEmbeddingThatIsMissingAVector(t *testing.T) {
+	ts, _ := newServer(t, answer(200, `{"object":"list","data":[`+
+		`{"index":0,"object":"embedding","embedding":[1,0]}],`+
+		`"usage":{"prompt_tokens":7}}`))
+	c, _ := client(t, ts.URL, parts{})
+
+	_, err := c.Embed(context.Background(), api.EmbedRequest{
+		Model: "some/model", Input: []string{"first", "second"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "no vector for input 1") {
+		t.Errorf("error = %v, want it to name the input that came back with none", err)
+	}
+}
+
+// Nothing to embed is nothing to ask for.
+func TestEmbeddingNothingAsksNothing(t *testing.T) {
+	ts, s := newServer(t)
+	c, _ := client(t, ts.URL, parts{})
+
+	out, err := c.Embed(context.Background(), api.EmbedRequest{Model: "some/model"})
+	if err != nil || len(out.Vectors) != 0 {
+		t.Errorf("Embed of nothing = %+v, %v", out, err)
+	}
+	if n := s.requests.Load(); n != 0 {
+		t.Errorf("requests = %d, want none", n)
 	}
 }
 

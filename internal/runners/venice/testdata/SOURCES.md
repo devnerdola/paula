@@ -4,6 +4,7 @@ whole entries and drops the rest; no field is changed.
 | File | Where it came from |
 |---|---|
 | `models.json` | `GET /models?type=all`, five entries |
+| `embedding.json` | `POST /embeddings` with `text-embedding-bge-m3` and two strings, whole |
 | `stream_reply.sse` | `POST /chat/completions`, streaming, `reasoning.enabled` |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 404 |
 | `error_unauthorized.json` | `POST /chat/completions` with a key that does not exist, 401 |

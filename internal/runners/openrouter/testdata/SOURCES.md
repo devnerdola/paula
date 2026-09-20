@@ -5,6 +5,7 @@ id noted below.
 | File | Where it came from |
 |---|---|
 | `models.json` | `GET /models`, five entries |
+| `embedding_models.json` | `GET /embeddings/models`, three of the thirty-three entries; the models that write text are listed apart from these |
 | `endpoints.json` | `GET /models/deepseek/deepseek-v4-pro-0813/endpoints`, three endpoints |
 | `stream_reply.sse` | `POST /chat/completions`, streaming, `reasoning.enabled` |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 400; the `user_id` the answer carries is dropped |

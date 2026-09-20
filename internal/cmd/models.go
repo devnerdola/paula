@@ -139,6 +139,9 @@ func capabilities(m *api.Model) string {
 	if m.Tools {
 		out = append(out, "tools")
 	}
+	if m.Embeddings {
+		out = append(out, "embeddings")
+	}
 	if m.Reasoning {
 		s := "reasoning"
 		if len(m.Efforts) > 0 {

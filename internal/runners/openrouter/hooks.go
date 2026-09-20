@@ -48,6 +48,21 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	return nil
 }
 
+// EmbedBody carries the routing settings and nothing else. Which hosts a
+// request may go to, and what they may keep of it, is the same question for a
+// memory as for a reply; sampling, reasoning and caching are about writing,
+// which a model that embeds does not do.
+func (hooks) EmbedBody(out map[string]any, req api.EmbedRequest) error {
+	prov, errs := decodeProvider(req.Settings.Provider)
+	if len(errs) > 0 {
+		return errs[0]
+	}
+	if o := prov.Routing.object(); len(o) > 0 {
+		out["provider"] = o
+	}
+	return nil
+}
+
 func reasoningObject(s api.Settings, prov *provider) map[string]any {
 	out := map[string]any{}
 	if s.Reasoning.Mode == api.ReasoningOff {
