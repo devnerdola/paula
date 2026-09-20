@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/media"
@@ -50,6 +51,10 @@ type attempt struct {
 	entry   *store.Entry
 	upto    store.MessageID
 	channel string
+	// foldDue says the messages this attempt's prompt carried took more than
+	// their share of the context. The goroutine building the prompt is the one
+	// that knows; the loop reads it once the attempt is done.
+	foldDue bool
 
 	cancel context.CancelFunc
 	state  atomic.Int32
@@ -157,6 +162,7 @@ type Engine struct {
 	waits     chan waitRequest
 	standings chan standingRequest
 	done      chan doneRequest
+	folds     chan folded
 
 	closing sync.Once
 	closed  chan struct{}
@@ -243,6 +249,7 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		waits:     make(chan waitRequest),
 		standings: make(chan standingRequest),
 		done:      make(chan doneRequest),
+		folds:     make(chan folded),
 		closed:    make(chan struct{}),
 		ended:     make(chan struct{}),
 	}
@@ -410,6 +417,14 @@ type loop struct {
 	debounce Timer
 	pending  bool
 	waiters  []chan Seq
+
+	// folding says a fold is running beside the loop, and foldAfter when the
+	// next one may start: a fold that failed waits, doubling up to foldMost,
+	// since a host that refused one step refuses the next.
+	folding    bool
+	foldCancel context.CancelFunc
+	foldWait   time.Duration
+	foldAfter  time.Time
 }
 
 func (l *loop) run() {
@@ -432,6 +447,12 @@ func (l *loop) run() {
 					req.err = errors.New(runEnded)
 				}
 				l.finish(ctx, req)
+			}
+			if l.folding {
+				// A fold is cut short by the run ending, and what it had
+				// written stands: the entry it left says how far it got.
+				l.foldCancel()
+				l.folded(<-e.folds)
 			}
 			l.pending = false
 			l.wake()
@@ -462,8 +483,41 @@ func (l *loop) run() {
 
 		case req := <-e.done:
 			l.finish(ctx, req)
+
+		case r := <-e.folds:
+			l.folded(r)
 		}
 	}
+}
+
+// folded takes a fold back. One that failed sets how long the next waits.
+func (l *loop) folded(r folded) {
+	l.folding = false
+	l.foldCancel = nil
+	if r.err == nil || errors.Is(r.err, context.Canceled) {
+		l.foldWait = 0
+		return
+	}
+	l.foldWait = min(max(2*l.foldWait, foldWait), foldMost)
+	l.foldAfter = l.e.clock.Now().Add(l.foldWait)
+	l.e.log.Warn("folding the oldest of the conversation away",
+		"error", r.err, "next try in", l.foldWait)
+}
+
+// maybeFold starts a fold when the messages of the prompt that just went out
+// took more than their share of the context. It runs beside the loop: the
+// conversation answers while it works.
+func (l *loop) maybeFold(ctx context.Context, a *attempt) {
+	e := l.e
+	if !a.foldDue || l.folding || e.clock.Now().Before(l.foldAfter) {
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	l.folding, l.foldCancel = true, cancel
+	go func() {
+		defer cancel()
+		e.folds <- folded{err: e.fold(ctx)}
+	}()
 }
 
 // start picks the conversation up where it was left.
@@ -625,6 +679,11 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 	e.endEntry(ctx, a.entry)
 	e.log.Info("entry ended", "entry", a.entry.ID,
 		"status", status, "duration", a.entry.EndedAt.Sub(a.entry.StartedAt))
+
+	// However the reply ended, its prompt is what says whether the messages
+	// have outgrown their share. One that failed for being too long is the
+	// case a fold is most needed in.
+	l.maybeFold(ctx, a)
 
 	switch status {
 	case store.StatusRestarted:

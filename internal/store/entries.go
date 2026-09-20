@@ -20,8 +20,10 @@ const (
 
 // Purposes a request can be sent for.
 const (
-	PurposeReply   = "reply"
-	PurposeCaption = "caption"
+	PurposeReply    = "reply"
+	PurposeCaption  = "caption"
+	PurposeMemories = "memories"
+	PurposeSummary  = "summary"
 )
 
 // EntryID numbers the entries of the turn log.

@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -10,10 +11,14 @@ import (
 	"nerdola.dev/x/paula/internal/store"
 )
 
-// timeText is how a time is written to a model.
+// dateText is how a day is written to a model, and timeText a time of one.
+func dateText(loc *time.Location, t time.Time) string {
+	return t.In(loc).Format("Monday, 2 January 2006")
+}
+
 func timeText(loc *time.Location, t time.Time) string {
 	t = t.In(loc)
-	return t.Format("Monday, 2 January 2006, 15:04 ") + "UTC" + t.Format("-07:00")
+	return dateText(loc, t) + t.Format(", 15:04 ") + "UTC" + t.Format("-07:00")
 }
 
 // sentAt says when the message after it was sent, and now says what time it
@@ -29,11 +34,21 @@ func (e *Engine) now() string {
 	return "It is now " + timeText(at.Location(), at) + "."
 }
 
-// prompt builds the messages of a reply: the card, then the conversation up to
-// the message being answered, with the time before every message she was sent.
+// prompt builds the messages of a reply: what she is told outside the
+// conversation, then the messages the summary does not cover, with the time
+// before every message she was sent.
 func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Message, error) {
-	// The whole conversation: from the newest message, with no limit.
-	messages, err := e.store.Messages(ctx, 0, 0)
+	summary, err := e.summary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	memories, err := e.store.Memories(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// What a fold has written is told in the system message, so the messages
+	// it covers are not carried one by one any more.
+	messages, err := e.store.MessagesAfter(ctx, coveredUpto(summary))
 	if err != nil {
 		return nil, err
 	}
@@ -45,18 +60,18 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	}
 	kept = ordered(kept)
 
-	// The card is the whole of what a reply is told about her, and stands for
-	// every reply of the run.
-	card := api.Text(api.RoleSystem, e.rendered)
+	ratio := e.ratios.ratio(m.Name)
+	limit := m.limit()
+	system, history := e.split(m)
+	card := e.systemMessage(memories, summary, system, ratio)
 	if len(kept) == 0 {
 		return []api.Message{card}, nil
 	}
 
 	inline := e.inlineFrom(kept, m)
 	last := kept[len(kept)-1].ID
-	ratio := e.ratios.ratio(m.Name)
-	limit := m.limit()
-	taken := size([]api.Message{card}, ratio, e.cfg.ImageTokens)
+	head := size([]api.Message{card}, ratio, e.cfg.ImageTokens)
+	taken := head
 
 	// The newest exchange is built first and the older ones are added while
 	// they fit, so nothing older than the first that does not fit is built: no
@@ -80,12 +95,91 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		e.log.Warn("the oldest of the conversation is left out of the prompt",
 			"entry", a.entry.ID, "exchanges", dropped, "context", limit, "tokens", taken)
 	}
+	// What the messages took is what a fold is due on, and this is where it is
+	// known exactly: these are the messages, rendered as the model reads them.
+	// One that left something out says it outright, since what it carried is
+	// held to the context and would sit under the share for ever while the
+	// conversation grew past it.
+	if history > 0 {
+		a.foldDue = dropped > 0 || taken-head > history
+	}
 
 	out := []api.Message{card}
 	for i := len(built) - 1; i >= 0; i-- {
 		out = append(out, built[i]...)
 	}
 	return out, nil
+}
+
+// systemMessage is the whole of what a reply is told outside the conversation:
+// the card, the memories that still stand, and the summary of the messages it
+// no longer carries. Each section is left out when it holds nothing, and the
+// card is the one that always stands, so a run with no fold behind it reads
+// exactly as it did before there were folds.
+func (e *Engine) systemMessage(memories []store.Memory, summary *store.Summary, room int, ratio float64) api.Message {
+	card := api.Text(api.RoleSystem, e.rendered)
+	sections := []string{e.rendered}
+
+	// What is left of the system message once the card is written is divided
+	// between the memories and the summary. Nothing bounding the prompt leaves
+	// both of them whole.
+	loc := e.clock.Now().Location()
+	told := memories
+	if room > 0 {
+		left := max(0, room-size([]api.Message{card}, ratio, 0))
+		told = remembered(memories, share(left, e.cfg.MemoryRatio), ratio, loc)
+	}
+	if len(told) > 0 {
+		lines := []string{"What you remember from your conversations with " +
+			e.persona.User.Name + ", oldest first:"}
+		for _, m := range told {
+			lines = append(lines, memoryLine(m, loc))
+		}
+		sections = append(sections, strings.Join(lines, "\n"))
+	}
+	if summary != nil && summary.Content != "" {
+		sections = append(sections, "Earlier in your conversation with "+
+			e.persona.User.Name+":\n"+summary.Content)
+	}
+	return api.Text(api.RoleSystem, strings.Join(sections, "\n\n"))
+}
+
+// memoryLine is one memory as a model reads it, dated by the day it was said
+// rather than the day a fold wrote it down.
+func memoryLine(m store.Memory, loc *time.Location) string {
+	return "- (said on " + dateText(loc, m.SaidAt) + ") " + m.Content
+}
+
+// remembered is the memories a prompt tells: the newest that fit the room
+// memories have, in the order they were said.
+func remembered(all []store.Memory, room int, ratio float64, loc *time.Location) []store.Memory {
+	var taken int
+	for i := len(all) - 1; i >= 0; i-- {
+		taken += size([]api.Message{api.Text(api.RoleSystem, memoryLine(all[i], loc))}, ratio, 0)
+		if taken > room {
+			return all[i+1:]
+		}
+	}
+	return all
+}
+
+// summary is the summary that counts, and nil while the conversation has never
+// been folded.
+func (e *Engine) summary(ctx context.Context) (*store.Summary, error) {
+	out, err := e.store.LatestSummary(ctx)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil
+	}
+	return out, err
+}
+
+// coveredUpto is the newest message a summary speaks for, and zero when there
+// is none: the messages after it are the ones a prompt carries.
+func coveredUpto(summary *store.Summary) store.MessageID {
+	if summary == nil {
+		return 0
+	}
+	return summary.UptoMessageID
 }
 
 // exchange is the messages of one exchange as the model reads them. Every

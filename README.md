@@ -107,8 +107,8 @@ thrown away; the next `serve` answers the message you were waiting on.
 
 ## Looking at what happened
 
-`paula turns` lists her replies, newest first, with the tokens and the cost of
-each:
+`paula turns` lists what she did, newest first, with the tokens and the cost of
+each — a reply, or a fold of the oldest of the conversation:
 
 ```
 ./paula turns
@@ -285,6 +285,9 @@ configuring for it.
 |---|---|---|
 | `debounce` | `2s` | how long a message waits before she starts writing |
 | `prefill_cancel` | `true` | a new message restarts a reply that has written nothing yet |
+| `system_ratio` | `0.5` | share of the context the system message may take; above 0 and below 1 |
+| `memory_ratio` | `0.5` | share of what is left of the system message, once the card is written, that memories may take; the summary takes the rest; above 0 and at most 1 |
+| `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
 | `image_turns` | `2` | how many recent messages send their picture as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
 | `image_tokens` | `1000` | tokens counted for each picture sent as a picture; set it to what the host bills for one |
@@ -343,16 +346,30 @@ Stopping keeps what she had written and marks it interrupted.
 stays unanswered. Your next message, or the next `serve`, picks it up. Nothing
 is answered twice: every stored reply records which messages it answered.
 
-**The prompt is the conversation.** It opens with one system message, the card.
-Then comes every message in order, each reply after what it answers.
+**The prompt is the conversation.** It opens with one system message: the card,
+then what she remembers, then the summary of what came before. After it come
+the messages the summary does not cover, in order, each reply after what it
+answers.
 
-**What no longer fits is left out.** A prompt is measured against the model's
-`context`, or the largest its catalogue reports. Past it, the oldest exchanges
-are dropped — the messages you sent since her previous reply, and that reply,
-go together, so she is never shown an answer without the messages it answered.
-What she is answering now is sent whatever it takes. Nothing is summarised yet,
-so what falls off the front is gone from the prompt; the conversation itself
-keeps everything.
+**The oldest of it is folded away.** The model's `context`, or the largest its
+catalogue reports, is split between that system message and the messages —
+`system_ratio` says how. When the messages outgrow their half, a fold runs in
+the background: it takes the oldest exchanges, asks the chat model for the
+lasting facts in them and for the summary written again with them added, and
+stores both together. It steps until what is left is `history_keep` of that
+half. Replies carry on while it works, and a fold that fails waits 30 seconds
+before the next try, doubling up to ten minutes.
+
+A memory is one sentence about you or about her, dated by the day it was said.
+Memories take `memory_ratio` of what is left of the system message once the
+card is written, newest first; the summary takes the rest. Nothing is thrown
+away: the conversation itself keeps every message, and `paula turns` shows
+every fold and what it asked.
+
+**What still does not fit is left out.** Past the context, the oldest exchanges
+of the prompt are dropped — the messages you sent since her previous reply, and
+that reply, go together, so she is never shown an answer without the messages
+it answered. What she is answering now is sent whatever it takes.
 
 Measuring means counting tokens, which only the host can do exactly. Paula
 starts at a token every 3.5 characters, which counts a little high, and

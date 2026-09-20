@@ -93,10 +93,17 @@ func (d DefaultModels) Get(r Role) string {
 type Engine struct {
 	Debounce      Duration `yaml:"debounce"`
 	PrefillCancel bool     `yaml:"prefill_cancel"`
-	ImageTurns    int      `yaml:"image_turns"`
-	ImageMaxPx    int      `yaml:"image_max_px"`
-	ImageTokens   int      `yaml:"image_tokens"`
-	LogKeep       int      `yaml:"log_keep"`
+	// SystemRatio is the share of the context the system message may take, and
+	// MemoryRatio the share of what is left of it, once the card is written,
+	// that memories may take; the summary takes the rest. HistoryKeep is the
+	// share of the messages' part of the context a fold leaves behind.
+	SystemRatio float64 `yaml:"system_ratio"`
+	MemoryRatio float64 `yaml:"memory_ratio"`
+	HistoryKeep float64 `yaml:"history_keep"`
+	ImageTurns  int     `yaml:"image_turns"`
+	ImageMaxPx  int     `yaml:"image_max_px"`
+	ImageTokens int     `yaml:"image_tokens"`
+	LogKeep     int     `yaml:"log_keep"`
 }
 
 // DefaultEngine is the engine section a file that writes none gets.
@@ -104,6 +111,9 @@ func DefaultEngine() Engine {
 	return Engine{
 		Debounce:      Duration(2 * time.Second),
 		PrefillCancel: true,
+		SystemRatio:   0.5,
+		MemoryRatio:   0.5,
+		HistoryKeep:   0.5,
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
 		ImageTokens:   1000,
@@ -319,6 +329,17 @@ func (c *Config) Model(name string) *Model {
 func checkEngine(p *problems, e Engine) {
 	if e.Debounce < 0 {
 		p.addf("engine.debounce: %s is below zero", e.Debounce)
+	}
+	// A share of nothing leaves a prompt no room, and a share of everything
+	// leaves the other side of the split none.
+	if e.SystemRatio <= 0 || e.SystemRatio >= 1 {
+		p.addf("engine.system_ratio: %v is not above 0 and below 1", e.SystemRatio)
+	}
+	if e.MemoryRatio <= 0 || e.MemoryRatio > 1 {
+		p.addf("engine.memory_ratio: %v is not above 0 and at most 1", e.MemoryRatio)
+	}
+	if e.HistoryKeep <= 0 || e.HistoryKeep >= 1 {
+		p.addf("engine.history_keep: %v is not above 0 and below 1", e.HistoryKeep)
 	}
 	if e.ImageTurns < 0 {
 		p.addf("engine.image_turns: %d is below zero", e.ImageTurns)

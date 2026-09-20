@@ -70,6 +70,27 @@ func size(messages []api.Message, ratio float64, imageTokens int) int {
 	return int(math.Ceil(float64(chars)*ratio)) + images*imageTokens
 }
 
+// share is what part of a number a ratio comes to, rounded down, and never
+// below nothing.
+func share(of int, ratio float64) int {
+	if of <= 0 {
+		return 0
+	}
+	return int(math.Floor(float64(of) * ratio))
+}
+
+// split is what the model's context gives the system message and what it
+// leaves the messages. A model whose context nothing says holds neither to
+// anything, and both come back as zero.
+func (e *Engine) split(m *model) (system, history int) {
+	limit := m.limit()
+	if limit <= 0 {
+		return 0, 0
+	}
+	system = share(limit, e.cfg.SystemRatio)
+	return system, limit - system
+}
+
 // limit is the context a prompt is held to: what the file sets for the model,
 // or the largest its catalogue reports. Zero is no limit, which is what a file
 // that sets none and a runner that reports none come to.
