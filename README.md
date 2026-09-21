@@ -30,13 +30,21 @@ models:
   pro:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
+  vectors:
+    runner: openrouter
+    id: openai/text-embedding-3-small
 
 default_models:
   chat: pro
+  embed: vectors
 
 frontends:
   repl:
 ```
+
+Two models is the smallest she runs on: one writes her replies, and one turns
+what she remembers into vectors, so she can find a memory by what it means. A
+model that embeds writes nothing, so it is always a second model.
 
 `paula.example.yaml` is a fuller one, with two runners and a model for each.
 
@@ -126,7 +134,8 @@ given, whether it was asked to reason and at which effort, and the reply
 itself. `-dump` adds the headers and the exact bytes in both directions, which
 is what you want when an API behaves strangely.
 
-`paula memory` is what she remembers, beside a `serve` that is running:
+`paula memory` is what she remembers. It reads and writes the conversation a
+`serve` is holding, so it runs beside one or on its own:
 
 ```
 ./paula memory list                    # the newest, with the number each is forgotten by
@@ -166,7 +175,7 @@ share settings.
 | `data_dir` | `data`, beside the file | the database and the images, created with mode 0700 |
 | `runners` | — | the APIs she talks through; at least one |
 | `models` | — | the models she may use, in the order you write them |
-| `default_models` | — | the model for each role; `chat` is required |
+| `default_models` | — | the model for each role; `chat` and `embed` are required |
 | `engine` | see below | how she replies |
 | `frontends` | none | how you reach her |
 
@@ -201,7 +210,8 @@ A request whose connection drops before any status arrives is reported, not
 sent again: nothing says the host did not take it.
 
 **OpenRouter** serves `https://openrouter.ai/api/v1`. Paula reads its catalogue
-from `GET /models` and checks the key with `GET /key`. She sends `408`, `429`,
+from `GET /models` and `GET /embeddings/models`, which are listed apart, and
+checks the key with `GET /key`. She sends `408`, `429`,
 `502` and `503` again after the wait `Retry-After` asks for, at most `retries`
 times, and gives up on a wait longer than two minutes.
 
@@ -408,11 +418,10 @@ to the context by leaving the oldest exchanges out — but raise `system_ratio`,
 give the model a larger `context`, or write a shorter card.
 
 **Memories are found by what they mean.** The `embed` model turns each of them
-into a vector, a hundred at a time, in the same background work that folds and
-writes the summary again — so a question finds the memory it is about without
-sharing a word with it. A vector is kept under the model that made it: change
-the model and they are made again, rather than measured against a space they
-were never in.
+into a vector, a hundred at a time, in a piece of background work of its own —
+so a question finds the memory it is about without sharing a word with it. A
+vector is kept under the model that made it: change the model and they are made
+again, rather than measured against a space they were never in.
 
 The two run beside each other, each waiting its own wait after a failure of its
 own. A host that is away for the model that embeds, or merely slow with a long
@@ -469,7 +478,8 @@ entries are dropped, and the rest stays. `paula turns` is the window into it.
 
 ```
 data/
-  paula.db         the conversation, the settings, the request log
+  paula.db         the conversation, what she remembers of it, the settings,
+                   the request log
   paula.db-wal     the write-ahead log SQLite keeps beside it
   paula.db-shm     the shared memory it keeps with it
   media/xx/        every picture, as JPEG named by its sha256, under the
@@ -485,14 +495,22 @@ touching either. An older one is brought up to date by `serve`. A command that
 only reads says to run `serve` first, rather than read a schema it does not
 know. Only one `serve` may use a directory at a time.
 
-Nothing leaves the machine except the requests to the model API, and those
-carry only the prompt, the pictures and the settings.
+Nothing leaves the machine except the requests to the model API. Those carry
+the prompt, the pictures and the settings, and — to the model that embeds — the
+memories a fold wrote, which are the conversation in the words it left them in.
+On OpenRouter the `routing` settings of the runner go with them, so where a
+reply may be routed and what a host may keep of it holds for the memories too.
+Venice takes no such settings on that endpoint.
 
 ## Development
 
 ```
-gofmt -l . && go vet ./... && go test ./...
+go fix ./... && go build ./... && go vet ./... && gofmt -l . && go mod tidy -diff && go test -race ./...
 ```
+
+`go fix` is the one that writes rather than reports: it says what the standard
+library now has a shorter way of saying, and applies it, so what it changes
+belongs to the commit it ran in.
 
 The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
