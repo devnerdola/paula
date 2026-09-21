@@ -189,7 +189,8 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 func typed(lines ...string) io.Reader {
 	var b strings.Builder
 	for _, line := range lines {
-		b.WriteString(line + "\n")
+		b.WriteString(line)
+		b.WriteString("\n")
 	}
 	return strings.NewReader(b.String())
 }

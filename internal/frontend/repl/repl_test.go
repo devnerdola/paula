@@ -38,7 +38,7 @@ func open(t *testing.T, dataDir, section string) *repl.Frontend {
 	path := filepath.Join(t.TempDir(), "paula.yaml")
 	file := "persona: paula.yaml\ndata_dir: " + dataDir + "\nrunners:\n  r:\n    type: openrouter\n" +
 		"models:\n  a:\n    runner: r\n    id: x\ndefault_models:\n  chat: a\nfrontends:\n  repl:\n"
-	for _, line := range strings.Split(section, "\n") {
+	for line := range strings.SplitSeq(section, "\n") {
 		if line != "" {
 			file += "    " + line + "\n"
 		}
@@ -628,7 +628,7 @@ func TestAReplyAndTheTerminalWritingAtOnce(t *testing.T) {
 	if strings.Contains(shown, "\n\n") || strings.HasPrefix(shown, "\n") {
 		t.Errorf("the terminal was left with an empty line: %q", shown)
 	}
-	for _, line := range strings.Split(shown, "\n") {
+	for line := range strings.SplitSeq(shown, "\n") {
 		if strings.Count(line, "Paula: ") > 1 {
 			t.Errorf("a line carries her name more than once: %q", line)
 			break

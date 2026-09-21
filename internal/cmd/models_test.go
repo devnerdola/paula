@@ -164,7 +164,7 @@ default_models:
 
 func line(t *testing.T, out, prefix string) string {
 	t.Helper()
-	for _, l := range strings.Split(out, "\n") {
+	for l := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(l, prefix) {
 			return l
 		}

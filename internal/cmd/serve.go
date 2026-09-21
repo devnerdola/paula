@@ -126,9 +126,7 @@ func serve(g *globals) error {
 	var running sync.WaitGroup
 	var failed atomic.Bool
 	for _, open := range opened {
-		running.Add(1)
-		go func() {
-			defer running.Done()
+		running.Go(func() {
 			if err := frontend.Run(ctx, open, frontend.Options{Conv: conv, Log: log}); err != nil {
 				// A frontend that stopped serving does not come back, so the
 				// run ends rather than looking alive without it.
@@ -136,7 +134,7 @@ func serve(g *globals) error {
 				failed.Store(true)
 				stop()
 			}
-		}()
+		})
 	}
 
 	log.Info("serving", "data_dir", cfg.DataDir, "frontends", len(cfg.Frontends))

@@ -138,11 +138,16 @@ can be read from the entries is not kept beside them.
 ## Before every commit
 
 ```
-go build ./... && go vet ./... && gofmt -l . && go mod tidy -diff && go test -race ./...
+go fix ./... && go build ./... && go vet ./... && gofmt -l . && go mod tidy -diff && go test -race ./...
 ```
 
-All five, every time. A commit with a wrong `go.mod` is redone, not patched on
+All six, every time. A commit with a wrong `go.mod` is redone, not patched on
 top.
+
+`go fix` is the one that writes rather than reports: it says what the standard
+library now has a shorter way of saying, and applies it. What it changes is
+part of the commit it ran in, and is read back like anything else — it names
+the variables it introduces, and leaves the line it rewrote where it was.
 
 ## Running and debugging
 

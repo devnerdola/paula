@@ -62,7 +62,7 @@ func runnerFor(t *testing.T, url string, body string, h api.Host) *Runner {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "paula.yaml")
 	file := "persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\n    url: " + url + "/v1\n"
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if line != "" {
 			file += "    " + line + "\n"
 		}
@@ -668,11 +668,9 @@ func TestTheCatalogueIsReadOnceUnderManyReaders(t *testing.T) {
 	lists := make([][]api.Model, 8)
 	errs := make([]error, 8)
 	for i := range lists {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			lists[i], errs[i] = r.Models(context.Background())
-		}()
+		})
 	}
 	wg.Wait()
 

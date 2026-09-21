@@ -115,7 +115,7 @@ var (
 // is about.
 func (s Section) named(err error) []string {
 	var out []string
-	for _, line := range strings.Split(yamlLead.ReplaceAllString(err.Error(), ""), "\n") {
+	for line := range strings.SplitSeq(yamlLead.ReplaceAllString(err.Error(), ""), "\n") {
 		msg := strings.TrimSpace(line)
 		if msg == "" {
 			continue

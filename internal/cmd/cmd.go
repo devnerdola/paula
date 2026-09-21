@@ -127,12 +127,10 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	if err := fn(g, sub.Args()); err != nil {
-		var code exit
-		if errors.As(err, &code) {
+		if code, ok := errors.AsType[exit](err); ok {
 			return int(code)
 		}
-		var ue *usageError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*usageError](err); ok {
 			if msg := ue.Error(); msg != "" {
 				fmt.Fprintf(stderr, "paula %s: %s\n", strings.Join(path, " "), msg)
 			}

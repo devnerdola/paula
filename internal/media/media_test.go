@@ -265,11 +265,9 @@ func TestTheSameImageKeptTwiceAtOnce(t *testing.T) {
 	shas := make([]string, 8)
 	errs := make([]error, 8)
 	for i := range shas {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			shas[i], errs[i] = f.Store(b)
-		}()
+		})
 	}
 	wg.Wait()
 

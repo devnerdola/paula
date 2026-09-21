@@ -422,12 +422,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 
 func sawLine(s *screen, want string) func() bool {
 	return func() bool {
-		for _, l := range s.log() {
-			if l == want {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(s.log(), want)
 	}
 }
 
@@ -989,8 +984,7 @@ func TestASequentialSessionEndsWhenItCannotAskForTheNextLine(t *testing.T) {
 	a := &asking{screen: newScreen(api.Features{Channel: "repl", Sequential: true})}
 	tk := newTalk()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- New(a, Options{Conv: tk}).Run(ctx) }()
 
@@ -1149,8 +1143,7 @@ func TestASessionEndsOnlyOnceSheHasFinished(t *testing.T) {
 	s := &sequentialStream{screen: base}
 	tk := newTalk()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	done := make(chan error, 1)
 	go func() { done <- New(s, Options{Conv: tk}).Run(ctx) }()
 
@@ -1221,11 +1214,9 @@ func (t *twoAtOnce) Kind() string { return "two" }
 func (t *twoAtOnce) Run(ctx context.Context, session func(context.Context, api.Adapter) error) error {
 	var wg sync.WaitGroup
 	for _, a := range []api.Adapter{t.first, t.second} {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_ = session(ctx, a)
-		}()
+		})
 	}
 	wg.Wait()
 	return nil

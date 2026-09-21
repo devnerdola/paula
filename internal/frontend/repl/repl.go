@@ -126,9 +126,7 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 			}
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer conn.Close()
 			// A terminal that stopped reading blocks whoever writes to it, so
 			// when the context ends the connection is given the time it takes
@@ -145,7 +143,7 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 			if err := serve(ctx, conn, f.names, session); err != nil && !gone(err) {
 				f.log.Error("repl session", "error", err)
 			}
-		}()
+		})
 	}
 }
 

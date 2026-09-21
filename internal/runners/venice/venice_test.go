@@ -52,7 +52,7 @@ func runner(t *testing.T, url string, body string) *Runner {
 	t.Setenv("VENICE_API_KEY", "test-token-abcdefgh")
 	path := filepath.Join(t.TempDir(), "paula.yaml")
 	file := "persona: paula.yaml\nrunners:\n  venice:\n    type: venice\n    url: " + url + "/v1\n"
-	for _, line := range strings.Split(body, "\n") {
+	for line := range strings.SplitSeq(body, "\n") {
 		if line != "" {
 			file += "    " + line + "\n"
 		}

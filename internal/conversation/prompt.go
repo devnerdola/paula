@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -85,8 +86,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	groups := exchanges(kept)
 	built := make([][]api.Message, 0, len(groups))
 	dropped := 0
-	for i := len(groups) - 1; i >= 0; i-- {
-		msgs := e.exchange(ctx, a, groups[i], inline, last)
+	for i, group := range slices.Backward(groups) {
+		msgs := e.exchange(ctx, a, group, inline, last)
 		// The exchange being answered goes whatever it takes, since leaving it
 		// out would answer nothing.
 		if n := size(msgs, ratio, e.cfg.ImageTokens); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
@@ -113,8 +114,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	}
 
 	out := []api.Message{card}
-	for i := len(built) - 1; i >= 0; i-- {
-		out = append(out, built[i]...)
+	for _, b := range slices.Backward(built) {
+		out = append(out, b...)
 	}
 	return out, nil
 }
@@ -162,8 +163,8 @@ func memoryLine(m store.Memory, loc *time.Location) string {
 // memories have, in the order they were said.
 func remembered(all []store.Memory, room int, ratio float64, loc *time.Location) []store.Memory {
 	var taken int
-	for i := len(all) - 1; i >= 0; i-- {
-		taken += size([]api.Message{api.Text(api.RoleSystem, memoryLine(all[i], loc))}, ratio, 0)
+	for i, a := range slices.Backward(all) {
+		taken += size([]api.Message{api.Text(api.RoleSystem, memoryLine(a, loc))}, ratio, 0)
 		if taken > room {
 			return all[i+1:]
 		}
@@ -248,8 +249,7 @@ func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID 
 		return 0
 	}
 	var seen int
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
+	for _, msg := range slices.Backward(messages) {
 		if msg.Role != store.RoleUser || len(msg.Images()) == 0 {
 			continue
 		}

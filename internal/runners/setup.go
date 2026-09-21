@@ -228,13 +228,11 @@ func (s *Setup) checkRunners(ctx context.Context) []RunnerStatus {
 	var wg sync.WaitGroup
 	for i, r := range s.Runners {
 		out[i].Runner = r
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			if err := r.Health(ctx); err != nil {
 				out[i].Err = fmt.Errorf("runners.%s: %w", r.Name(), err)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	return out
@@ -255,11 +253,9 @@ func (s *Setup) checkModels(ctx context.Context, runners []RunnerStatus) []Model
 		if out[i].Skipped {
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			out[i].Catalogue, out[i].Err = s.checkModel(ctx, m)
-		}()
+		})
 	}
 	wg.Wait()
 	return out

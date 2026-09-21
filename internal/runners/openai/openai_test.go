@@ -378,8 +378,7 @@ func TestARequestAndItsRecordBothFailing(t *testing.T) {
 	if err == nil {
 		t.Fatal("the request succeeded")
 	}
-	var e *api.APIError
-	if !errors.As(err, &e) {
+	if _, ok := errors.AsType[*api.APIError](err); !ok {
 		t.Errorf("error = %v, want what the API said", err)
 	}
 	if !strings.Contains(err.Error(), "the store is gone") {

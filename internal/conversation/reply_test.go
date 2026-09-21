@@ -152,9 +152,9 @@ func (f *fakeRunner) asked() api.ChatRequest {
 func (f *fakeRunner) replied() api.ChatRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	for i := len(f.requests) - 1; i >= 0; i-- {
-		if purpose(f.requests[i]) == store.PurposeReply {
-			return f.requests[i]
+	for _, v := range slices.Backward(f.requests) {
+		if purpose(v) == store.PurposeReply {
+			return v
 		}
 	}
 	return api.ChatRequest{}

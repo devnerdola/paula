@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -305,9 +306,7 @@ func (c *Client) send(ctx context.Context, a ask) error {
 		return err
 	}
 	header := http.Header{"Accept": {"application/json"}}
-	for k, values := range a.header {
-		header[k] = values
-	}
+	maps.Copy(header, a.header)
 	if a.body != nil {
 		header.Set("Content-Type", "application/json")
 	}
