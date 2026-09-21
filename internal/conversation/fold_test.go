@@ -70,6 +70,34 @@ func talkPast(t *testing.T, r *replyEngine) *store.Summary {
 	return out
 }
 
+// A picture weighs what a host bills for it, which is what a prompt carries
+// and so what a fold is deciding about. One that measured only the words would
+// find nothing worth folding while the prompt was already too full for them.
+func TestAFoldWeighsThePicturesAnExchangeCarries(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: folding("hm", "Caio sent a picture", "they looked at pictures")}
+	f.model.Vision = true
+	r := openReplyWith(t, f, sized(f, 3000))
+	ctx := context.Background()
+
+	// Three short messages, each carrying a picture. Their words come to
+	// almost nothing; the pictures come to more than the messages' share.
+	for _, said := range []string{"one", "two", "three"} {
+		sendPhoto(t, r, said, photo(t))
+	}
+
+	waitFor(t, "the conversation to be folded", func() bool {
+		s, err := r.store.LatestSummary(ctx)
+		return err == nil && s != nil
+	})
+	summary, err := r.store.LatestSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Content != "they looked at pictures" {
+		t.Errorf("summary = %q", summary.Content)
+	}
+}
+
 func TestAConversationPastItsShareIsFolded(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: folding("hm", "Caio has a sister", "they said things")}
 	r := openReplyWith(t, f, sized(f, 2000))

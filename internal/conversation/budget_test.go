@@ -54,7 +54,7 @@ func TestWhatAPromptTakesIsItsCharactersAndItsPictures(t *testing.T) {
 }
 
 func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
-	var r ratios
+	var r costs
 	// A token every 3.5 characters, until a host says otherwise.
 	if got := r.ratio("chat"); got != 1.0/3.5 {
 		t.Errorf("ratio = %v, want a token every 3.5 characters", got)
@@ -76,16 +76,47 @@ func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
 	}
 }
 
-func TestAPromptWithAPictureSaysNothingAboutCharacters(t *testing.T) {
-	var r ratios
-	r.correct("chat", 1000, []api.Message{{Role: api.RoleUser, Parts: []api.Part{
-		{Type: api.PartText, Text: strings.Repeat("a", 20)},
-		{Type: api.PartImage, Data: []byte("a picture")},
-	}}})
-	// The picture is in the count and not in the characters, so the count says
-	// nothing about what one costs.
+// A host bills a picture by how big it is, and each of them by its own
+// reckoning, so what one costs is read back the way what a character costs is:
+// from the count a prompt carrying one came home with.
+func TestWhatAPictureCostsIsReadBackFromTheCount(t *testing.T) {
+	var r costs
+	if got := r.image("chat"); got != startImage {
+		t.Errorf("a picture costs %d, want the one nothing has counted", got)
+	}
+
+	withPicture := func(chars, pictures int) []api.Message {
+		parts := []api.Part{{Type: api.PartText, Text: strings.Repeat("a", chars)}}
+		for range pictures {
+			parts = append(parts, api.Part{Type: api.PartImage, Data: []byte("a picture")})
+		}
+		return []api.Message{{Role: api.RoleUser, Parts: parts}}
+	}
+
+	// Twenty characters at a token every 3.5 come to 6, and the rest of the
+	// count is what the picture cost.
+	r.correct("chat", 1000, withPicture(20, 1))
+	if got := r.image("chat"); got != 994 {
+		t.Errorf("a picture costs %d, want 994", got)
+	}
+	// The picture is in the count and not in the characters, so it still says
+	// nothing about what one of those costs.
 	if got := r.ratio("chat"); got != 1.0/3.5 {
 		t.Errorf("ratio = %v, want the one nothing has counted", got)
+	}
+	if got := r.image("eyes"); got != startImage {
+		t.Errorf("another model's picture costs %d, want the one nothing has counted", got)
+	}
+
+	// Two of them share what is left of the count.
+	r.correct("chat", 406, withPicture(20, 2))
+	if got := r.image("chat"); got != 200 {
+		t.Errorf("a picture costs %d, want 200", got)
+	}
+	// A count the characters alone come to has no picture in it to read.
+	r.correct("chat", 6, withPicture(20, 1))
+	if got := r.image("chat"); got != 200 {
+		t.Errorf("a picture costs %d, want the one that was counted", got)
 	}
 }
 
@@ -112,7 +143,7 @@ func TestTheCountOfAReplysPromptSetsWhatACharacterCosts(t *testing.T) {
 	if chars == 0 {
 		t.Fatal("the prompt was sent with no text in it")
 	}
-	if want, got := 4000/float64(chars), r.ratios.ratio("chat"); got != want {
+	if want, got := 4000/float64(chars), r.costs.ratio("chat"); got != want {
 		t.Errorf("ratio = %v, want %v: what the host counted over what she sent", got, want)
 	}
 }

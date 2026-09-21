@@ -96,7 +96,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	// What the host counted this prompt as is what a character costs on this
 	// model, whatever became of the reply.
 	if res != nil {
-		e.ratios.correct(m.Name, res.Usage.PromptTokens, messages)
+		e.costs.correct(m.Name, res.Usage.PromptTokens, messages)
 	}
 
 	// A restart keeps nothing, even when the reply finished as it landed.

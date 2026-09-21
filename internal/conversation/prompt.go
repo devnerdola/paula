@@ -61,7 +61,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	}
 	kept = ordered(kept)
 
-	ratio := e.ratios.ratio(m.Name)
+	ratio := e.costs.ratio(m.Name)
 	limit := m.limit()
 	system, history := e.split(m)
 	card := e.systemMessage(memories, summary, system, ratio)
@@ -77,7 +77,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 
 	inline := e.inlineFrom(kept, m)
 	last := kept[len(kept)-1].ID
-	head := size([]api.Message{card}, ratio, e.cfg.ImageTokens)
+	image := e.costs.image(m.Name)
+	head := size([]api.Message{card}, ratio, image)
 	taken := head
 
 	// The newest exchange is built first and the older ones are added while
@@ -90,7 +91,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		msgs := e.exchange(ctx, a, group, inline, last)
 		// The exchange being answered goes whatever it takes, since leaving it
 		// out would answer nothing.
-		if n := size(msgs, ratio, e.cfg.ImageTokens); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
+		if n := size(msgs, ratio, image); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
 			taken += n
 			built = append(built, msgs)
 			continue
@@ -261,6 +262,22 @@ func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID 
 	// Fewer messages carry images than the setting allows, so every one of
 	// them is sent.
 	return messages[0].ID
+}
+
+// inlineImages is how many pictures of an exchange go to the model as
+// pictures rather than as the line that describes them, which is what they
+// weigh in a prompt.
+func inlineImages(group []store.Message, inline store.MessageID) int {
+	if inline == 0 {
+		return 0
+	}
+	var n int
+	for _, msg := range group {
+		if msg.Role == store.RoleUser && msg.ID >= inline {
+			n += len(msg.Images())
+		}
+	}
+	return n
 }
 
 func (e *Engine) message(ctx context.Context, a *attempt, msg store.Message, inline store.MessageID) api.Message {

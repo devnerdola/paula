@@ -90,7 +90,7 @@ func (e *Engine) compact(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	ratio := e.ratios.ratio(m.Name)
+	ratio := e.costs.ratio(m.Name)
 	room := e.summaryRoom(m, memories, ratio)
 	was := size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0)
 	if room <= 0 || was <= room {
@@ -178,13 +178,19 @@ func (e *Engine) foldStep(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	// Every exchange is measured as this request carries it, which is the text
-	// of what was said. Nothing here loads a picture or asks what one shows.
-	ratio := e.ratios.ratio(m.Name)
-	groups := exchanges(ordered(messages))
+	// Every exchange is measured as a prompt carries it, which is what a fold
+	// is deciding about: the text of what was said, and what a picture sent as
+	// a picture costs. Nothing here loads one or asks what one shows — how many
+	// there are is enough, and an exchange heavy with pictures is one a prompt
+	// cannot carry however short its words are.
+	ratio, image := e.costs.ratio(m.Name), e.costs.image(m.Name)
+	said := ordered(messages)
+	inline := e.inlineFrom(said, m)
+	groups := exchanges(said)
 	sizes := make([]int, len(groups))
 	for i, group := range groups {
-		sizes[i] = size([]api.Message{api.Text(api.RoleUser, e.chunkText(group))}, ratio, 0)
+		sizes[i] = size([]api.Message{api.Text(api.RoleUser, e.chunkText(group))}, ratio, 0) +
+			inlineImages(group, inline)*image
 	}
 	chunk := chunkOf(sizes, share(history, e.cfg.HistoryKeep), history)
 	if chunk == 0 {
@@ -395,7 +401,7 @@ func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *s
 	}
 
 	text, err := e.answer(ctx, a, m, purpose,
-		e.fill(prompt, e.words(b.String(), room, e.ratios.ratio(m.Name))), b.String())
+		e.fill(prompt, e.words(b.String(), room, e.costs.ratio(m.Name))), b.String())
 	if err != nil {
 		return "", err
 	}

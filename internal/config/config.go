@@ -106,7 +106,6 @@ type Engine struct {
 	HistoryKeep float64 `yaml:"history_keep"`
 	ImageTurns  int     `yaml:"image_turns"`
 	ImageMaxPx  int     `yaml:"image_max_px"`
-	ImageTokens int     `yaml:"image_tokens"`
 	LogKeep     int     `yaml:"log_keep"`
 }
 
@@ -120,7 +119,6 @@ func DefaultEngine() Engine {
 		HistoryKeep:   0.5,
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
-		ImageTokens:   1000,
 		LogKeep:       500,
 	}
 }
@@ -350,9 +348,6 @@ func checkEngine(p *problems, e Engine) {
 	}
 	if e.ImageMaxPx < 0 {
 		p.addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)
-	}
-	if e.ImageTokens < 0 {
-		p.addf("engine.image_tokens: %d is below zero", e.ImageTokens)
 	}
 	if e.LogKeep < 0 {
 		p.addf("engine.log_keep: %d is below zero", e.LogKeep)

@@ -11,42 +11,79 @@ import (
 	"nerdola.dev/x/paula/internal/store"
 )
 
-// startRatio is what a character costs before a host has counted one of this
-// model's prompts: a token every 3.5 characters, which is short for most text
-// and so counts a little high.
-const startRatio = 1 / 3.5
+const (
+	// startRatio is what a character costs before a host has counted one of
+	// this model's prompts: a token every 3.5 characters, which is short for
+	// most text and so counts a little high.
+	startRatio = 1 / 3.5
+	// startImage is what a picture costs before one has been counted. A host
+	// bills a picture by how big it is, and each of them by its own reckoning,
+	// so there is no number that is right until one has been paid: this one is
+	// high for the size Paula stores them at, and so counts a little high.
+	startImage = 1000
+)
 
-// ratios is what a character costs, by model. A host counts tokens and Paula
-// counts characters, and what the two come to belongs to the model's
-// tokenizer, so it is read back from the count a request comes home with.
-type ratios struct {
+// costs are what a prompt of a model comes to, by model. A host counts tokens,
+// Paula counts characters and pictures, and what the two come to belongs to
+// the model, so both are read back from the count a request comes home with.
+type costs struct {
 	mu sync.Mutex
-	of map[string]float64
+	of map[string]cost
 }
 
-func (r *ratios) ratio(model string) float64 {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if v, ok := r.of[model]; ok {
+// cost is what one model charges for what a prompt is made of.
+type cost struct {
+	ratio float64
+	image int
+}
+
+func (c *costs) at(model string) cost {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, ok := c.of[model]; ok {
 		return v
 	}
-	return startRatio
+	return cost{ratio: startRatio, image: startImage}
 }
 
-// correct reads the ratio back from a prompt the host counted. One that
-// carried an image says nothing about characters, since the image is in the
-// count and not in them.
-func (r *ratios) correct(model string, tokens int, messages []api.Message) {
+func (c *costs) ratio(model string) float64 { return c.at(model).ratio }
+func (c *costs) image(model string) int     { return c.at(model).image }
+
+// correct reads back what a prompt the host counted came to. One with no
+// picture in it says what a character costs. One with pictures says what a
+// picture costs: what is left of the count once the characters are paid for is
+// what the pictures came to, so the characters are paid for at the rate the
+// prompts before it settled on.
+func (c *costs) correct(model string, tokens int, messages []api.Message) {
 	chars, images := measure(messages)
-	if tokens <= 0 || chars <= 0 || images > 0 {
+	if tokens <= 0 {
 		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.of == nil {
-		r.of = map[string]float64{}
+	was := c.at(model)
+	now := was
+	switch {
+	case images == 0:
+		if chars <= 0 {
+			return
+		}
+		now.ratio = float64(tokens) / float64(chars)
+	default:
+		left := tokens - int(math.Ceil(float64(chars)*was.ratio))
+		if left < images {
+			// What is left of the count once the characters are paid for is
+			// not a token for every picture, so what one costs is not in there
+			// to be read.
+			return
+		}
+		now.image = left / images
 	}
-	r.of[model] = float64(tokens) / float64(chars)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.of == nil {
+		c.of = map[string]cost{}
+	}
+	c.of[model] = now
 }
 
 // measure counts the characters of what is sent as text, and the pictures sent
@@ -110,7 +147,7 @@ func (e *Engine) checkRoom(ctx context.Context) {
 		// Nothing says what the model holds, so nothing is divided.
 		return
 	}
-	card := size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, e.ratios.ratio(m.Name), 0)
+	card := size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, e.costs.ratio(m.Name), 0)
 	if card < system {
 		return
 	}

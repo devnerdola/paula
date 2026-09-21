@@ -326,7 +326,6 @@ configuring for it.
 | `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
 | `image_turns` | `2` | how many recent messages send their picture as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
-| `image_tokens` | `1000` | tokens counted for each picture sent as a picture; set it to what the host bills for one |
 | `log_keep` | `500` | how many replies keep the bodies of their requests |
 
 ### Frontends
@@ -435,9 +434,19 @@ it answered. What she is answering now is sent whatever it takes.
 
 Measuring means counting tokens, which only the host can do exactly. Paula
 starts at a token every 3.5 characters, which counts a little high, and
-corrects it per model from the count an answer comes back with. A prompt that
-carried a picture corrects nothing, since the picture is in the count and not
-in the characters. Every picture sent as a picture counts `image_tokens`.
+corrects it per model from the count an answer comes back with.
+
+A picture is counted the same way. A host bills one by how big it is, and each
+host by its own reckoning — tiles for one, pixels for another — so there is no
+number that is right for all of them and none to set in the file. Paula starts
+at 1000 tokens a picture, which is high for the size she stores them at, and
+reads what one really costs off the same count: a prompt that carried pictures
+says nothing about characters, since the pictures are in the count and not in
+them, but what is left of that count once the characters are paid for is what
+the pictures came to.
+
+Both numbers are the model's own, and both are what a fold weighs an exchange
+by, since what a fold decides is what a prompt can carry.
 
 **The time is told, not written into a message.** Before each message of yours
 stands a system message of its own: `The next message was sent at Saturday, 19

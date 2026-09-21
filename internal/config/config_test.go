@@ -56,7 +56,6 @@ func TestDefaults(t *testing.T) {
 		HistoryKeep:   0.5,
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
-		ImageTokens:   1000,
 		LogKeep:       500,
 	}
 	if c.Engine != want {
@@ -174,7 +173,9 @@ func TestValidationErrors(t *testing.T) {
 		{"runners is not a mapping", "runners: [a, b]\ndefault_models:\n  chat: a\n", "runners: want a mapping"},
 		{"image max px", minimal + "\nengine:\n  image_max_px: -1\n", "engine.image_max_px: -1 is below zero"},
 		{"image turns", minimal + "\nengine:\n  image_turns: -1\n", "engine.image_turns: -1 is below zero"},
-		{"image tokens", minimal + "\nengine:\n  image_tokens: -1\n", "engine.image_tokens: -1 is below zero"},
+		// What a picture costs is read back from what a host counted, not set:
+		// a key for it is one the file does not know.
+		{"image tokens", minimal + "\nengine:\n  image_tokens: 1000\n", "engine.image_tokens: unknown key"},
 		{"the whole context to the system message", minimal + "\nengine:\n  system_ratio: 1\n", "engine.system_ratio: 1 is not above 0 and below 1"},
 		{"no room for memories", minimal + "\nengine:\n  memory_ratio: 0\n", "engine.memory_ratio: 0 is not above 0 and at most 1"},
 		{"a fold that keeps everything", minimal + "\nengine:\n  history_keep: 1.5\n", "engine.history_keep: 1.5 is not above 0 and below 1"},
