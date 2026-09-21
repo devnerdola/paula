@@ -280,6 +280,19 @@ func (s *screen) Send(_ context.Context, m api.Outgoing) error {
 	return nil
 }
 
+// Writing records that she started or stopped writing, as a frontend that
+// shows it is told.
+func (s *screen) Writing(_ context.Context, on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if on {
+		s.write("writing")
+	} else {
+		s.write("stopped writing")
+	}
+	return nil
+}
+
 // write records one thing that happened, with the lock already held.
 func (s *screen) write(line string) { s.lines = append(s.lines, line) }
 
@@ -498,7 +511,9 @@ func TestAStoppedReplySaysSoOnTheEndOfTheStream(t *testing.T) {
 	tk.publish(conversation.Event{Kind: conversation.ReplyStopped, Entry: 1, Message: msg})
 
 	waitFor(t, "the end of the stream", sawLine(base, "end stream"))
-	want := []string{"stream hello yo", "stream  [stopped]", "end stream"}
+	// She is writing from the moment the reply starts until the last of it is
+	// on the screen, which is after the mark that says it was stopped.
+	want := []string{"writing", "stream hello yo", "stream  [stopped]", "end stream", "stopped writing"}
 	if got := base.log(); !slices.Equal(got, want) {
 		t.Errorf("wrote %v, want %v", got, want)
 	}
@@ -690,6 +705,91 @@ func TestModelsReset(t *testing.T) {
 	defer tk.mu.Unlock()
 	if tk.resets != 1 {
 		t.Errorf("resets = %d", tk.resets)
+	}
+}
+
+// A session says when she starts writing and when the last of what she wrote
+// is on the screen. What a frontend makes of that is its own.
+func TestAFrontendIsToldWhenSheIsWriting(t *testing.T) {
+	s := newScreen(api.Features{Channel: "repl"})
+	tk := newTalk()
+	run(t, s, tk)
+
+	msg := &store.Message{ID: store.MessageID(replies.Add(1)), Role: store.RoleAssistant,
+		Parts: []store.Part{{Type: store.PartText, Text: "hey you"}}}
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+	waitFor(t, "the word that she is writing", sawLine(s, "writing"))
+
+	tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 1, Message: msg})
+	waitFor(t, "the word that she has stopped", sawLine(s, "stopped writing"))
+
+	// What she wrote is on the screen before she is said to have stopped.
+	want := []string{"writing", "send hey you", "stopped writing"}
+	if got := s.log(); !slices.Equal(got, want) {
+		t.Errorf("wrote %v, want %v", got, want)
+	}
+
+	// A reply that fails says so too: nothing of it is coming.
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 2})
+	waitFor(t, "the second reply", func() bool { return len(s.log()) > 3 })
+	tk.publish(conversation.Event{Kind: conversation.ReplyFailed, Entry: 2, Text: "the host is away"})
+	waitFor(t, "the word that she has stopped", func() bool {
+		return slices.Contains(s.log()[3:], "stopped writing")
+	})
+}
+
+// A session says what can be picked and what picking it means. A frontend that
+// can offer a choice hands back the one that was picked, without reading it.
+func TestWhatCanBePickedOfTheModelsMenu(t *testing.T) {
+	s := newScreen(api.Features{Channel: "repl"})
+	tk := newTalk()
+	tk.models = conversation.Models{Roles: []conversation.RoleModels{
+		{Role: config.RoleChat, Current: "fast", Default: "fast", Options: []string{"fast", "pro"}},
+		{Role: config.RoleEmbed, Current: "vectors", Default: "vectors", Options: []string{"vectors"}},
+	}}
+	run(t, s, tk)
+
+	s.inputs <- api.Input{Text: "/models"}
+	waitFor(t, "the menu", func() bool { return len(s.messages()) == 1 })
+	menu := s.messages()[0]
+	// It says the same thing in words, for a frontend that offers no choices.
+	if !strings.Contains(menu.Text, "chat: fast") {
+		t.Errorf("menu = %q, want what serves each role", menu.Text)
+	}
+	if len(menu.Choices) != 3 {
+		t.Fatalf("offered %+v, want one per role and one to reset", menu.Choices)
+	}
+
+	// Picking a role offers the models that can serve it, the one that stands
+	// now marked as such.
+	s.inputs <- api.Input{Picked: menu.Choices[0].Picked}
+	waitFor(t, "the role", func() bool { return len(s.messages()) == 2 })
+	role := s.messages()[1]
+	var current int
+	for _, c := range role.Choices {
+		if c.Current {
+			current++
+		}
+	}
+	if len(role.Choices) != 3 || current != 1 {
+		t.Fatalf("offered %+v, want one per model, the one that stands marked, and a way back", role.Choices)
+	}
+
+	// Picking one has the role served by it.
+	s.inputs <- api.Input{Picked: role.Choices[1].Picked}
+	waitFor(t, "the menu again", func() bool { return len(s.messages()) == 3 })
+	tk.mu.Lock()
+	set := append([]string(nil), tk.set...)
+	tk.mu.Unlock()
+	if !slices.Equal(set, []string{"chat=pro"}) {
+		t.Errorf("set %v, want the model that was picked", set)
+	}
+
+	// A choice from something long gone is said to be gone, not acted on.
+	s.inputs <- api.Input{Picked: "nothing:like:this"}
+	waitFor(t, "the answer", func() bool { return len(s.messages()) == 4 })
+	if got := s.messages()[3].Text; !strings.Contains(got, "not something to pick") {
+		t.Errorf("message = %q", got)
 	}
 }
 
@@ -961,6 +1061,25 @@ func TestASessionOutlivesAMessageThatCouldNotBeSent(t *testing.T) {
 		tk.publish(e)
 	}
 	waitFor(t, "the next reply", sawLine(f.screen, "send this one gets through"))
+}
+
+// refusing takes no list of what can be typed, the way a client asked for one
+// too often refuses it.
+type refusing struct{ *screen }
+
+func (r *refusing) ShowCommands(context.Context, []api.Command) error {
+	return errors.New("too many requests")
+}
+
+func TestASessionOutlivesAListingItCouldNotShow(t *testing.T) {
+	r := &refusing{newScreen(api.Features{Channel: "telegram"})}
+	tk := newTalk()
+	run(t, r, tk)
+
+	for _, e := range reply(1, "she answers anyway") {
+		tk.publish(e)
+	}
+	waitFor(t, "the reply", sawLine(r.screen, "send she answers anyway"))
 }
 
 // asking fails to ask for the next line, which is all a sequential frontend

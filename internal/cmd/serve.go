@@ -113,6 +113,7 @@ func serve(g *globals) error {
 		DataDir: cfg.DataDir,
 		Log:     log,
 		Names:   frontend.Names{Character: card.Name, User: card.User.Name},
+		Secrets: g.secrets,
 	}
 	opened := make([]frontendapi.Frontend, 0, len(cfg.Frontends))
 	for _, f := range cfg.Frontends {

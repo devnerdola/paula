@@ -157,6 +157,15 @@ func (s *Session) help(ctx context.Context) error {
 	return s.say(ctx, strings.TrimRight(b.String(), "\n"))
 }
 
+// What a choice of the models menu is answered with. They are the session's
+// own words: a frontend hands back the one that was picked without reading it.
+const (
+	pickRoles = "models"
+	pickReset = "models:reset"
+	pickRole  = "role:"  // and the role
+	pickModel = "model:" // and the role, a colon, and the model
+)
+
 // showModels says which model serves each role.
 func (s *Session) showModels(ctx context.Context) error {
 	models, err := s.conv.Models(ctx)
@@ -167,6 +176,7 @@ func (s *Session) showModels(ctx context.Context) error {
 		return s.say(ctx, "no models are set up")
 	}
 	var b strings.Builder
+	out := api.Outgoing{}
 	for _, r := range models.Roles {
 		fmt.Fprintf(&b, "%s: %s", r.Role, orNone(r.Current))
 		if r.Saved {
@@ -179,8 +189,74 @@ func (s *Session) showModels(ctx context.Context) error {
 		if r.Problem != "" {
 			fmt.Fprintf(&b, "  %s\n", r.Problem)
 		}
+
+		label := fmt.Sprintf("%s: %s", r.Role, orNone(r.Current))
+		if r.Saved {
+			label += ", saved"
+		}
+		out.Choices = append(out.Choices, api.Choice{
+			Label: label, Picked: pickRole + string(r.Role),
+		})
 	}
-	return s.say(ctx, strings.TrimRight(b.String(), "\n"))
+	out.Choices = append(out.Choices, api.Choice{Label: "reset models", Picked: pickReset})
+	out.Text = strings.TrimRight(b.String(), "\n")
+	return s.send(ctx, out)
+}
+
+// showRole offers the models that can serve one role.
+func (s *Session) showRole(ctx context.Context, role string) error {
+	models, err := s.conv.Models(ctx)
+	if err != nil {
+		return s.failed(ctx, err)
+	}
+	for _, r := range models.Roles {
+		if string(r.Role) != role {
+			continue
+		}
+		if len(r.Options) == 0 {
+			return s.say(ctx, fmt.Sprintf("nothing serves %s", role))
+		}
+		out := api.Outgoing{Text: fmt.Sprintf("what serves %s", role)}
+		for _, name := range r.Options {
+			out.Choices = append(out.Choices, api.Choice{
+				Label:   name,
+				Picked:  pickModel + role + ":" + name,
+				Current: name == r.Current,
+			})
+		}
+		out.Choices = append(out.Choices, api.Choice{Label: "back", Picked: pickRoles})
+		return s.send(ctx, out)
+	}
+	return s.say(ctx, fmt.Sprintf("there is no %s to set", role))
+}
+
+// picked answers a choice that was picked. The words are the session's own, so
+// one it does not know came from a frontend showing something long gone.
+func (s *Session) picked(ctx context.Context, what string) error {
+	switch {
+	case what == pickRoles:
+		return s.showModels(ctx)
+	case what == pickReset:
+		if err := s.conv.ResetModels(ctx); err != nil {
+			return s.failed(ctx, err)
+		}
+		if err := s.say(ctx, "models reset"); err != nil {
+			return err
+		}
+		return s.showModels(ctx)
+	case strings.HasPrefix(what, pickRole):
+		return s.showRole(ctx, strings.TrimPrefix(what, pickRole))
+	case strings.HasPrefix(what, pickModel):
+		role, name, ok := strings.Cut(strings.TrimPrefix(what, pickModel), ":")
+		if !ok {
+			break
+		}
+		if err := s.conv.SetModel(ctx, config.Role(role), name); err != nil {
+			return s.failed(ctx, err)
+		}
+		return s.showModels(ctx)
+	}
+	return s.say(ctx, "that is not something to pick any more")
 }
 
 func orNone(s string) string {

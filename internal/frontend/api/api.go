@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
+	"nerdola.dev/x/paula/internal/logs"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -21,6 +23,21 @@ type Outgoing struct {
 	Text string
 	// Hers says she wrote it, rather than the frontend talking.
 	Hers bool
+	// Choices are what can be picked from what this says. A frontend that can
+	// offer a choice offers them however it does that; one that cannot shows
+	// the text, which says the same thing in words.
+	Choices []Choice
+}
+
+// Choice is one thing that can be picked.
+type Choice struct {
+	Label string
+	// Picked is what comes back when it is picked. It is the session's own
+	// word for the choice and means nothing to a frontend, which hands it back
+	// as it was given.
+	Picked string
+	// Current says this is what stands now.
+	Current bool
 }
 
 // Input is one thing that arrived from a frontend.
@@ -31,6 +48,9 @@ type Input struct {
 	// Stop says the reply was asked to stop by a key of its own, rather than by
 	// typing the command. Nothing else of the input is read then.
 	Stop bool
+	// Picked is the Picked of a choice that was picked. Nothing else of the
+	// input is read then.
+	Picked string
 }
 
 // Command is one thing that can be typed at a frontend.
@@ -52,6 +72,46 @@ type Features struct {
 	Sequential bool
 }
 
+// Bubbles is what a text reads as when it is shown a message at a time: the
+// paragraphs she wrote, since a blank line is where one text ends and the next
+// begins, each cut to what one message holds.
+//
+// fits answers how much of a text goes in one message, as a number of bytes,
+// counting in whatever the frontend counts in and cutting where it would
+// rather cut. A frontend that holds messages to no length passes nil. Whether
+// to show a reply this way at all, and how to pace it, is the frontend's own.
+func Bubbles(text string, fits func(string) int) []string {
+	var out []string
+	for para := range strings.SplitSeq(text, "\n\n") {
+		para = strings.TrimSpace(para)
+		if para == "" {
+			continue
+		}
+		if fits == nil {
+			out = append(out, para)
+			continue
+		}
+		for {
+			at := fits(para)
+			if at <= 0 || at >= len(para) {
+				out = append(out, para)
+				break
+			}
+			if part := strings.TrimRight(para[:at], " \n"); part != "" {
+				out = append(out, part)
+			}
+			para = strings.TrimLeft(para[at:], " \n")
+			if para == "" {
+				break
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // Adapter is one way of reaching Paula.
 type Adapter interface {
 	Features() Features
@@ -70,6 +130,18 @@ type (
 	// Prompter asks for the next line.
 	Prompter interface {
 		Prompt(ctx context.Context) error
+	}
+	// Writer is told when she starts writing and when she has stopped. What
+	// that looks like is the frontend's: a status that has to be said again
+	// every few seconds, a line on a page, or nothing at all.
+	Writer interface {
+		Writing(ctx context.Context, on bool) error
+	}
+	// CommandShower is told everything that can be typed here, its own
+	// commands among them, as a session opens. A frontend that has somewhere
+	// to list them lists them there.
+	CommandShower interface {
+		ShowCommands(ctx context.Context, cs []Command) error
 	}
 	// OtherChannels shows what was said on another frontend.
 	OtherChannels interface {
@@ -92,6 +164,10 @@ type Host struct {
 	Log     *slog.Logger
 	// Names is who a frontend says a message is from.
 	Names Names
+	// Secrets is where a frontend registers the token it was given, so nothing
+	// written by the run it belongs to carries it. A token that rides in the
+	// URL of every request is in the error of every request that fails.
+	Secrets *logs.Secrets
 }
 
 // Names are the two in the conversation, as the character card names them.

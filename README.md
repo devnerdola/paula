@@ -330,15 +330,49 @@ configuring for it.
 
 ### Frontends
 
-`repl` is the only one. It listens on a Unix socket: `paula.sock` inside
-`data_dir`, or the `socket` you name. That path is relative to `data_dir`, not
-to the configuration file.
+A frontend is a way of reaching her. List as many as you like: they all show
+the same conversation, and each shows what you said on the others.
+
+**`repl`** listens on a Unix socket: `paula.sock` inside `data_dir`, or the
+`socket` you name. That path is relative to `data_dir`, not to the
+configuration file.
+
+**`telegram`** is a bot you text. Talk to `@BotFather` to make one, and tell
+Paula the token and who she is talking to:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `token_env` | `TELEGRAM_TOKEN` | the environment variable with the bot token |
+| `user_id` | — | required: the number of the one person served |
+| `stream_edits` | `false` | show a reply as it is written, by writing it over the message it started as |
 
 ```yaml
 frontends:
   repl:
     socket: /tmp/paula.sock
+  telegram:
+    user_id: 123456789
 ```
+
+A bot is reachable by anyone who finds it, and this conversation is with one
+person: a message from anyone else is logged and left alone. Send her text,
+photos, stickers or an image as a file; a sticker is read as its emoji, with
+the picture.
+
+What she writes as separate paragraphs arrives as separate texts, each sent as
+she finishes writing it, with the typing status up in between — she texts the
+way a person does. A text longer than Telegram takes carries on in another.
+`/models` and the rest are offered by the client as you type them, and the
+models menu is buttons to tap.
+
+`stream_edits` lets you watch her write: a text appears as soon as she has
+started it and is written over as it fills, about once a second, instead of
+arriving finished. It changes nothing about what the texts are — the same
+paragraphs land as the same messages either way.
+
+Your `user_id` is the number Telegram knows you by, which `@userinfobot` will
+tell you. The run keeps the last update it answered in `telegram.offset` beside
+the database, so a run that follows does not answer it again.
 
 ## The character card
 

@@ -8,6 +8,7 @@ import (
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/frontend/api"
 	"nerdola.dev/x/paula/internal/frontend/repl"
+	"nerdola.dev/x/paula/internal/frontend/telegram"
 )
 
 // What the program around a frontend gives it, which is what Open takes.
@@ -24,6 +25,9 @@ type Factory func(s config.Section, h Host) (api.Frontend, error)
 var kinds = map[string]Factory{
 	repl.Kind: func(s config.Section, h Host) (api.Frontend, error) {
 		return repl.Open(s, h)
+	},
+	telegram.Kind: func(s config.Section, h Host) (api.Frontend, error) {
+		return telegram.Open(s, h)
 	},
 }
 

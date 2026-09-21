@@ -235,6 +235,14 @@ func (s *Session) goesOn(ctx context.Context, err error) bool {
 // shows none of it still starts where the conversation stands, since catching
 // up later is about what it missed, not about the whole conversation.
 func (s *Session) open(ctx context.Context) error {
+	// What can be typed here is the same wherever it is typed, so a frontend
+	// with somewhere to list it is told once, as it opens. A list it would not
+	// take leaves every command working, so it is not what a session ends on.
+	if lister, ok := s.adapter.(api.CommandShower); ok {
+		if err := lister.ShowCommands(ctx, s.commands()); err != nil && !s.goesOn(ctx, err) {
+			return err
+		}
+	}
 	shower, ok := s.adapter.(api.HistoryShower)
 	if !ok || shower.History() <= 0 {
 		return s.prompt(ctx)
@@ -264,6 +272,13 @@ func (s *Session) prompt(ctx context.Context) error {
 func (s *Session) input(ctx context.Context, in api.Input) error {
 	if in.Stop {
 		if err := s.stop(ctx); err != nil {
+			return err
+		}
+		return s.ready(ctx)
+	}
+
+	if in.Picked != "" {
+		if err := s.picked(ctx, in.Picked); err != nil {
 			return err
 		}
 		return s.ready(ctx)
@@ -367,12 +382,22 @@ func (s *Session) userMessage(ctx context.Context, e conversation.Event) error {
 	return nil
 }
 
-func (s *Session) started(_ context.Context, e conversation.Event) error {
+func (s *Session) started(ctx context.Context, e conversation.Event) error {
 	if s.done(e.Entry) {
 		return nil
 	}
 	s.writing.begin(e.Entry)
-	return nil
+	return s.writes(ctx, true)
+}
+
+// writes tells the frontend whether she is writing. What it makes of that is
+// its own: the session says when, not how.
+func (s *Session) writes(ctx context.Context, on bool) error {
+	writer, ok := s.adapter.(api.Writer)
+	if !ok {
+		return nil
+	}
+	return writer.Writing(ctx, on)
 }
 
 func (s *Session) streaming(ctx context.Context, e conversation.Event) error {
@@ -396,8 +421,18 @@ func (s *Session) streaming(ctx context.Context, e conversation.Event) error {
 	return streamer.Stream(ctx, added)
 }
 
-// ended shows the reply as it was stored.
+// ended shows the reply as it was stored. She has stopped writing once the
+// last of it is on the screen, not before: what is being shown is still
+// arriving until then.
 func (s *Session) ended(ctx context.Context, e conversation.Event, suffix string) error {
+	err := s.showEnded(ctx, e, suffix)
+	if stopped := s.writes(ctx, false); err == nil {
+		err = stopped
+	}
+	return err
+}
+
+func (s *Session) showEnded(ctx context.Context, e conversation.Event, suffix string) error {
 	defer s.writing.clear()
 	// A frontend that wrote this reply out has it on the screen already, so a
 	// mark goes on the end of it rather than into a message of its own.
@@ -425,7 +460,7 @@ func (s *Session) ended(ctx context.Context, e conversation.Event, suffix string
 	if text == "" {
 		return nil
 	}
-	return s.adapter.Send(ctx, api.Outgoing{Text: text, Hers: true})
+	return s.send(ctx, api.Outgoing{Text: text, Hers: true})
 }
 
 // dropped clears a reply that left nothing behind.
@@ -434,7 +469,9 @@ func (s *Session) dropped(ctx context.Context) error {
 		return err
 	}
 	s.writing.clear()
-	return nil
+	// Nothing of that reply is coming, so she is no longer writing it. A reply
+	// that a new message restarted says so again as the next one starts.
+	return s.writes(ctx, false)
 }
 
 // already reports whether a message is on the screen. One read back while
@@ -485,7 +522,7 @@ func (s *Session) showMessage(ctx context.Context, m store.Message) error {
 		return nil
 	}
 	if text := strings.TrimSpace(m.Text()); text != "" {
-		if err := s.adapter.Send(ctx, api.Outgoing{Text: text, Hers: true}); err != nil {
+		if err := s.send(ctx, api.Outgoing{Text: text, Hers: true}); err != nil {
 			return err
 		}
 	}
@@ -493,5 +530,12 @@ func (s *Session) showMessage(ctx context.Context, m store.Message) error {
 }
 
 func (s *Session) say(ctx context.Context, text string) error {
-	return s.adapter.Send(ctx, api.Outgoing{Text: text})
+	return s.send(ctx, api.Outgoing{Text: text})
+}
+
+// send hands one thing over to be shown. What it looks like when it gets there
+// — one message or several, and how long each of them seems to take — is the
+// frontend's own business.
+func (s *Session) send(ctx context.Context, m api.Outgoing) error {
+	return s.adapter.Send(ctx, m)
 }
