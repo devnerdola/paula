@@ -374,6 +374,39 @@ Your `user_id` is the number Telegram knows you by, which `@userinfobot` will
 tell you. The run keeps the last update it answered in `telegram.offset` beside
 the database, so a run that follows does not answer it again.
 
+**`web`** is a page you open in a browser. Point it at the address, sign in
+with the token, and the conversation is there: her texts as she writes them,
+pictures either way, the models menu as buttons, and the rest of the commands
+as they are typed. The page is served out of the binary, so there is nothing
+to install and nothing is fetched from anywhere.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `listen` | `:8484` | the address to listen on |
+| `token_env` | `PAULA_WEB_TOKEN` | the environment variable with the token |
+
+```yaml
+frontends:
+  web:
+    listen: 127.0.0.1:8484
+```
+
+The token is asked for as an ordinary sign-in and goes in either box, so a
+browser remembers it. Make it long: at least eight characters, and without a
+colon or a space. Anyone who reaches the address and has the token reads the
+whole conversation, so listen on `127.0.0.1` unless something in front of it
+is doing the letting in.
+
+Every browser that opens the page gets a session of its own, and they show each
+other what is typed. A message she writes arrives text by text, as it does
+everywhere else, and the one she is in the middle of fills as she writes it.
+Scrolling up reads further back.
+
+On a page the browser calls secure — `https`, or `localhost` — a bell asks
+whether to notify you. While the page is open but not being looked at, the
+first text of a reply to something you sent from it comes as a notification,
+and clicking it brings the page back.
+
 ## The character card
 
 The card is the whole character. Every field is optional except `name` and

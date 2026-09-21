@@ -3,6 +3,7 @@ package frontend
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"runtime"
 	"slices"
@@ -20,21 +21,22 @@ import (
 
 // talk is a conversation a test drives by hand.
 type talk struct {
-	mu       sync.Mutex
-	events   []conversation.Event
-	seq      conversation.Seq
-	changed  chan struct{}
-	posted   []conversation.NewMessage
-	history  []store.Message
-	models   conversation.Models
-	set      []string
-	resets   int
-	pending  int
-	stopped  bool
-	stops    int
-	stopErr  error
-	setErr   error
-	behindAt conversation.Seq
+	mu         sync.Mutex
+	events     []conversation.Event
+	seq        conversation.Seq
+	changed    chan struct{}
+	posted     []conversation.NewMessage
+	history    []store.Message
+	models     conversation.Models
+	set        []string
+	resets     int
+	pending    int
+	stopped    bool
+	stops      int
+	stopErr    error
+	setErr     error
+	historyErr error
+	behindAt   conversation.Seq
 
 	summary   *store.Summary
 	memories  []store.Memory
@@ -179,13 +181,24 @@ func (t *talk) Events(ctx context.Context, after conversation.Seq) iter.Seq2[con
 	}
 }
 
-func (t *talk) History(_ context.Context, _ store.MessageID, limit int) ([]store.Message, error) {
+// History answers with the newest messages older than one, as the
+// conversation does, and with the newest of all when before is zero.
+func (t *talk) History(_ context.Context, before store.MessageID, limit int) ([]store.Message, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if limit > 0 && len(t.history) > limit {
-		return t.history[len(t.history)-limit:], nil
+	if t.historyErr != nil {
+		return nil, t.historyErr
 	}
-	return t.history, nil
+	var out []store.Message
+	for _, m := range t.history {
+		if before == 0 || m.ID < before {
+			out = append(out, m)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
 }
 
 func (t *talk) Since(_ context.Context, after store.MessageID) ([]store.Message, error) {
@@ -345,6 +358,23 @@ func (s *showing) ShowHistory(_ context.Context, ms []store.Message) error {
 	defer s.mu.Unlock()
 	for _, m := range ms {
 		s.write("history " + m.Role + ": " + m.Text())
+	}
+	return nil
+}
+
+// scrolling shows what was said before what is on the screen, the way a page
+// scrolled back does.
+type scrolling struct{ *showing }
+
+func (s *scrolling) ShowOlder(_ context.Context, ms []store.Message) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(ms) == 0 {
+		s.write("older: none")
+		return nil
+	}
+	for _, m := range ms {
+		s.write("older " + m.Role + ": " + m.Text())
 	}
 	return nil
 }
@@ -606,6 +636,57 @@ func TestWhatWasSaidBefore(t *testing.T) {
 
 	waitFor(t, "the history", sawLine(base, "history assistant: hello"))
 	waitFor(t, "the prompt", sawLine(base, "prompt"))
+}
+
+// A frontend that shows the conversation as one long page asks for what came
+// before what it holds, and is given a screenful of it: what it opened on is
+// what it is given again.
+func TestWhatWasSaidBeforeWhatIsOnTheScreen(t *testing.T) {
+	base := newScreen(api.Features{Channel: "web"})
+	base.history = 2
+	s := &scrolling{&showing{base}}
+
+	tk := newTalk()
+	for id := 1; id <= 4; id++ {
+		tk.history = append(tk.history, store.Message{
+			ID: store.MessageID(id), Role: store.RoleUser, Channel: "web",
+			Parts: []store.Part{{Type: store.PartText, Text: fmt.Sprintf("the %dth thing", id)}},
+		})
+	}
+	run(t, s, tk)
+	waitFor(t, "what the screen opened on", sawLine(base, "history user: the 4th thing"))
+
+	s.inputs <- api.Input{Older: 3}
+	waitFor(t, "what came before it", sawLine(base, "older user: the 2th thing"))
+	if slices.Contains(base.log(), "older user: the 4th thing") {
+		t.Error("what was on the screen already was shown again")
+	}
+}
+
+// An ask is answered whatever came of it. A frontend that waits for what it
+// asked for, and is told what went wrong instead, waits for an answer that is
+// never coming.
+func TestWhatCameBeforeIsAnsweredEvenWhenItCannotBeRead(t *testing.T) {
+	base := newScreen(api.Features{Channel: "web"})
+	base.history = 2
+	s := &scrolling{&showing{base}}
+
+	tk := newTalk()
+	tk.history = []store.Message{
+		{ID: 1, Role: store.RoleUser, Channel: "web", Parts: []store.Part{{Type: store.PartText, Text: "hey"}}},
+	}
+	run(t, s, tk)
+
+	// The conversation goes unreadable once the screen is open on it, since a
+	// screen that could not open is a session that ended.
+	waitFor(t, "what the screen opened on", sawLine(base, "history user: hey"))
+	tk.mu.Lock()
+	tk.historyErr = errors.New("the conversation could not be read")
+	tk.mu.Unlock()
+
+	s.inputs <- api.Input{Older: 3}
+	waitFor(t, "what went wrong", sawLine(base, "send error: the conversation could not be read"))
+	waitFor(t, "the ask being answered", sawLine(base, "older: none"))
 }
 
 func TestWhatIsTypedIsPosted(t *testing.T) {

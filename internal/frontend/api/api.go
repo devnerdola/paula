@@ -51,6 +51,9 @@ type Input struct {
 	// Picked is the Picked of a choice that was picked. Nothing else of the
 	// input is read then.
 	Picked string
+	// Older asks for what was said before a message already on the screen,
+	// which is answered by showing it. Nothing else of the input is read then.
+	Older store.MessageID
 }
 
 // Command is one thing that can be typed at a frontend.
@@ -153,6 +156,14 @@ type (
 	HistoryShower interface {
 		History() int
 		ShowHistory(ctx context.Context, ms []store.Message) error
+	}
+	// Backlog shows what was said before what is on the screen already, which
+	// a frontend asks for with Input.Older as it is scrolled back. It is given
+	// as many messages as it asks for with History, since a screenful is a
+	// screenful whether it is the first or the tenth.
+	Backlog interface {
+		HistoryShower
+		ShowOlder(ctx context.Context, ms []store.Message) error
 	}
 )
 

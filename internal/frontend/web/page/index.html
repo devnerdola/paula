@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Paula</title>
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="paula.css">
+</head>
+<body>
+<header>
+  <h1 id="who">Paula</h1>
+  <button type="button" id="bell" hidden>notify me</button>
+</header>
+
+<main id="chat" aria-live="polite"></main>
+
+<button type="button" id="pill" hidden>new messages</button>
+
+<footer>
+  <div id="writing" hidden><span></span><span></span><span></span></div>
+  <div id="quick"></div>
+  <div id="pictures"></div>
+  <form id="composer">
+    <textarea id="text" rows="1" placeholder="say something" autofocus></textarea>
+    <input type="file" id="pick" accept="image/*" multiple hidden>
+    <button type="button" id="clip" title="a picture">+</button>
+    <button type="submit" id="send">send</button>
+    <button type="button" id="stop" hidden>stop</button>
+  </form>
+</footer>
+
+<script src="paula.js"></script>
+</body>
+</html>

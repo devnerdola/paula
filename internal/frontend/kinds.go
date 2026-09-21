@@ -9,6 +9,7 @@ import (
 	"nerdola.dev/x/paula/internal/frontend/api"
 	"nerdola.dev/x/paula/internal/frontend/repl"
 	"nerdola.dev/x/paula/internal/frontend/telegram"
+	"nerdola.dev/x/paula/internal/frontend/web"
 )
 
 // What the program around a frontend gives it, which is what Open takes.
@@ -28,6 +29,9 @@ var kinds = map[string]Factory{
 	},
 	telegram.Kind: func(s config.Section, h Host) (api.Frontend, error) {
 		return telegram.Open(s, h)
+	},
+	web.Kind: func(s config.Section, h Host) (api.Frontend, error) {
+		return web.Open(s, h)
 	},
 }
 

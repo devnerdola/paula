@@ -45,3 +45,8 @@ frontends:
   # Telegram knows you by. Leave it out to reach her from the terminal alone.
   # telegram:
   #   user_id: 123456789
+
+  # A browser to reach her from, with the token in PAULA_WEB_TOKEN. Anyone who
+  # reaches the address and has the token reads the conversation.
+  # web:
+  #   listen: 127.0.0.1:8484

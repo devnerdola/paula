@@ -260,6 +260,25 @@ func (s *Session) open(ctx context.Context) error {
 	return s.prompt(ctx)
 }
 
+// older shows what was said before a message that is on the screen already.
+// Where the session stands is untouched by it: these are messages it has been
+// past all along, and what it is waiting for is what comes next.
+func (s *Session) older(ctx context.Context, before store.MessageID) error {
+	shower, ok := s.adapter.(api.Backlog)
+	if !ok {
+		return nil
+	}
+	// An ask is answered whatever came of it: a frontend that is told nothing
+	// waits for an answer that is not coming.
+	messages, err := s.conv.History(ctx, before, shower.History())
+	if err != nil {
+		if err := s.failed(ctx, err); err != nil {
+			return err
+		}
+	}
+	return shower.ShowOlder(ctx, messages)
+}
+
 // prompt asks a frontend that shows one for the next line. One that shows none
 // is simply not asked.
 func (s *Session) prompt(ctx context.Context) error {
@@ -279,6 +298,13 @@ func (s *Session) input(ctx context.Context, in api.Input) error {
 
 	if in.Picked != "" {
 		if err := s.picked(ctx, in.Picked); err != nil {
+			return err
+		}
+		return s.ready(ctx)
+	}
+
+	if in.Older > 0 {
+		if err := s.older(ctx, in.Older); err != nil {
 			return err
 		}
 		return s.ready(ctx)
