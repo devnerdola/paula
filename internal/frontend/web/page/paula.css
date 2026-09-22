@@ -83,6 +83,9 @@ header h1 {
 }
 
 .bubble {
+  /* A text is as wide as what it says. The column would otherwise stretch
+     every one of them to the width it allows, however little is in them. */
+  align-self: flex-start;
   max-width: min(42rem, 85%);
   padding: .5rem .75rem;
   border-radius: 1.1rem;
@@ -279,6 +282,9 @@ header, footer, #chat {
 #text {
   flex: 1;
   resize: none;
+  /* It grows with what is typed, so it scrolls only once it has grown as far
+     as it goes, which is what typing there turns back on. */
+  overflow-y: hidden;
   max-height: 9rem;
   padding: .5rem .7rem;
   border: 1px solid var(--line);

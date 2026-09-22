@@ -374,9 +374,18 @@ typed.addEventListener('keydown', e => {
 
 typed.addEventListener('input', grows)
 
+// grows makes the box as tall as what is typed in it, up to what the page
+// gives it. What it holds is measured without the border around it, and the
+// box is measured with it, so the border is added back: a box that is short of
+// its own content by that much scrolls while it looks empty.
 function grows() {
   typed.style.height = 'auto'
-  typed.style.height = Math.min(typed.scrollHeight, 144) + 'px'
+  const style = getComputedStyle(typed)
+  const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth)
+  const most = parseFloat(style.maxHeight)
+  const tall = typed.scrollHeight + border
+  typed.style.height = Math.min(tall, most) + 'px'
+  typed.style.overflowY = tall > most ? 'auto' : 'hidden'
 }
 
 stop.addEventListener('click', () => sends('api/stop', null, null))
@@ -447,4 +456,5 @@ bell.addEventListener('click', async () => {
   }
 })
 
+grows()
 stream()
