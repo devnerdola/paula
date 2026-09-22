@@ -115,6 +115,50 @@ func Bubbles(text string, fits func(string) int) []string {
 	return out
 }
 
+// Written is a reply as it arrives, kept until each text of it is whole. A
+// blank line is where one ends and the next begins, which is the same rule
+// Bubbles reads a finished text by: a frontend that shows a text at a time
+// adds what arrives and sends what comes back.
+type Written struct {
+	// wrote is what has arrived since the last text she finished, as she wrote
+	// it: what is shown is trimmed, and the rest joins onto what is kept.
+	wrote string
+}
+
+// Add takes what has arrived and answers with the texts she has finished,
+// trimmed of the space around them. What she is in the middle of stays.
+func (w *Written) Add(text string) []string {
+	w.wrote += text
+	var done []string
+	for {
+		at := strings.Index(w.wrote, "\n\n")
+		if at < 0 {
+			return done
+		}
+		if text := strings.TrimSpace(w.wrote[:at]); text != "" {
+			done = append(done, text)
+		}
+		w.wrote = w.wrote[at+2:]
+	}
+}
+
+// Rest is the text she is in the middle of, as she wrote it: what is shown of
+// it is trimmed by whoever shows it, and what is kept is not, since what she
+// writes next joins onto it.
+func (w *Written) Rest() string { return w.wrote }
+
+// Keep is what is left of the text she is in the middle of, for a frontend
+// that has put part of it in a message it has closed.
+func (w *Written) Keep(text string) { w.wrote = text }
+
+// End is the last of what she wrote, which is whatever she was in the middle
+// of when she finished, and leaves nothing behind.
+func (w *Written) End() string {
+	text := w.wrote
+	w.wrote = ""
+	return text
+}
+
 // Adapter is one way of reaching Paula.
 type Adapter interface {
 	Features() Features
@@ -161,9 +205,13 @@ type (
 	// a frontend asks for with Input.Older as it is scrolled back. It is given
 	// as many messages as it asks for with History, since a screenful is a
 	// screenful whether it is the first or the tenth.
+	//
+	// before is the ask it answers. A frontend that gave up on one and asked
+	// again reads that to tell the answers apart, since the one it gave up on
+	// is still coming.
 	Backlog interface {
 		HistoryShower
-		ShowOlder(ctx context.Context, ms []store.Message) error
+		ShowOlder(ctx context.Context, before store.MessageID, ms []store.Message) error
 	}
 )
 

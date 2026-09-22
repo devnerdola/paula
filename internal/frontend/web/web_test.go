@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,8 +74,12 @@ func open(t *testing.T, dataDir, section string) (*Frontend, *strings.Builder, e
 type sessions struct {
 	// history is what a page opens on, and answer what the session does with
 	// something that was typed.
-	history  []store.Message
-	answer   func(context.Context, *adapter, api.Input) error
+	history []store.Message
+	answer  func(context.Context, *adapter, api.Input) error
+	// before runs where a session starts, which is before it takes anything of
+	// the page: it is where a test puts something that happens while a browser
+	// is opening the stream.
+	before   func()
 	adapters chan *adapter
 	inputs   chan api.Input
 }
@@ -99,6 +104,9 @@ func serving(t *testing.T, f *Frontend) (*httptest.Server, *sessions) {
 }
 
 func (s *sessions) run(ctx context.Context, a api.Adapter) error {
+	if s.before != nil {
+		s.before()
+	}
 	in, err := a.Start(ctx)
 	if err != nil {
 		return err
@@ -584,7 +592,7 @@ func TestAReplyFillsABubbleAsSheWritesIt(t *testing.T) {
 func TestAPageScrolledBackAsksForWhatCameBefore(t *testing.T) {
 	srv, s := serving(t, running(t, t.TempDir()))
 	s.answer = func(ctx context.Context, a *adapter, in api.Input) error {
-		return a.ShowOlder(ctx, []store.Message{{
+		return a.ShowOlder(ctx, in.Older, []store.Message{{
 			ID: 1, Role: store.RoleUser,
 			Parts: []store.Part{{Type: store.PartText, Text: "the first thing"}},
 		}})
@@ -623,7 +631,7 @@ func TestAnAskThatWasGivenUpOnIsNotTheNextAnswer(t *testing.T) {
 		case <-ctx.Done():
 			return nil
 		}
-		return a.ShowOlder(ctx, []store.Message{{
+		return a.ShowOlder(ctx, in.Older, []store.Message{{
 			ID: store.MessageID(in.Older) - 1, Role: store.RoleUser,
 			Parts: []store.Part{{Type: store.PartText, Text: fmt.Sprintf("what came before %d", in.Older)}},
 		}})
@@ -644,6 +652,9 @@ func TestAnAskThatWasGivenUpOnIsNotTheNextAnswer(t *testing.T) {
 		t.Fatal("the browser waited for an answer it was meant to give up on")
 	}
 
+	// The answer to the ask that was given up on lands while the one that
+	// follows is already waiting, so what comes back has to say which ask it
+	// belongs to rather than being whatever arrives first.
 	resp := page.gets(srv, "/api/history?before=20")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("asking again answered %s", resp.Status)
@@ -656,6 +667,27 @@ func TestAnAskThatWasGivenUpOnIsNotTheNextAnswer(t *testing.T) {
 	}
 	if len(out.Messages) != 1 || out.Messages[0].Text != "what came before 20" {
 		t.Errorf("the second ask was answered with %+v", out.Messages)
+	}
+}
+
+// A page whose session has ended is answered at once rather than held: the
+// server sets no timeouts, so a request waiting to hand something over would
+// wait for as long as the browser held the connection.
+func TestSomethingTypedOnAPageWhoseSessionEndedIsRefused(t *testing.T) {
+	a := &adapter{f: &Frontend{}, inputs: make(chan api.Input), done: make(chan struct{})}
+	// Nothing reads what is typed on this page any more, which is what the end
+	// of a session leaves behind.
+	a.left()
+
+	got := make(chan error, 1)
+	go func() { got <- a.typed(t.Context(), api.Input{Text: "anyone there"}) }()
+	select {
+	case err := <-got:
+		if err != api.ErrGone {
+			t.Errorf("what was typed said %v, want the page said to be gone", err)
+		}
+	case <-time.After(wait):
+		t.Error("what was typed is waiting for a session that has ended")
 	}
 }
 
@@ -700,6 +732,39 @@ func TestABrowserThatMissedNothingIsNotShownItAgain(t *testing.T) {
 	// conversation stands, since what it missed is not on the screen.
 	behind := opensAgain(t, srv, page.last-1)
 	if got := behind.synced(); got.Caught || len(got.Messages) != 1 {
+		t.Errorf("a browser that missed something was shown %+v", got)
+	}
+}
+
+// Whether a browser missed anything is read where its session starts, not
+// where the stream opens: what happened in between goes to the pages that were
+// already open, and this one is following the conversation only from where its
+// session picked it up.
+func TestWhatHappenedWhileAPageWasOpeningIsNotMissed(t *testing.T) {
+	srv, s := serving(t, running(t, t.TempDir()))
+	s.history = []store.Message{{
+		ID: 1, Role: store.RoleUser, Channel: "web",
+		Parts: []store.Part{{Type: store.PartText, Text: "hey"}},
+	}}
+	first := opens(t, srv)
+	first.synced()
+	open := s.opened(t)
+
+	// Something is said to the page already open while the browser opening the
+	// stream is between the connection and its session.
+	var once sync.Once
+	s.before = func() {
+		once.Do(func() {
+			if err := open.Send(t.Context(), api.Outgoing{Text: "something happened", Hers: true}); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+
+	// It says it read everything there was when it opened the stream, which it
+	// had at the time.
+	again := opensAgain(t, srv, first.last)
+	if got := again.synced(); got.Caught || len(got.Messages) != 1 {
 		t.Errorf("a browser that missed something was shown %+v", got)
 	}
 }

@@ -251,8 +251,12 @@ func (s *Session) open(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// What was read back is on the screen, so the events carrying it are not
+	// shown a second time. A message stored between where the session starts
+	// and this read is one of them.
 	for _, m := range messages {
 		s.entries = max(s.entries, m.EntryID)
+		s.shown = max(s.shown, m.ID)
 	}
 	if err := shower.ShowHistory(ctx, messages); err != nil {
 		return err
@@ -276,7 +280,7 @@ func (s *Session) older(ctx context.Context, before store.MessageID) error {
 			return err
 		}
 	}
-	return shower.ShowOlder(ctx, messages)
+	return shower.ShowOlder(ctx, before, messages)
 }
 
 // prompt asks a frontend that shows one for the next line. One that shows none

@@ -601,6 +601,30 @@ func TestAReplyShownAsItIsWritten(t *testing.T) {
 	}
 }
 
+// The last of a text is often what the message already says, since it was
+// written over as she wrote it. Telegram refuses an edit that changes nothing,
+// so what the message holds is kept here and the edit is not sent at all.
+func TestAMessageIsNotWrittenOverWithWhatItAlreadySays(t *testing.T) {
+	b := newBot(t)
+	f, _ := open(t, b, t.TempDir(), "user_id: 7\nstream_edits: true")
+	s := &editing{adapter: &adapter{f: f, inputs: make(chan api.Input)}}
+	ctx := context.Background()
+
+	if err := s.Stream(ctx, "hey you"); err != nil {
+		t.Fatal(err)
+	}
+	// She has finished, and the last of it is what the message was filled with.
+	if err := s.EndStream(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if edits := b.written(); len(edits) != 0 {
+		t.Errorf("wrote %+v, want nothing written over what it already said", edits)
+	}
+	if said := b.said(); len(said) != 1 || said[0] != "hey you" {
+		t.Errorf("sent %q, want the one message", said)
+	}
+}
+
 // Each text she writes is a message of its own whether or not the chat is
 // shown her writing it. What being shown it adds is the message filling as she
 // writes; what she broke the reply into is the same either way.

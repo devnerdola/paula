@@ -31,24 +31,28 @@ type adapter struct {
 	// it, or the request it rode on is over.
 	gone bool
 
-	// caught says the browser opened this stream holding everything that had
-	// happened, so it is not shown the conversation again.
+	// read is the last event the browser says it read when it opens the stream
+	// again, and caught that it read everything there was: one that did is not
+	// shown the conversation over again.
+	read   int64
 	caught bool
 	// saying is whether a reply is arriving on this page, which the session
 	// says and the end of the page takes back.
 	saying atomic.Bool
+	// done is closed once the session on this page has ended, so nothing waits
+	// to hand it something it will never take.
+	done chan struct{}
 	// older is where what a page asked for is handed to the request that asked
-	// for it, and asking holds it to one ask at a time: the answer that comes
-	// back is the answer to what was asked last.
-	older  chan []said
+	// for it, and asking holds it to one ask at a time.
+	older  chan answer
 	asking sync.Mutex
 
 	// bubble is the one she is filling, 0 when she is between them, text what it
-	// holds, and wrote the reply as far as it has arrived, kept as she wrote it.
-	// All three are touched from the session's goroutine alone.
+	// holds, and wrote the reply as far as it has arrived. All three are
+	// touched from the session's goroutine alone.
 	bubble int64
 	text   string
-	wrote  string
+	wrote  api.Written
 }
 
 // said is a message of the conversation as the page reads it. The pictures are
@@ -85,7 +89,12 @@ func (a *adapter) Features() api.Features {
 	return api.Features{Channel: Kind}
 }
 
+// Start hands over what is typed on the page. It is called where the session
+// reads how far the conversation has got, which is the moment a browser that
+// missed nothing is caught up: everything after it, the session is told and
+// tells the page.
 func (a *adapter) Start(context.Context) (<-chan api.Input, error) {
+	a.caught = a.read > 0 && a.read == a.f.told.Load() && a.f.writing.Load() == 0
 	return a.inputs, nil
 }
 
@@ -113,36 +122,25 @@ func (a *adapter) Send(_ context.Context, m api.Outgoing) error {
 }
 
 // Stream shows a reply as she writes it: every text in a bubble of its own,
-// and the one she is in the middle of as it fills. A blank line is where one
-// ends and the next begins.
+// and the one she is in the middle of as it fills.
 func (a *adapter) Stream(_ context.Context, text string) error {
-	a.wrote += text
-	for {
-		at := strings.Index(a.wrote, "\n\n")
-		if at < 0 {
-			break
-		}
-		done := a.wrote[:at]
-		a.wrote = a.wrote[at+2:]
+	for _, done := range a.wrote.Add(text) {
 		if err := a.show(done, true); err != nil {
 			return err
 		}
 	}
-	return a.show(a.wrote, false)
+	return a.show(a.wrote.Rest(), false)
 }
 
 // EndStream shows the last of what she wrote, which is whatever she was in the
 // middle of when she finished.
 func (a *adapter) EndStream(context.Context) error {
-	text := a.wrote
-	a.wrote = ""
-	return a.show(text, true)
+	return a.show(a.wrote.End(), true)
 }
 
 // show puts a text in the bubble she is filling, or in one of its own when
 // there is none open. done says she has finished it, so what comes next starts
-// a bubble of its own. What is shown is trimmed of the space around it; what
-// she is still writing is kept as she wrote it, since the rest joins onto it.
+// a bubble of its own. What is shown is trimmed of the space around it.
 func (a *adapter) show(text string, done bool) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -243,37 +241,50 @@ func (a *adapter) ShowHistory(_ context.Context, ms []store.Message) error {
 	return a.event("sync", out)
 }
 
+// answer is what came back of one ask, with the ask it answers.
+type answer struct {
+	before   store.MessageID
+	messages []said
+}
+
 // ShowOlder hands what was asked for to the request that asked for it, rather
 // than down the stream: it is the answer to one thing the page did, not
 // something that happened in the conversation. One nobody is waiting for is
-// one the page gave up on.
-func (a *adapter) ShowOlder(_ context.Context, ms []store.Message) error {
+// one the page gave up on, and it is dropped rather than kept for whoever asks
+// next.
+func (a *adapter) ShowOlder(_ context.Context, before store.MessageID, ms []store.Message) error {
 	select {
-	case a.older <- sayings(ms):
+	case <-a.older:
+	default:
+	}
+	select {
+	case a.older <- answer{before, sayings(ms)}:
 	default:
 	}
 	return nil
 }
 
-// asks the session for what came before a message, and waits for it.
+// asks the session for what came before a message, and waits for the answer to
+// that ask. A request that was given up on is answered all the same, so what
+// comes back says which ask it belongs to rather than being whatever arrives
+// first.
 func (a *adapter) asks(ctx context.Context, before store.MessageID) ([]said, error) {
 	a.asking.Lock()
 	defer a.asking.Unlock()
 	if err := a.typed(ctx, api.Input{Older: before}); err != nil {
 		return nil, err
 	}
-	// A session answers what it was asked one at a time, so an ask it has taken
-	// is an ask every answer before it was handed over for. What is waiting now
-	// belongs to an ask that was given up on, and what comes next is this one's.
-	select {
-	case <-a.older:
-	default:
-	}
-	select {
-	case ms := <-a.older:
-		return ms, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	for {
+		select {
+		case got := <-a.older:
+			if got.before == before {
+				return got.messages, nil
+			}
+		case <-a.done:
+			return nil, api.ErrGone
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 }
 
@@ -302,11 +313,15 @@ func choices(cs []api.Choice) []choice {
 	return out
 }
 
-// typed hands one thing to the session of this page.
+// typed hands one thing to the session of this page. A session that has ended
+// takes nothing more, and a request that waited for it to would wait as long
+// as the browser held the connection open.
 func (a *adapter) typed(ctx context.Context, in api.Input) error {
 	select {
 	case a.inputs <- in:
 		return nil
+	case <-a.done:
+		return api.ErrGone
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -356,11 +371,16 @@ func (a *adapter) write(s string) error {
 
 // left says the request the stream rode on is over, so nothing more is written
 // to it: the response is the server's again as soon as the handler returns. A
-// beat in the middle of writing one finishes first.
+// beat in the middle of writing one finishes first, and whatever was waiting
+// to be handed to the session is told there is nobody to hand it to.
 func (a *adapter) left() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.gone {
+		return
+	}
 	a.gone = true
+	close(a.done)
 }
 
 // writing puts bytes on the stream, with the lock already held. A browser that

@@ -248,11 +248,12 @@ func (f *Frontend) events(ctx context.Context, session func(context.Context, api
 		w:      w,
 		flush:  http.NewResponseController(w),
 		inputs: make(chan api.Input),
-		older:  make(chan []said, 1),
+		older:  make(chan answer, 1),
+		done:   make(chan struct{}),
 		// A browser opens the stream again on its own whenever one ends, and
-		// says the last event it read. One holding everything that has happened
-		// is not shown the conversation over again.
-		caught: caughtUp(r, f.told.Load(), f.writing.Load() == 0),
+		// says the last event it read. Whether it missed anything is read where
+		// the session starts, which is after this.
+		read: lastRead(r),
 	}
 
 	h := w.Header()
@@ -290,24 +291,21 @@ func (f *Frontend) events(ctx context.Context, session func(context.Context, api
 	}
 }
 
-// caughtUp reports whether a browser opening the stream read everything that
-// went to a page before it, told being the last of them. A browser sends the
-// number of the last event it read whenever it opens the stream again.
+// lastRead is the event a browser says it read last, which it sends whenever
+// it opens the stream again, and zero from one that has read none.
 //
-// The number covers every page of the run, so a second browser that was told
-// something is a first browser that is shown the conversation again. What it
-// misses is a reply arriving while it was away, and that is what showing the
-// conversation again is for.
-//
-// quiet says no reply is being written anywhere. One that is has gone to the
-// page in pieces, and the session that follows shows it whole when it is done,
-// so a browser that kept those pieces would hold the reply twice.
-func caughtUp(r *http.Request, told int64, quiet bool) bool {
-	if !quiet {
-		return false
-	}
+// What is made of it is in Start: a browser that read everything there was
+// keeps its screen, and one that did not is shown the conversation again. The
+// number covers every page of the run, so a second browser that was told
+// something is a first browser that is shown it again — what it misses is a
+// reply arriving while it was away, and showing the conversation again is what
+// that is for.
+func lastRead(r *http.Request) int64 {
 	last, err := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
-	return err == nil && last == told
+	if err != nil || last < 0 {
+		return 0
+	}
+	return last
 }
 
 // page is the browser a request came from, which is the one it is answered on.

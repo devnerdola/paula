@@ -211,20 +211,15 @@ type button struct {
 	Data string `json:"callback_data"`
 }
 
-// edit writes over a message that was already sent.
+// edit writes over a message that was already sent. What it now says is what
+// the caller knows, so nothing here asks Telegram to take an edit that changes
+// nothing.
 func (c *client) edit(ctx context.Context, chat, message int64, text string) error {
-	err := c.call(ctx, "editMessageText", c.wait, map[string]any{
+	return c.call(ctx, "editMessageText", c.wait, map[string]any{
 		"chat_id":    chat,
 		"message_id": message,
 		"text":       text,
 	}, nil)
-	var e *apiError
-	if errors.As(err, &e) && strings.Contains(e.Message, "message is not modified") {
-		// Writing the same thing over itself is what it already says, which is
-		// what was wanted.
-		return nil
-	}
-	return err
 }
 
 // answerTap tells the client a tap was taken. Telegram shows the tap as

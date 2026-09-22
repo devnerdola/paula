@@ -150,26 +150,18 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 // finished is sent as she finishes it, and what she is still writing waits for
 // the rest of it: a blank line is where one ends and the next begins.
 func (a *adapter) Stream(ctx context.Context, text string) error {
-	a.wrote += text
-	for {
-		at := strings.Index(a.wrote, "\n\n")
-		if at < 0 {
-			return nil
-		}
-		done := a.wrote[:at]
-		a.wrote = a.wrote[at+2:]
+	for _, done := range a.wrote.Add(text) {
 		if err := a.f.write(ctx, api.Bubbles(done, fits), nil); err != nil {
 			return err
 		}
 	}
+	return nil
 }
 
 // EndStream sends the last of what she wrote, which is whatever she was in the
 // middle of when she finished.
 func (a *adapter) EndStream(ctx context.Context) error {
-	text := a.wrote
-	a.wrote = ""
-	return a.f.write(ctx, api.Bubbles(text, fits), nil)
+	return a.f.write(ctx, api.Bubbles(a.wrote.End(), fits), nil)
 }
 
 // editing is the chat when a text is shown as it is written. Each of them is
@@ -177,9 +169,11 @@ func (a *adapter) EndStream(ctx context.Context) error {
 // what she has so far over the message it started as.
 type editing struct {
 	*adapter
-	// message is the one being written over, and at when it last was. Both are
-	// touched from the session's goroutine alone.
+	// message is the one being written over, holds what it says now, and at is
+	// when it last was written. All three are touched from the session's
+	// goroutine alone.
 	message int64
+	holds   string
 	at      time.Time
 }
 
@@ -192,14 +186,7 @@ const editEvery = time.Second
 // finished, whole and in the message it was filling, and what she is still
 // writing as it comes.
 func (s *editing) Stream(ctx context.Context, text string) error {
-	s.wrote += text
-	for {
-		at := strings.Index(s.wrote, "\n\n")
-		if at < 0 {
-			break
-		}
-		done := s.wrote[:at]
-		s.wrote = s.wrote[at+2:]
+	for _, done := range s.wrote.Add(text) {
 		if _, err := s.show(ctx, done, true); err != nil {
 			return err
 		}
@@ -209,17 +196,15 @@ func (s *editing) Stream(ctx context.Context, text string) error {
 	}
 	// What is left is what the open message holds: anything that outgrew it
 	// went into one that is now closed, and is not written again.
-	left, err := s.show(ctx, s.wrote, false)
-	s.wrote = left
+	left, err := s.show(ctx, s.wrote.Rest(), false)
+	s.wrote.Keep(left)
 	return err
 }
 
 // EndStream shows the last of what she wrote, which is whatever she was in the
 // middle of when she finished.
 func (s *editing) EndStream(ctx context.Context) error {
-	text := s.wrote
-	s.wrote = ""
-	_, err := s.show(ctx, text, true)
+	_, err := s.show(ctx, s.wrote.End(), true)
 	return err
 }
 
@@ -244,14 +229,15 @@ func (s *editing) show(ctx context.Context, text string, done bool) (string, err
 				return text, err
 			}
 		}
-		s.message, text = 0, text[at:]
+		s.closed()
+		text = text[at:]
 	}
 	shown := strings.TrimSpace(text)
 	if shown == "" {
 		// A message of nothing is one Telegram refuses, and there is nothing of
 		// it to show yet.
 		if done {
-			s.message = 0
+			s.closed()
 		}
 		return text, nil
 	}
@@ -259,25 +245,35 @@ func (s *editing) show(ctx context.Context, text string, done bool) (string, err
 		return text, err
 	}
 	if done {
-		s.message = 0
+		s.closed()
 		return "", nil
 	}
 	return text, nil
 }
+
+// closed lets go of the message being written over, so what she writes next
+// starts one of its own.
+func (s *editing) closed() { s.message, s.holds = 0, "" }
 
 // put writes a text over the message being written, or sends it as a new one
 // when there is none yet.
 func (s *editing) put(ctx context.Context, text string) error {
 	if s.message == 0 {
 		id, err := s.f.client.send(ctx, s.f.user, text, nil)
-		s.message = id
+		s.message, s.holds = id, text
 		return err
 	}
+	if text == s.holds {
+		// Writing the same thing over itself says nothing, and Telegram refuses
+		// an edit that changes nothing.
+		return nil
+	}
+	s.holds = text
 	if err := s.f.client.edit(ctx, s.f.user, s.message, text); err != nil {
 		// One that cannot be written over is gone as far as she is concerned —
 		// deleted, or too old to change — and what she writes next starts a
 		// message of its own rather than going to it for the rest of the run.
-		s.message = 0
+		s.closed()
 		return err
 	}
 	return nil
@@ -299,7 +295,7 @@ type adapter struct {
 	tags  map[string]string
 	// wrote is what she has written that is not a finished text yet. A session
 	// hands over what she writes from the one goroutine it runs on.
-	wrote string
+	wrote api.Written
 }
 
 // Writing shows that she is writing, or stops showing it. Telegram holds the

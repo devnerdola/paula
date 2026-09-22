@@ -366,15 +366,15 @@ func (s *showing) ShowHistory(_ context.Context, ms []store.Message) error {
 // scrolled back does.
 type scrolling struct{ *showing }
 
-func (s *scrolling) ShowOlder(_ context.Context, ms []store.Message) error {
+func (s *scrolling) ShowOlder(_ context.Context, before store.MessageID, ms []store.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(ms) == 0 {
-		s.write("older: none")
+		s.write(fmt.Sprintf("older than %d: none", before))
 		return nil
 	}
 	for _, m := range ms {
-		s.write("older " + m.Role + ": " + m.Text())
+		s.write(fmt.Sprintf("older than %d %s: %s", before, m.Role, m.Text()))
 	}
 	return nil
 }
@@ -638,6 +638,62 @@ func TestWhatWasSaidBefore(t *testing.T) {
 	waitFor(t, "the prompt", sawLine(base, "prompt"))
 }
 
+// opening asks for what was said before only once a test says so, which is
+// where a frontend that takes a moment to open finds the conversation: a
+// message may be stored between where the session starts and the read.
+type opening struct {
+	*screen
+	ready chan struct{}
+}
+
+func (o *opening) History() int {
+	<-o.ready
+	return o.screen.history
+}
+
+func (o *opening) ShowHistory(_ context.Context, ms []store.Message) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for _, m := range ms {
+		o.write("history " + m.Role + ": " + m.Text())
+	}
+	return nil
+}
+
+// A session reads where the conversation stands, and reads what was said
+// before a moment later. What the second read carried is on the screen, so the
+// events carrying it are not shown a second time.
+func TestWhatWasReadBackIsNotShownTwice(t *testing.T) {
+	base := newScreen(api.Features{Channel: "telegram"})
+	base.history = 10
+	s := &opening{screen: base, ready: make(chan struct{})}
+
+	tk := newTalk()
+	run(t, s, tk)
+
+	// The reply lands after the session read where the conversation stood, and
+	// before it read what was said before, so the read carries it.
+	stored := &store.Message{ID: store.MessageID(replies.Add(1)), EntryID: 1,
+		Role: store.RoleAssistant, Channel: "telegram",
+		Parts: []store.Part{{Type: store.PartText, Text: "here I am"}}}
+	tk.mu.Lock()
+	tk.history = append(tk.history, *stored)
+	tk.mu.Unlock()
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+	tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 1, Message: stored})
+	close(s.ready)
+	waitFor(t, "what was said before", sawLine(base, "history assistant: here I am"))
+
+	// The next reply says the events before it have been handled by now.
+	for _, e := range reply(2, "and again") {
+		tk.publish(e)
+	}
+	waitFor(t, "the reply after it", sawLine(base, "send and again"))
+	if slices.Contains(base.log(), "send here I am") {
+		t.Error("the reply the history carried was shown a second time")
+	}
+}
+
 // A frontend that shows the conversation as one long page asks for what came
 // before what it holds, and is given a screenful of it: what it opened on is
 // what it is given again.
@@ -657,8 +713,8 @@ func TestWhatWasSaidBeforeWhatIsOnTheScreen(t *testing.T) {
 	waitFor(t, "what the screen opened on", sawLine(base, "history user: the 4th thing"))
 
 	s.inputs <- api.Input{Older: 3}
-	waitFor(t, "what came before it", sawLine(base, "older user: the 2th thing"))
-	if slices.Contains(base.log(), "older user: the 4th thing") {
+	waitFor(t, "what came before it", sawLine(base, "older than 3 user: the 2th thing"))
+	if slices.Contains(base.log(), "older than 3 user: the 4th thing") {
 		t.Error("what was on the screen already was shown again")
 	}
 }
@@ -686,7 +742,7 @@ func TestWhatCameBeforeIsAnsweredEvenWhenItCannotBeRead(t *testing.T) {
 
 	s.inputs <- api.Input{Older: 3}
 	waitFor(t, "what went wrong", sawLine(base, "send error: the conversation could not be read"))
-	waitFor(t, "the ask being answered", sawLine(base, "older: none"))
+	waitFor(t, "the ask being answered", sawLine(base, "older than 3: none"))
 }
 
 func TestWhatIsTypedIsPosted(t *testing.T) {
