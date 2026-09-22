@@ -511,6 +511,33 @@ func TestOpenWithAKeyTooShortToBeOne(t *testing.T) {
 	}
 }
 
+// A key written with nothing after it is a key the file says nothing about:
+// the value it was given is taken away rather than left as it was, so it is
+// reported under its own name like any other value a runner cannot take.
+func TestOpenWithARetriesKeyThatSaysNothing(t *testing.T) {
+	for _, written := range []string{"retries:", "retries: ~", "retries: null"} {
+		t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+		path := filepath.Join(t.TempDir(), "paula.yaml")
+		file := "persona: paula.yaml\nrunners:\n  openrouter:\n    type: openrouter\n    " + written +
+			"\nmodels:\n  chat:\n    runner: openrouter\n    id: x\ndefault_models:\n  chat: chat\n"
+		if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = Open("openrouter", cfg.Runners[0].Section, api.Host{})
+		if err == nil {
+			t.Errorf("%q was taken", written)
+			continue
+		}
+		if !strings.Contains(err.Error(), "retries: no number is written") {
+			t.Errorf("%q = %v, want it reported under its key", written, err)
+		}
+	}
+}
+
 func TestOpenRejectsUnknownKeys(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
 	dir := t.TempDir()

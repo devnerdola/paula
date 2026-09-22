@@ -17,6 +17,10 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 		"model":    req.Model,
 		"messages": msgs,
 		"stream":   true,
+		// What the prompt came to is read out of the stream, and what every
+		// budget is held to is learned from it. A host that sends it unasked
+		// loses nothing by being asked.
+		"stream_options": map[string]any{"include_usage": true},
 	}
 
 	if req.CacheKey != "" {

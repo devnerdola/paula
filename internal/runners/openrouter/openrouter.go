@@ -32,7 +32,6 @@ type Runner struct {
 	name     string
 	client   *openai.Client
 	settings api.Settings
-	provider *provider
 	serves   openai.Catalogue
 }
 
@@ -46,7 +45,9 @@ func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 		RequestTimeout: config.Duration(openai.DefaultRequestTimeout),
 		Retries:        &retries,
 	})
-	prov, errs := decodeProvider(cfg.Provider)
+	// The block is read to hold it against what the API takes. What reaches a
+	// request is the section, which every model's own settings are merged over.
+	_, errs := decodeProvider(cfg.Provider)
 	p.Add(errs...)
 	if err := p.Err(); err != nil {
 		return nil, err
@@ -55,7 +56,6 @@ func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 	r := &Runner{
 		name:     name,
 		settings: cfg.Settings,
-		provider: prov,
 	}
 	r.settings.Provider = cfg.Provider
 	r.serves.Read = r.read

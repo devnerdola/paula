@@ -54,7 +54,12 @@ func Decode(s config.Section, defaults Config) (Config, *api.Problems) {
 		p.Addf("token_env: the value of %s is %d bytes, too short to be a key",
 			cfg.TokenEnv, len(cfg.token))
 	}
-	if *cfg.Retries < 0 {
+	switch {
+	case cfg.Retries == nil:
+		// The defaults set it, so nothing here is a key written with nothing
+		// after it: a null takes the pointer away rather than leaving it be.
+		p.Addf("retries: no number is written")
+	case *cfg.Retries < 0:
 		p.Addf("retries: %d is below zero", *cfg.Retries)
 	}
 	if cfg.IdleTimeout <= 0 {
@@ -92,6 +97,10 @@ type Catalogue struct {
 
 	mu     sync.Mutex
 	models []api.Model
+	// byID is the listing by the id the API knows each model by, since looking
+	// one up is what every reply, caption, fold step and batch of embeddings
+	// does and reading the listing is not.
+	byID   map[string]api.Model
 	loaded bool
 }
 
@@ -100,27 +109,40 @@ type Catalogue struct {
 func (c *Catalogue) Models(ctx context.Context) ([]api.Model, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.loaded {
-		models, err := c.Read(ctx)
-		if err != nil {
-			return nil, err
-		}
-		c.models, c.loaded = models, true
+	if err := c.read(ctx); err != nil {
+		return nil, err
 	}
 	return slices.Clone(c.models), nil
+}
+
+// read loads the listing once, with the lock already held.
+func (c *Catalogue) read(ctx context.Context) error {
+	if c.loaded {
+		return nil
+	}
+	models, err := c.Read(ctx)
+	if err != nil {
+		return err
+	}
+	c.byID = make(map[string]api.Model, len(models))
+	for _, m := range models {
+		c.byID[m.ID] = m
+	}
+	c.models, c.loaded = models, true
+	return nil
 }
 
 // Find is one model of the listing, and false for one the runner does not
 // serve, which the runner then says in its own words.
 func (c *Catalogue) Find(ctx context.Context, id string) (*api.Model, bool, error) {
-	models, err := c.Models(ctx)
-	if err != nil {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.read(ctx); err != nil {
 		return nil, false, err
 	}
-	for i := range models {
-		if models[i].ID == id {
-			return &models[i], true, nil
-		}
+	m, ok := c.byID[id]
+	if !ok {
+		return nil, false, nil
 	}
-	return nil, false, nil
+	return &m, true, nil
 }

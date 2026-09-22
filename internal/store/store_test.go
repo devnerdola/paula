@@ -272,7 +272,10 @@ func TestMedia(t *testing.T) {
 	}
 }
 
-func TestKV(t *testing.T) {
+// The model serving a role is the one thing the kv table holds: what is put
+// there is read back, what is written twice keeps the last of it, and what is
+// taken away is gone.
+func TestWhatIsKeptUnderAKey(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 
@@ -294,17 +297,6 @@ func TestKV(t *testing.T) {
 	}
 	if _, ok, _ := s.Get(ctx, KeyModel("chat")); ok {
 		t.Error("the key is still there")
-	}
-
-	if err := s.SetInt(ctx, KeyModel("chat"), 17); err != nil {
-		t.Fatal(err)
-	}
-	n, err := s.GetInt(ctx, KeyModel("chat"))
-	if err != nil || n != 17 {
-		t.Errorf("GetInt = %d, %v", n, err)
-	}
-	if n, err := s.GetInt(ctx, "nope"); err != nil || n != 0 {
-		t.Errorf("GetInt of a missing key = %d, %v", n, err)
 	}
 }
 

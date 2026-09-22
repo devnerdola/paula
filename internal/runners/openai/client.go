@@ -159,28 +159,6 @@ func (c *Client) limited(ctx context.Context) (context.Context, context.CancelFu
 	return context.WithTimeoutCause(ctx, wait, fmt.Errorf("%w (%s)", ErrSlow, wait))
 }
 
-// Post sends a JSON body and decodes the answer into out.
-func (c *Client) Post(ctx context.Context, path string, in any, out any) error {
-	b, err := json.Marshal(in)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := c.limited(ctx)
-	defer cancel()
-	return c.send(ctx, ask{
-		method: http.MethodPost,
-		path:   path,
-		body:   b,
-		read: func(r io.Reader, _ *api.Record) error {
-			if out == nil {
-				_, err := io.Copy(io.Discard, r)
-				return err
-			}
-			return decode(r, out)
-		},
-	})
-}
-
 // Chat sends a chat request and passes every chunk of the stream to fn.
 func (c *Client) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
 	body, err := chatBody(req, c.Hooks)
@@ -454,9 +432,12 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 		c.log().Warn("waiting for an answer", "runner", rec.Runner,
 			"model", rec.Model, "url", rec.URL, "for", slowRequest)
 	})
-	defer waiting.Stop()
 
 	resp, err := c.client().Do(req)
+	// The answer is what was waited for, however long the rest of it takes:
+	// a reply arrives for as long as she is writing, and the idle timeout is
+	// what says a stream has stopped arriving.
+	waiting.Stop()
 	if err != nil {
 		return 0, cut(ctx, err)
 	}

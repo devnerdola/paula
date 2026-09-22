@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"strconv"
 )
 
 // KeyModel holds the model saved for a role.
@@ -25,19 +24,6 @@ func (s *Store) Set(ctx context.Context, key, value string) error {
 func (s *Store) Delete(ctx context.Context, key string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM kv WHERE key = ?`, key)
 	return err
-}
-
-// GetInt returns a number kept in the kv table, and 0 when it was never set.
-func (s *Store) GetInt(ctx context.Context, key string) (int64, error) {
-	v, ok, err := s.Get(ctx, key)
-	if err != nil || !ok {
-		return 0, err
-	}
-	return strconv.ParseInt(v, 10, 64)
-}
-
-func (s *Store) SetInt(ctx context.Context, key string, v int64) error {
-	return s.Set(ctx, key, strconv.FormatInt(v, 10))
 }
 
 func value(row *sql.Row) (string, bool, error) {

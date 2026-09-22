@@ -20,8 +20,6 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	if len(errs) > 0 {
 		return errs[0]
 	}
-	// Venice documents this for usage in a stream.
-	out["stream_options"] = map[string]any{"include_usage": true}
 	out["venice_parameters"] = prov.object()
 
 	if v := prov.Sampling.MinTemperature; v != nil {
