@@ -139,7 +139,9 @@ is what you want when an API behaves strangely.
 
 ```
 ./paula memory list                    # the newest, with the number each is forgotten by
+./paula memory list -n 50              # as many as you ask for
 ./paula memory search where does Ana live   # the ones a question is about
+./paula memory search -n 3 Ana         # the closest few of them
 ./paula memory forget 7                # takes it away, and the ones it replaced
 ```
 
@@ -326,7 +328,7 @@ configuring for it.
 | `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
 | `image_turns` | `2` | how many recent messages send their picture as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
-| `log_keep` | `500` | how many replies keep the bodies of their requests |
+| `log_keep` | `500` | how many entries keep the bodies of their requests; a fold and a batch of embeddings are entries of their own |
 
 ### Frontends
 

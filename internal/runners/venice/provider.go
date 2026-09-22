@@ -1,10 +1,10 @@
 package venice
 
 import (
-	"fmt"
 	"slices"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/runners/api"
 )
 
 // maxFallbacks is the ten models a request may fall back to.
@@ -58,29 +58,22 @@ func decodeProvider(s config.Section) (*provider, []error) {
 }
 
 func (p *provider) validate() []error {
-	var errs []error
-	addf := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
-
+	out := &api.Problems{}
 	oneOf := func(key, v string, allowed []string) {
 		if v != "" && !slices.Contains(allowed, v) {
-			addf("provider.%s: %q is not one of %v", key, v, allowed)
+			out.Addf("provider.%s: %q is not one of %v", key, v, allowed)
 		}
 	}
 	oneOf("output.verbosity", p.Output.Verbosity, verbosities)
 	oneOf("cache.retention", p.Cache.Retention, retentions)
 	oneOf("search.provider", p.Search.Provider, searchers)
 
-	between := func(key string, v *float64) {
-		if v != nil && (*v < 0 || *v > 2) {
-			addf("provider.sampling.%s: %v is outside 0 to 2", key, *v)
-		}
-	}
-	between("min_temperature", p.Sampling.MinTemperature)
-	between("max_temperature", p.Sampling.MaxTemperature)
+	api.Between(out, "provider.sampling.min_temperature", p.Sampling.MinTemperature, 0, 2)
+	api.Between(out, "provider.sampling.max_temperature", p.Sampling.MaxTemperature, 0, 2)
 	if lo, hi := p.Sampling.MinTemperature, p.Sampling.MaxTemperature; lo != nil && hi != nil && *lo > *hi {
-		addf("provider.sampling.min_temperature: %v is above max_temperature %v", *lo, *hi)
+		out.Addf("provider.sampling.min_temperature: %v is above max_temperature %v", *lo, *hi)
 	}
-	return errs
+	return out.All()
 }
 
 // object is venice_parameters, with the keys that are set. The system prompt

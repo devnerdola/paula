@@ -1,10 +1,10 @@
 package openrouter
 
 import (
-	"fmt"
 	"slices"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/runners/api"
 )
 
 // provider holds the request parameters only OpenRouter documents.
@@ -79,8 +79,8 @@ func decodeProvider(s config.Section) (*provider, []error) {
 }
 
 func (p *provider) validate() []error {
-	var errs []error
-	addf := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	out := &api.Problems{}
+	addf := out.Addf
 
 	oneOf := func(key, v string, allowed []string) {
 		if v != "" && !slices.Contains(allowed, v) {
@@ -121,7 +121,7 @@ func (p *provider) validate() []error {
 	if p.Reasoning.MaxTokens != nil && *p.Reasoning.MaxTokens <= 0 {
 		addf("provider.reasoning.max_tokens: %d is not above zero", *p.Reasoning.MaxTokens)
 	}
-	return errs
+	return out.All()
 }
 
 // object is the API's provider object, with the keys that are set.

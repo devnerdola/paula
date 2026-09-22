@@ -982,7 +982,7 @@ func TestWaitDoesNotHangOnceTheConversationIsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(history) != 1 {
-		t.Errorf("history = %+v, want only what he said", history)
+		t.Errorf("history = %+v, want only what was sent to her", history)
 	}
 }
 

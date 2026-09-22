@@ -96,22 +96,23 @@ func Open(s config.Section, h api.Host) (*Frontend, error) {
 	if err := s.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	// Every problem of the section is reported at once, as the file's are.
-	var problems []error
+	// Every problem of the section is reported at once, the way the file's are
+	// and under the same heading.
+	p := &config.Problems{Path: s.Path()}
 	token := os.Getenv(cfg.TokenEnv)
 	switch {
 	case cfg.TokenEnv == "":
-		problems = append(problems, fmt.Errorf("%s.token_env: the name of an environment variable is needed", s.Path()))
+		p.Addf("token_env: the name of an environment variable is needed")
 	case token == "":
-		problems = append(problems, fmt.Errorf("%s.token_env: environment variable %s is not set", s.Path(), cfg.TokenEnv))
+		p.Addf("token_env: environment variable %s is not set", cfg.TokenEnv)
 	case !tokenShape(token):
-		problems = append(problems, fmt.Errorf("%s.token_env: %s does not hold a token of at least %d characters, without a colon or a space",
-			s.Path(), cfg.TokenEnv, logs.MinSecret))
+		p.Addf("token_env: %s does not hold a token of at least %d characters, without a colon or a space",
+			cfg.TokenEnv, logs.MinSecret)
 	}
 	if cfg.Listen == "" {
-		problems = append(problems, fmt.Errorf("%s.listen: an address to listen on is needed", s.Path()))
+		p.Addf("listen: an address to listen on is needed")
 	}
-	if err := errors.Join(problems...); err != nil {
+	if err := p.Err(); err != nil {
 		return nil, err
 	}
 	h.Secrets.Add(token)

@@ -78,7 +78,7 @@ func TestFields(t *testing.T) {
 	}
 }
 
-func TestValidate(t *testing.T) {
+func TestASettingOutsideWhatIsDocumented(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		s    Settings
@@ -109,7 +109,7 @@ func TestValidate(t *testing.T) {
 	}
 }
 
-func TestValidateAcceptsWhatIsDocumented(t *testing.T) {
+func TestSettingsInsideWhatIsDocumented(t *testing.T) {
 	s := Settings{
 		Reasoning: ReasoningSettings{Mode: ReasoningOn, Effort: "max", Summary: "detailed"},
 		Sampling: SamplingSettings{

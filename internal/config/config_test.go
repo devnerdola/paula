@@ -225,7 +225,7 @@ func TestMissingFile(t *testing.T) {
 	}
 }
 
-func TestFind(t *testing.T) {
+func TestTheConfigurationFileToRead(t *testing.T) {
 	t.Setenv("PAULA_CONFIG", "env.yaml")
 	if got := Find("given.yaml"); got != "given.yaml" {
 		t.Errorf("Find = %q", got)
@@ -309,7 +309,7 @@ func TestSectionNotSet(t *testing.T) {
 	}
 }
 
-func TestMergeSections(t *testing.T) {
+func TestASectionReadOverAnother(t *testing.T) {
 	c := mustLoad(t, `
 persona: paula.yaml
 runners:
@@ -364,7 +364,7 @@ default_models:
 	}
 }
 
-func TestMergeSectionsWithOneSide(t *testing.T) {
+func TestASectionReadOverNothing(t *testing.T) {
 	c := mustLoad(t, minimal)
 	base := section(t, c, "openrouter")
 	if got := MergeSections(base, Section{}); got.Path() != base.Path() {

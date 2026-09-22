@@ -1,7 +1,6 @@
 package api
 
 import (
-	"fmt"
 	"slices"
 
 	"nerdola.dev/x/paula/internal/config"
@@ -132,8 +131,8 @@ const stopLimit = 4
 // Validate reports the settings whose value is outside what the APIs document.
 // What only a catalogue can answer is checked by the runner itself.
 func (s Settings) Validate() []error {
-	var errs []error
-	addf := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	p := &Problems{}
+	addf := p.Addf
 
 	switch s.Reasoning.Mode {
 	case "", ReasoningOn, ReasoningOff:
@@ -149,11 +148,11 @@ func (s Settings) Validate() []error {
 		addf("reasoning.effort: %q is not one of %v", e, Efforts)
 	}
 
-	between(&errs, "sampling.temperature", s.Sampling.Temperature, 0, 2)
-	between(&errs, "sampling.top_p", s.Sampling.TopP, 0, 1)
-	between(&errs, "sampling.min_p", s.Sampling.MinP, 0, 1)
-	between(&errs, "sampling.presence_penalty", s.Sampling.PresencePenalty, -2, 2)
-	between(&errs, "sampling.frequency_penalty", s.Sampling.FrequencyPenalty, -2, 2)
+	Between(p, "sampling.temperature", s.Sampling.Temperature, 0, 2)
+	Between(p, "sampling.top_p", s.Sampling.TopP, 0, 1)
+	Between(p, "sampling.min_p", s.Sampling.MinP, 0, 1)
+	Between(p, "sampling.presence_penalty", s.Sampling.PresencePenalty, -2, 2)
+	Between(p, "sampling.frequency_penalty", s.Sampling.FrequencyPenalty, -2, 2)
 	if v := s.Sampling.TopK; v != nil && *v < 0 {
 		addf("sampling.top_k: %d is below zero", *v)
 	}
@@ -174,7 +173,7 @@ func (s Settings) Validate() []error {
 	if len(s.Output.Stop) > stopLimit {
 		addf("output.stop: %d sequences, at most %d are documented", len(s.Output.Stop), stopLimit)
 	}
-	return errs
+	return p.All()
 }
 
 // CheckReasoning holds the reasoning settings against what a model's listing
@@ -204,8 +203,10 @@ func CheckReasoning(p *Problems, m *Model, s Settings) {
 	}
 }
 
-func between(errs *[]error, key string, v *float64, lo, hi float64) {
+// Between reports a value outside the range the APIs document for it, which is
+// how a runner holds a setting of its own to one.
+func Between(p *Problems, key string, v *float64, lo, hi float64) {
 	if v != nil && (*v < lo || *v > hi) {
-		*errs = append(*errs, fmt.Errorf("%s: %v is outside %v to %v", key, *v, lo, hi))
+		p.Addf("%s: %v is outside %v to %v", key, *v, lo, hi)
 	}
 }

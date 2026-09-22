@@ -67,7 +67,7 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-func TestRender(t *testing.T) {
+func TestACardIsWrittenOutWhole(t *testing.T) {
 	got, err := load(t, card).Render()
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ Ada: barely
 	}
 }
 
-func TestRenderLeavesOutWhatIsEmpty(t *testing.T) {
+func TestACardLeavesOutWhatIsEmpty(t *testing.T) {
 	got, err := load(t, "name: Ada\nuser:\n  name: Caio\n").Render()
 	if err != nil {
 		t.Fatal(err)

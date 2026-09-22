@@ -57,7 +57,7 @@ func abs(n int) int {
 	return n
 }
 
-func TestDetect(t *testing.T) {
+func TestWhatKindOfPictureItIs(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		b    []byte
@@ -116,7 +116,7 @@ func TestProcessRefusesWhatItCannotDecode(t *testing.T) {
 	}
 }
 
-func TestScaling(t *testing.T) {
+func TestAPictureIsScaledAndTurnedUpright(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		file         string
@@ -203,7 +203,7 @@ func TestOrientationIsIgnoredWhenThereIsNone(t *testing.T) {
 	}
 }
 
-func TestFiles(t *testing.T) {
+func TestAPictureIsKeptUnderWhatIsInIt(t *testing.T) {
 	dir := t.TempDir()
 	f := New(dir, 4)
 

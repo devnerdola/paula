@@ -22,7 +22,7 @@ func order(messages []store.Message) string {
 	return strings.Join(out, ",")
 }
 
-func TestOrdered(t *testing.T) {
+func TestAReplyIsReadAfterWhatItAnswers(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		in   []store.Message

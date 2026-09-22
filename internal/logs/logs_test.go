@@ -17,7 +17,7 @@ func TestShortValuesAreNotRegistered(t *testing.T) {
 	}
 }
 
-func TestRedact(t *testing.T) {
+func TestASecretIsMaskedWhereverItAppears(t *testing.T) {
 	s := new(Secrets)
 	s.Add("sk-redact-me-please")
 	got := s.Redact("Bearer sk-redact-me-please done")

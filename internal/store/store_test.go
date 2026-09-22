@@ -214,7 +214,7 @@ func messageIDs(ms []Message) []MessageID {
 	return out
 }
 
-func TestMedia(t *testing.T) {
+func TestWhatAPictureShowsIsKeptWithIt(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 
@@ -315,7 +315,7 @@ func TestAnEntryOnlyPointsAtMessagesThatAreThere(t *testing.T) {
 	}
 }
 
-func TestEntries(t *testing.T) {
+func TestAnEntryIsStartedAndEnded(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 
@@ -383,7 +383,7 @@ func TestEntries(t *testing.T) {
 	}
 }
 
-func TestRequests(t *testing.T) {
+func TestARequestIsKeptUnderItsEntry(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 	e := &Entry{StartedAt: now}

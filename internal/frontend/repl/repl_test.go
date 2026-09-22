@@ -863,7 +863,7 @@ func TestTheTerminalUsesTheNamesOnTheCard(t *testing.T) {
 
 	term.waitFor(t, "the reply", "Ada: hey you")
 	if !strings.Contains(term.shown(), "Tom: hey") {
-		t.Errorf("output = %q, want the name the card gives him", term.shown())
+		t.Errorf("output = %q, want the name the card gives them", term.shown())
 	}
 }
 

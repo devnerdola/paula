@@ -5,7 +5,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -198,10 +197,10 @@ func Load(path string) (*Config, error) {
 		DefaultModels: f.DefaultModels,
 		Engine:        f.Engine,
 	}
-	p := &problems{path: path}
+	p := &Problems{Path: path}
 
 	if f.Persona == "" {
-		p.addf("persona: no character card is set")
+		p.Addf("persona: no character card is set")
 	}
 	c.Runners = readRunners(p, &f.Runners)
 	c.Models = readModels(p, &f.Models, c.Runners)
@@ -209,7 +208,7 @@ func Load(path string) (*Config, error) {
 	checkDefaultModels(p, c)
 	checkEngine(p, c.Engine)
 
-	if err := p.err(); err != nil {
+	if err := p.Err(); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -226,10 +225,10 @@ func dataDir(dir, set string) string {
 
 // readRunners reads the runners mapping, keeping every key of a runner for its
 // own package to decode.
-func readRunners(p *problems, n *yaml.Node) []Runner {
+func readRunners(p *Problems, n *yaml.Node) []Runner {
 	entries, err := entries(n, "runners")
 	if err != nil {
-		p.add(err)
+		p.Add(err)
 	}
 	var out []Runner
 	for _, e := range entries {
@@ -237,30 +236,30 @@ func readRunners(p *problems, n *yaml.Node) []Runner {
 			Type string `yaml:"type"`
 		}
 		if err := peek(e.section, &head); err != nil {
-			p.add(err)
+			p.Add(err)
 		}
 		if head.Type == "" {
-			p.addf("runners.%s.type: no type is set", e.name)
+			p.Addf("runners.%s.type: no type is set", e.name)
 		}
 		out = append(out, Runner{Name: e.name, Type: head.Type, Section: e.section})
 	}
 	if len(out) == 0 {
-		p.addf("runners: at least one runner is needed")
+		p.Addf("runners: at least one runner is needed")
 	}
 	return out
 }
 
 // readModels reads the models mapping, in the order it was written, and holds
 // every model to a name, a runner that is there, and an id.
-func readModels(p *problems, n *yaml.Node, runners []Runner) []Model {
+func readModels(p *Problems, n *yaml.Node, runners []Runner) []Model {
 	entries, err := entries(n, "models")
 	if err != nil {
-		p.add(err)
+		p.Add(err)
 	}
 	var out []Model
 	for _, e := range entries {
 		if !modelName.MatchString(e.name) {
-			p.addf("models.%s: a name holds letters, digits, dots, underscores and dashes, and starts with a letter or a digit", e.name)
+			p.Addf("models.%s: a name holds letters, digits, dots, underscores and dashes, and starts with a letter or a digit", e.name)
 		}
 		var head struct {
 			Runner  string `yaml:"runner"`
@@ -268,18 +267,18 @@ func readModels(p *problems, n *yaml.Node, runners []Runner) []Model {
 			Context int    `yaml:"context"`
 		}
 		if err := peek(e.section, &head); err != nil {
-			p.add(err)
+			p.Add(err)
 		}
 		if head.Runner == "" {
-			p.addf("models.%s.runner: no runner is set", e.name)
+			p.Addf("models.%s.runner: no runner is set", e.name)
 		} else if !hasRunner(runners, head.Runner) {
-			p.addf("models.%s.runner: no runner is called %q", e.name, head.Runner)
+			p.Addf("models.%s.runner: no runner is called %q", e.name, head.Runner)
 		}
 		if head.ID == "" {
-			p.addf("models.%s.id: no id is set", e.name)
+			p.Addf("models.%s.id: no id is set", e.name)
 		}
 		if head.Context < 0 {
-			p.addf("models.%s.context: %d is below zero", e.name, head.Context)
+			p.Addf("models.%s.context: %d is below zero", e.name, head.Context)
 		}
 		out = append(out, Model{
 			Name:    e.name,
@@ -292,10 +291,10 @@ func readModels(p *problems, n *yaml.Node, runners []Runner) []Model {
 	return out
 }
 
-func readFrontends(p *problems, n *yaml.Node) []Frontend {
+func readFrontends(p *Problems, n *yaml.Node) []Frontend {
 	entries, err := entries(n, "frontends")
 	if err != nil {
-		p.add(err)
+		p.Add(err)
 		return nil
 	}
 	var out []Frontend
@@ -305,15 +304,17 @@ func readFrontends(p *problems, n *yaml.Node) []Frontend {
 	return out
 }
 
-// checkDefaultModels holds every role to a model the file names.
-func checkDefaultModels(p *problems, c *Config) {
+// checkDefaultModels holds every role to a model the file names. Only chat is
+// needed to read a file at all: what serving takes of it is serve's to say,
+// since the commands that only read a conversation run without it.
+func checkDefaultModels(p *Problems, c *Config) {
 	if c.DefaultModels.Chat == "" {
-		p.addf("default_models.chat: no model is set")
+		p.Addf("default_models.chat: no model is set")
 	}
 	for _, role := range Roles {
 		name := c.DefaultModels.Get(role)
 		if name != "" && c.Model(name) == nil {
-			p.addf("default_models.%s: no model is called %q", role, name)
+			p.Addf("default_models.%s: no model is called %q", role, name)
 		}
 	}
 }
@@ -328,29 +329,29 @@ func (c *Config) Model(name string) *Model {
 	return nil
 }
 
-func checkEngine(p *problems, e Engine) {
+func checkEngine(p *Problems, e Engine) {
 	if e.Debounce < 0 {
-		p.addf("engine.debounce: %s is below zero", e.Debounce)
+		p.Addf("engine.debounce: %s is below zero", e.Debounce)
 	}
 	// A share of nothing leaves a prompt no room, and a share of everything
 	// leaves the other side of the split none.
 	if e.SystemRatio <= 0 || e.SystemRatio >= 1 {
-		p.addf("engine.system_ratio: %v is not above 0 and below 1", e.SystemRatio)
+		p.Addf("engine.system_ratio: %v is not above 0 and below 1", e.SystemRatio)
 	}
 	if e.MemoryRatio <= 0 || e.MemoryRatio > 1 {
-		p.addf("engine.memory_ratio: %v is not above 0 and at most 1", e.MemoryRatio)
+		p.Addf("engine.memory_ratio: %v is not above 0 and at most 1", e.MemoryRatio)
 	}
 	if e.HistoryKeep <= 0 || e.HistoryKeep >= 1 {
-		p.addf("engine.history_keep: %v is not above 0 and below 1", e.HistoryKeep)
+		p.Addf("engine.history_keep: %v is not above 0 and below 1", e.HistoryKeep)
 	}
 	if e.ImageTurns < 0 {
-		p.addf("engine.image_turns: %d is below zero", e.ImageTurns)
+		p.Addf("engine.image_turns: %d is below zero", e.ImageTurns)
 	}
 	if e.ImageMaxPx < 0 {
-		p.addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)
+		p.Addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)
 	}
 	if e.LogKeep < 0 {
-		p.addf("engine.log_keep: %d is below zero", e.LogKeep)
+		p.Addf("engine.log_keep: %d is below zero", e.LogKeep)
 	}
 }
 
@@ -391,24 +392,4 @@ func Resolve(dir, p string) string {
 		return p
 	}
 	return filepath.Join(dir, p)
-}
-
-type problems struct {
-	path string
-	list []error
-}
-
-func (p *problems) add(err error)                { p.list = append(p.list, err) }
-func (p *problems) addf(format string, a ...any) { p.add(fmt.Errorf(format, a...)) }
-
-func (p *problems) err() error {
-	if len(p.list) == 0 {
-		return nil
-	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s:", p.path)
-	for _, err := range p.list {
-		fmt.Fprintf(&b, "\n  %s", err)
-	}
-	return errors.New(b.String())
 }
