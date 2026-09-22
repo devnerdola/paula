@@ -186,14 +186,26 @@ type ModelStatus struct {
 }
 
 type RoleStatus struct {
-	Role    config.Role
-	Model   *Configured
-	Err     error
+	Role config.Role
+	// Model is what serves the role, and is nil when the file names none.
+	Model *Configured
+	Err   error
+	// Skipped says the runner did not answer, so nothing was asked of it, and
+	// Missing that the file names no model for a role serving needs one. What
+	// a conversation of its own has saved is not read here, so a run that is
+	// held to this one asks the conversation as well.
 	Skipped bool
+	Missing bool
 }
 
 // Check asks every runner whether it answers and holds every model and role
 // against what the catalogues say. It reports every problem at once.
+//
+// A role the file names no model for is not one of them, however much serving
+// takes one: a conversation may have been given a model of its own for it,
+// which is not read here. What is held to that is held to it where the
+// conversation is open — serve, before it starts — and what only reads the
+// file says so from Missing.
 func (s *Setup) Check(ctx context.Context) error {
 	report := s.Report(ctx)
 	p := &api.Problems{}
@@ -306,6 +318,14 @@ func (s *Setup) checkRoles(models []ModelStatus) []RoleStatus {
 	for _, role := range config.Roles {
 		m, ok := s.Defaults[role]
 		if !ok {
+			// The one role serving takes a model for that the file may leave
+			// out is the one that embeds, since a conversation may have been
+			// given a model of its own for it. A file naming none for chat is
+			// refused before a setup is made from it, and seeing a picture is a
+			// choice.
+			if role == config.RoleEmbed {
+				out = append(out, RoleStatus{Role: role, Missing: true})
+			}
 			continue
 		}
 		catalogue := catalogues[m.Name]

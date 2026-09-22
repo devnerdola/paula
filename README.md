@@ -150,7 +150,10 @@ file; listing and forgetting ask nothing of a model. Forgetting is about what
 she carries: the messages a memory was read from, and the summary, stay where
 they are.
 
-`paula models` prints what each runner says about the models you configured.
+`paula models` prints what each runner says about the models you configured. A
+role serving takes a model for is listed whether or not your file names one, so
+a setup `serve` would refuse says so here first — and a role you gave a model
+to with `/model` is served by it, whatever the file leaves out.
 `paula models -available` lists everything the runners offer, which is how you
 find the id of a model to configure. Both read every runner's listing from its
 API. Nothing of a listing is kept between runs: both APIs answer it `no-store`.

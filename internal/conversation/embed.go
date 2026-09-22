@@ -37,6 +37,9 @@ func (e *Engine) embed(ctx context.Context) error {
 	if errors.Is(err, errNoModel) {
 		// A conversation the role cannot be filled from embeds nothing, and
 		// that is a choice rather than a failure of the fold this runs after.
+		// A run that serves asked for one before it started, so this is the
+		// role going away under a run that is already up — by a model it was
+		// given being taken out of the file it is read from.
 		return nil
 	}
 	if err != nil {
