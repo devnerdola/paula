@@ -88,7 +88,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		}
 		text.WriteString(c.Text)
 		e.events.publish(Event{
-			Kind: ReplyText, Entry: a.entry.ID, Channel: a.channel, Text: text.String(),
+			Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: text.String(),
 		})
 		return nil
 	})
@@ -134,11 +134,11 @@ func (e *Engine) replyMessage(a *attempt, text, reasoning string, interrupted bo
 	}
 	return &store.Message{
 		Role:        store.RoleAssistant,
-		Channel:     a.channel,
+		Channel:     a.entry.Channel,
 		Parts:       []store.Part{{Type: store.PartText, Text: text}},
 		Reasoning:   reasoning,
 		Interrupted: interrupted,
-		ReplyTo:     a.upto,
+		ReplyTo:     a.entry.UptoMessageID,
 		EntryID:     a.entry.ID,
 		CreatedAt:   e.clock.Now(),
 	}

@@ -382,6 +382,126 @@ func TestAFoldTakesTheOldestAndLeavesTheNewest(t *testing.T) {
 	}
 }
 
+// A fold runs beside a reply, so the exchange being answered is still
+// arriving: one folded away while it was would be summarised as a message that
+// went unanswered, and the reply would land with nothing before it.
+func TestAFoldLeavesWhatIsStillBeingAnswered(t *testing.T) {
+	groups := [][]store.Message{
+		{spoken(1, store.RoleUser), spoken(2, store.RoleAssistant)},
+		{spoken(3, store.RoleUser), spoken(4, store.RoleAssistant)},
+		{spoken(5, store.RoleUser)},
+	}
+	if got := foldable(groups, 3, 3); got != 2 {
+		t.Errorf("foldable = %d, want the two that were answered", got)
+	}
+	// The reply to the second is still being written, so only the first may go.
+	if got := foldable(groups, 1, 3); got != 1 {
+		t.Errorf("foldable = %d, want only the one that was answered", got)
+	}
+}
+
+// A message sent while a reply was being written is stored before that reply,
+// so the two exchanges hold ids that interleave. Cutting between them would
+// put a reply on the far side of the summary from the message it answers.
+func TestAFoldCutsWhereTheIdsDo(t *testing.T) {
+	// Message 3 answered by 5, message 4 answered by 6.
+	groups := [][]store.Message{
+		{spoken(1, store.RoleUser), spoken(2, store.RoleAssistant)},
+		{spoken(3, store.RoleUser), spoken(5, store.RoleAssistant)},
+		{spoken(4, store.RoleUser), spoken(6, store.RoleAssistant)},
+	}
+	// The sizes say to take the two oldest; the ids say only the first may go.
+	if got := foldable(groups, 6, 2); got != 1 {
+		t.Errorf("foldable = %d, want the cut before the ids interleave", got)
+	}
+	// Taking the interleaved pair whole is a cut the ids do fall apart at.
+	if got := foldable(groups, 6, 3); got != 3 {
+		t.Errorf("foldable = %d, want both of them when both may go", got)
+	}
+}
+
+// A fold runs beside a reply, so it reads a conversation whose newest
+// exchanges are still being answered. Taking one of those would write a
+// summary saying a message went unanswered, and leave the reply that is about
+// to be stored with nothing before it.
+func TestAFoldOverAConversationStillBeingAnswered(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: folding("hm", "Caio said something", "they talked")}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+	// Short enough that two exchanges fit one step, long enough that three of
+	// them are past what a fold leaves behind.
+	long := strings.Repeat("a long thing to say ", 35)
+
+	// One exchange that was answered, then one whose reply is written but
+	// which no entry covers, then the newest message of all.
+	answered := add(t, r, store.RoleUser, long)
+	add(t, r, store.RoleAssistant, long)
+	ended(t, r, answered)
+	add(t, r, store.RoleUser, long)
+	add(t, r, store.RoleAssistant, long)
+	add(t, r, store.RoleUser, long)
+
+	if _, err := r.foldStep(ctx); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := r.store.LatestSummary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.UptoMessageID != 2 {
+		t.Errorf("the summary covers up to %d, want only the exchange that was answered",
+			summary.UptoMessageID)
+	}
+}
+
+// add stores one message of the conversation, and answers with its number.
+func add(t *testing.T, r *replyEngine, role, text string) store.MessageID {
+	t.Helper()
+	m := &store.Message{Role: role, Channel: "repl", CreatedAt: r.clock.Now(),
+		Parts: []store.Part{{Type: store.PartText, Text: text}}}
+	if err := r.store.AddMessage(context.Background(), m); err != nil {
+		t.Fatal(err)
+	}
+	return m.ID
+}
+
+// ended writes down an entry that answered up to a message, which is what says
+// the conversation has been answered that far.
+func ended(t *testing.T, r *replyEngine, upto store.MessageID) {
+	t.Helper()
+	ctx := context.Background()
+	entry := &store.Entry{Channel: "repl", UptoMessageID: upto, StartedAt: r.clock.Now()}
+	if err := r.store.StartEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	entry.Status, entry.EndedAt = store.StatusDone, r.clock.Now()
+	if err := r.store.EndEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func spoken(id store.MessageID, role string) store.Message {
+	return store.Message{ID: id, Role: role,
+		Parts: []store.Part{{Type: store.PartText, Text: "something"}}}
+}
+
+// A model told to reply with an object often writes it inside a code fence,
+// the way it would to a person. A fold that could not read that would stop for
+// the rest of the run.
+func TestJSONInsideAFenceIsRead(t *testing.T) {
+	for _, c := range []struct{ what, text, want string }{
+		{"bare", `{"memories": []}`, `{"memories": []}`},
+		{"fenced", "```\n{\"memories\": []}\n```", `{"memories": []}`},
+		{"fenced as json", "```json\n{\"memories\": []}\n```", `{"memories": []}`},
+		{"fenced with words after", "```json\n{\"a\": 1}\n```\nthat is all", `{"a": 1}`},
+		{"an opening fence alone", "```json", "```json"},
+	} {
+		if got := unfenced(c.text); got != c.want {
+			t.Errorf("%s = %q, want %q", c.what, got, c.want)
+		}
+	}
+}
+
 func TestASummaryCoversNothingLeftBehind(t *testing.T) {
 	// A message sent while a reply was being written is stored before that
 	// reply, so the chunk ends on an id newer than one left behind: a summary

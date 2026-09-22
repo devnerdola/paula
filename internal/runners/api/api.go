@@ -4,7 +4,32 @@
 // internal/runners itself.
 package api
 
-import "fmt"
+import (
+	"context"
+	"errors"
+	"fmt"
+)
+
+// A request cut off here says so in its own words: a context that was
+// cancelled reads the same however it was cancelled, and what came of a
+// request is read by whoever asked for it.
+var (
+	// ErrIdle says a request was cut off because nothing arrived for the idle
+	// timeout. Without it, that reads the same as a stop.
+	ErrIdle = errors.New("nothing arrived for the idle timeout")
+	// ErrSlow says a request that is not a stream was still arriving when its
+	// time ran out. The request timeout it was given is named with it, since a
+	// runner sets its own.
+	ErrSlow = errors.New("the answer took longer than a request may take")
+)
+
+// Gone reports whether an error is a request that never finished: the
+// connection went, or it was given up on. What a host said is not one of
+// these, and nothing is learned from a request that was cut off.
+func Gone(err error) bool {
+	return errors.Is(err, ErrIdle) || errors.Is(err, ErrSlow) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
 
 // Model is what a catalogue says about a model.
 type Model struct {

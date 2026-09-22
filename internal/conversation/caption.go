@@ -17,29 +17,51 @@ const captionPrompt = "Describe this image in one or two sentences."
 // described is the line that stands for an image that is not sent as one. The
 // reply that needs it asks for it, and an image is asked about once.
 func (e *Engine) described(ctx context.Context, a *attempt, sha256 string) string {
+	if line, ok := e.captions.Load(sha256); ok {
+		return line.(string)
+	}
 	m, err := e.store.Media(ctx, sha256)
 	if err != nil {
 		e.log.Warn("reading what an image shows", "sha256", sha256, "error", err)
 		return "[photo]"
 	}
 	if m.Caption != "" {
-		return "[photo: " + m.Caption + "]"
+		return e.caption(sha256, m.Caption)
 	}
 	if m.CaptionError != "" {
 		return "[photo]"
 	}
 	caption, err := e.ask(ctx, a, sha256)
 	if err != nil {
-		// No vision model, and a look cut short by a stop, are both asked for.
-		switch {
-		case errors.Is(err, errNoModel), errors.Is(err, context.Canceled),
-			errors.Is(err, context.DeadlineExceeded):
-		default:
+		// No vision model, and a look that was cut short, are both asked again.
+		if !errors.Is(err, errNoModel) && !api.Gone(err) {
 			e.log.Warn("describing an image", "sha256", sha256, "error", err)
 		}
 		return "[photo]"
 	}
-	return "[photo: " + caption + "]"
+	return e.caption(sha256, caption)
+}
+
+// caption is the line a described picture reads as, kept for the prompts and
+// the folds that follow: what a picture shows is written down once.
+func (e *Engine) caption(sha256, caption string) string {
+	line := "[photo: " + caption + "]"
+	e.captions.Store(sha256, line)
+	return line
+}
+
+// known is what a picture is written as, as far as anything has been asked. It
+// asks nothing itself: it is what weighing an exchange reads, and weighing one
+// is not what makes a model look at a picture.
+func (e *Engine) known(ctx context.Context, sha256 string) string {
+	if line, ok := e.captions.Load(sha256); ok {
+		return line.(string)
+	}
+	m, err := e.store.Media(ctx, sha256)
+	if err != nil || m.Caption == "" {
+		return "[photo]"
+	}
+	return e.caption(sha256, m.Caption)
 }
 
 // ask asks the vision model what an image shows and keeps the answer.
@@ -80,8 +102,10 @@ func (e *Engine) ask(ctx context.Context, a *attempt, sha256 string) (string, er
 	}
 	if err != nil {
 		// A look that was cut short says nothing about the image, so nothing is
-		// kept of it and the next reply asks again.
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// kept of it and the next reply asks again. A stop, a run that ended and
+		// a connection that went are all of them: what a host said is what is
+		// worth keeping.
+		if api.Gone(err) {
 			return "", err
 		}
 		if serr := e.store.SetCaptionError(keep, sha256, err.Error()); serr != nil {

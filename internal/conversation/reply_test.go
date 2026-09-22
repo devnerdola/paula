@@ -375,6 +375,59 @@ func TestThePromptOfAReply(t *testing.T) {
 	}
 }
 
+// What time it is now is told before the message she is answering. The last of
+// what a prompt carries is not always that message: a reply written while the
+// next one arrived carries the higher id of the two, and one whose own message
+// the summary covers keeps the place its id gives it, so the prompt would end
+// on her own earlier reply and never say what time it is.
+func TestTheTimeIsToldBeforeTheMessageSheIsAnswering(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hm")}
+	r := openReply(t, f)
+	ctx := context.Background()
+
+	// A reply that answers a message the summary covers, and a message after
+	// it that is the one being answered now.
+	covered := add(t, r, store.RoleUser, "the one it answers")
+	if err := r.store.Fold(ctx, &store.Summary{UptoMessageID: covered,
+		Content: "they talked"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	answering := add(t, r, store.RoleUser, "and this one")
+	reply := &store.Message{Role: store.RoleAssistant, Channel: "repl",
+		ReplyTo: covered, CreatedAt: r.clock.Now(),
+		Parts: []store.Part{{Type: store.PartText, Text: "what she said before"}}}
+	if err := r.store.AddMessage(ctx, reply); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := r.roleModel(ctx, config.RoleChat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &attempt{entry: &store.Entry{Channel: "repl", UptoMessageID: answering}}
+	prompt, err := r.prompt(ctx, a, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var said []string
+	for _, msg := range prompt {
+		said = append(said, msg.Role+": "+text(msg))
+	}
+	var now int
+	for i, s := range said {
+		if strings.HasPrefix(s, "system: It is now ") {
+			now = i
+		}
+	}
+	if now == 0 {
+		t.Fatalf("the prompt never says what time it is:\n%s", strings.Join(said, "\n"))
+	}
+	if said[now+1] != "user: and this one" {
+		t.Errorf("the time stands before %q, want the message she is answering", said[now+1])
+	}
+}
+
 func text(m api.Message) string {
 	var b strings.Builder
 	for _, p := range m.Parts {
@@ -446,6 +499,27 @@ func TestAReplyGoesAfterTheMessagesItAnswers(t *testing.T) {
 	}
 	if !strings.HasSuffix(texts[0], "first") || texts[1] != "one moment" || !strings.HasSuffix(texts[2], "second") {
 		t.Errorf("messages = %q, want the reply after the message it answers", texts)
+	}
+}
+
+// A picture sent with nothing said about it is the picture. A part with no
+// text in it beside it is a message an OpenAI-compatible host refuses, which
+// would fail the reply for as long as the picture is sent as one.
+func TestAPictureSentWithNothingSaidAboutIt(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("nice one")}
+	f.model.Vision = true
+	r := openReplyWith(t, f, setup(f))
+
+	sendPhoto(t, r, "", photo(t))
+
+	mine := mine(f.asked())
+	if len(mine.Parts) != 1 || mine.Parts[0].Type != api.PartImage {
+		t.Errorf("the message is %+v, want the picture and nothing else", mine.Parts)
+	}
+	for _, p := range mine.Parts {
+		if p.Type == api.PartText && p.Text == "" {
+			t.Error("the message carries a text part with nothing in it")
+		}
 	}
 }
 

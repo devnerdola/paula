@@ -48,9 +48,9 @@ const (
 // attempt is one running entry. The loop and the goroutine writing the reply
 // both read how far it has got, so it is held in an atomic.
 type attempt struct {
-	entry   *store.Entry
-	upto    store.MessageID
-	channel string
+	// entry is what is written down of it, and what says which messages it is
+	// answering and where they were sent from.
+	entry *store.Entry
 	// foldDue says the messages this attempt's prompt carried took more than
 	// their share of the context, and compactDue that the summary it opened
 	// with took more than its room. The goroutine building the prompt is the
@@ -158,6 +158,10 @@ type Engine struct {
 	// costs are what a character and a picture of a prompt come to, which every
 	// request that comes back counted says more about.
 	costs costs
+	// captions are what a picture is written as once something has described
+	// it, which never changes again. Every prompt carries the pictures of the
+	// messages it holds, and a fold weighs the same ones a second time.
+	captions sync.Map
 
 	posts     chan postRequest
 	stops     chan stopRequest
@@ -727,7 +731,7 @@ func (l *loop) begin(ctx context.Context) {
 	}
 
 	replyCtx, cancel := context.WithCancel(ctx)
-	a := &attempt{entry: entry, upto: l.last, channel: l.channel, cancel: cancel}
+	a := &attempt{entry: entry, cancel: cancel}
 	l.running = a
 	e.events.publish(Event{Kind: ReplyStarted, Entry: entry.ID, Channel: l.channel})
 
@@ -773,20 +777,26 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 
 	switch status {
 	case store.StatusRestarted:
-		e.events.publish(Event{Kind: ReplyRestarted, Entry: a.entry.ID, Channel: a.channel})
+		e.events.publish(Event{Kind: ReplyRestarted, Entry: a.entry.ID, Channel: a.entry.Channel})
 	case store.StatusStopped:
-		l.answered = max(l.answered, a.upto)
-		e.events.publish(Event{Kind: ReplyStopped, Entry: a.entry.ID, Channel: a.channel, Message: r.message})
+		l.answered = max(l.answered, a.entry.UptoMessageID)
+		e.events.publish(Event{Kind: ReplyStopped, Entry: a.entry.ID, Channel: a.entry.Channel, Message: r.message})
 	case store.StatusFailed:
 		// A reply that failed answered nothing, so the messages it was for are
 		// covered by the next one, whether that comes of another message or of
-		// the next run.
-		e.events.publish(Event{Kind: ReplyFailed, Entry: a.entry.ID, Channel: a.channel, Text: r.err.Error()})
+		// the next run. One sent while it was being written is not that next
+		// message: nobody has answered it, and nothing else would.
+		e.events.publish(Event{Kind: ReplyFailed, Entry: a.entry.ID, Channel: a.entry.Channel, Text: r.err.Error()})
+		if l.last > a.entry.UptoMessageID {
+			l.pending = true
+			l.debounce.Reset(e.cfg.Debounce.Duration())
+			return
+		}
 		l.wake()
 		return
 	default:
-		l.answered = max(l.answered, a.upto)
-		e.events.publish(Event{Kind: ReplyDone, Entry: a.entry.ID, Channel: a.channel, Message: r.message})
+		l.answered = max(l.answered, a.entry.UptoMessageID)
+		e.events.publish(Event{Kind: ReplyDone, Entry: a.entry.ID, Channel: a.entry.Channel, Message: r.message})
 	}
 
 	if l.last > l.answered {

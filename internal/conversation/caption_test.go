@@ -104,6 +104,38 @@ func TestAnImageThatCannotBeDescribed(t *testing.T) {
 	}
 }
 
+// A look that was cut off says nothing about the image: the connection went,
+// which is not the model saying it cannot describe it.
+func TestALookThatWasCutOffIsAskedAgain(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("nice one")}
+	eyes := &fakeRunner{model: visionModel()}
+	eyes.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
+		return nil, api.ErrIdle
+	}
+	r := openSeeing(t, f, eyes)
+
+	sha := sendPhoto(t, r, "look at this", photo(t))
+
+	m, err := r.store.Media(context.Background(), sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CaptionError != "" {
+		t.Errorf("why it failed = %q, want nothing kept of a look that was cut off", m.CaptionError)
+	}
+
+	// The next reply asks again, and this time it is answered.
+	eyes.chat = says("a red square")
+	r.say(t, "and now?")
+	m, err = r.store.Media(context.Background(), sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Caption != "a red square" {
+		t.Errorf("caption = %q, want the image described on the next try", m.Caption)
+	}
+}
+
 // An image which could not be described is answered without a description.
 func TestAnImageThatFailedIsNotTriedAgain(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("nice one")}

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -566,9 +567,58 @@ func seen(e *Engine, kind Kind) bool {
 	return false
 }
 
+// A message sent while a reply was being written is one nobody has answered
+// when that reply fails: the failure answered nothing, and the message is not
+// the failure's to leave behind.
+func TestAMessageSentWhileAFailedReplyWasWrittenIsAnswered(t *testing.T) {
+	st := newStore(t)
+	c := newClock()
+	started := make(chan struct{})
+	hold := make(chan struct{})
+	var tries atomic.Int64
+	// The first reply writes something and then fails, so the message that
+	// arrives meanwhile cannot restart it and is left with nothing.
+	chat := func(_ context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		if tries.Add(1) == 1 {
+			if err := fn(api.Chunk{Kind: api.ChunkText, Text: "one moment"}); err != nil {
+				return nil, err
+			}
+			close(started)
+			<-hold
+			return nil, errHostAway
+		}
+		if err := fn(api.Chunk{Kind: api.ChunkText, Text: "here I am"}); err != nil {
+			return nil, err
+		}
+		return &api.Result{FinishReason: "stop"}, nil
+	}
+	e := open(t, st, c, chat)
+
+	post(t, e, "one")
+	c.Advance(config.DefaultEngine().Debounce.Duration())
+	<-started
+
+	// This lands while the reply that is about to fail is being written.
+	post(t, e, "two")
+	close(hold)
+	waitFor(t, "the failure", func() bool { return seen(e, ReplyFailed) })
+
+	// Nothing else is said, and the message that was left over is answered.
+	waitFor(t, "the reply to what was left over", func() bool {
+		c.Advance(config.DefaultEngine().Debounce.Duration())
+		return tries.Load() == 2
+	})
+	if _, err := e.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := replyTo(t, st); got != 2 {
+		t.Errorf("answered up to %d, want the message that was sent meanwhile", got)
+	}
+}
+
 // A message a failed reply could not answer is still unanswered, so the next
 // reply covers it and the new message both.
-func TestAFailedReplyIsTriedAgainWhenHeSaysSomethingElse(t *testing.T) {
+func TestAFailedReplyIsTriedAgainWithTheNextMessage(t *testing.T) {
 	st := newStore(t)
 	c := newClock()
 	a := &replies{failures: 1}

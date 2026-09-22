@@ -178,21 +178,29 @@ func (e *Engine) foldStep(ctx context.Context) (bool, error) {
 		return false, err
 	}
 
-	// Every exchange is measured as a prompt carries it, which is what a fold
-	// is deciding about: the text of what was said, and what a picture sent as
-	// a picture costs. Nothing here loads one or asks what one shows — how many
-	// there are is enough, and an exchange heavy with pictures is one a prompt
-	// cannot carry however short its words are.
+	// Every exchange is weighed as a prompt carries it, which is what a fold is
+	// deciding about: the same lines, and the same pictures. Nothing here loads
+	// a picture or asks what one shows — that a picture is there is what it
+	// weighs, and an exchange heavy with pictures is one a prompt cannot carry
+	// however short its words are.
 	ratio, image := e.costs.ratio(m.Name), e.costs.image(m.Name)
 	said := ordered(messages)
 	inline := e.inlineFrom(said, m)
 	groups := exchanges(said)
+	weighing := e.weighing(ctx)
 	sizes := make([]int, len(groups))
 	for i, group := range groups {
-		sizes[i] = size([]api.Message{api.Text(api.RoleUser, e.chunkText(group))}, ratio, 0) +
-			inlineImages(group, inline)*image
+		sizes[i] = size(e.exchange(group, inline, 0, weighing), ratio, image)
 	}
-	chunk := chunkOf(sizes, share(history, e.cfg.HistoryKeep), history)
+
+	// What the sizes say to take is what a fold wants; what it may take is a
+	// cut it is allowed to make, which is not always the same one.
+	answered, err := e.store.AnsweredUpto(ctx)
+	if err != nil {
+		return false, err
+	}
+	chunk := foldable(groups, answered,
+		chunkOf(sizes, share(history, e.cfg.HistoryKeep), history))
 	if chunk == 0 {
 		// Nothing older than the exchange she is answering, or what is there
 		// is already what a fold leaves behind. There is no work here, so
@@ -272,6 +280,52 @@ func coversUpto(taken, left []store.Message) store.MessageID {
 	return upto
 }
 
+// foldable is how many of the oldest exchanges a fold may take, of the most it
+// wants to: the largest number of them that may go at all.
+//
+// An exchange is one of them once every message she was sent in it has been
+// answered. A reply is written beside a fold, so the exchange it is answering
+// is still arriving, and one folded away while it was would be summarised as a
+// message that went unanswered.
+//
+// And the cut has to fall where the ids do. A reply written while the next
+// message arrived carries the higher id of the two, so taking its exchange and
+// leaving the other would put a reply on the far side of the summary from the
+// message it answers: the prompts that follow read it out of order, and the
+// fold after this one reads it a second time.
+func foldable(groups [][]store.Message, answered store.MessageID, most int) int {
+	// The oldest message of everything from each exchange onwards, and zero
+	// where there is nothing left.
+	after := make([]store.MessageID, len(groups)+1)
+	for i := len(groups) - 1; i >= 0; i-- {
+		after[i] = after[i+1]
+		for _, msg := range groups[i] {
+			if after[i] == 0 {
+				after[i] = msg.ID
+			}
+			after[i] = min(after[i], msg.ID)
+		}
+	}
+
+	var upto int
+	var newest store.MessageID
+	for i, group := range groups {
+		if i >= most {
+			break
+		}
+		for _, msg := range group {
+			if msg.Role == store.RoleUser && msg.ID > answered {
+				return upto
+			}
+			newest = max(newest, msg.ID)
+		}
+		if after[i+1] == 0 || newest < after[i+1] {
+			upto = i + 1
+		}
+	}
+	return upto
+}
+
 // chunkOf is how many of the oldest exchanges one step folds away: as many as
 // it takes to leave keep behind, while the chunk itself stays inside one
 // prompt's worth. The newest exchange is never one of them, since a fold that
@@ -315,6 +369,27 @@ func (e *Engine) summaryRoom(m *model, stored []store.Memory, ratio float64) int
 	return max(0, left)
 }
 
+// unfenced is the JSON of an answer that was asked for JSON. A model told to
+// reply with an object often writes it inside a code fence, the way it would
+// to a person. A fold that could not read that would stop for the rest of the
+// run, while every prompt after it dropped the oldest of the conversation
+// instead.
+func unfenced(text string) string {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "```") {
+		return text
+	}
+	// The first line is the fence, and whatever it says the language is.
+	_, rest, ok := strings.Cut(text, "\n")
+	if !ok {
+		return text
+	}
+	if at := strings.LastIndex(rest, "```"); at >= 0 {
+		rest = rest[:at]
+	}
+	return strings.TrimSpace(rest)
+}
+
 // memoryReply is what the model answers the memory request with.
 type memoryReply struct {
 	Memories []struct {
@@ -345,7 +420,7 @@ func (e *Engine) remember(ctx context.Context, a *attempt, m *model, stored []st
 	}
 
 	var reply memoryReply
-	if err := json.Unmarshal([]byte(strings.TrimSpace(text)), &reply); err != nil {
+	if err := json.Unmarshal([]byte(unfenced(text)), &reply); err != nil {
 		return nil, fmt.Errorf("the memories came back as something other than the JSON object asked for: %w", err)
 	}
 

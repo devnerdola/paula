@@ -573,14 +573,12 @@ func (c *Client) redacted(h http.Header) http.Header {
 	return out
 }
 
-// ErrIdle says a request was cut off because nothing arrived for the idle
-// timeout. Without it, that reads the same as a stop.
-var ErrIdle = errors.New("nothing arrived for the idle timeout")
-
-// ErrSlow says a request that is not a stream was still arriving when its time
-// ran out. The request timeout it was given is named with it, since a runner
-// sets its own.
-var ErrSlow = errors.New("the answer took longer than a request may take")
+// Why a request was cut off is vocabulary a caller reads, so it is the shared
+// one: a conversation tells a host that refused from a connection that went.
+var (
+	ErrIdle = api.ErrIdle
+	ErrSlow = api.ErrSlow
+)
 
 // cut names why a request was cut off here, since a cancelled context reads
 // the same however it was cancelled.

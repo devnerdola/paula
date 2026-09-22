@@ -55,7 +55,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	}
 	var kept []store.Message
 	for _, msg := range messages {
-		if msg.ID <= a.upto || msg.Role == store.RoleAssistant {
+		if msg.ID <= a.entry.UptoMessageID || msg.Role == store.RoleAssistant {
 			kept = append(kept, msg)
 		}
 	}
@@ -76,7 +76,12 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	}
 
 	inline := e.inlineFrom(kept, m)
-	last := kept[len(kept)-1].ID
+	// What time it is now is told before the message she is answering, which
+	// is the one the attempt is for. The last of what is carried is not always
+	// that one: a reply written while the next message arrived carries the
+	// higher id of the two, and one whose message the summary covers keeps the
+	// place its id gives it.
+	last := a.entry.UptoMessageID
 	image := e.costs.image(m.Name)
 	head := size([]api.Message{card}, ratio, image)
 	taken := head
@@ -87,8 +92,9 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	groups := exchanges(kept)
 	built := make([][]api.Message, 0, len(groups))
 	dropped := 0
+	sending := e.sending(ctx, a)
 	for i, group := range slices.Backward(groups) {
-		msgs := e.exchange(ctx, a, group, inline, last)
+		msgs := e.exchange(group, inline, last, sending)
 		// The exchange being answered goes whatever it takes, since leaving it
 		// out would answer nothing.
 		if n := size(msgs, ratio, image); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
@@ -198,7 +204,7 @@ func coveredUpto(summary *store.Summary) store.MessageID {
 // then what was said rather than a time. Each of those stands once it is
 // written, so a host that keeps a prompt keeps all of it but the time before
 // the last message.
-func (e *Engine) exchange(ctx context.Context, a *attempt, group []store.Message, inline, last store.MessageID) []api.Message {
+func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, r reading) []api.Message {
 	out := make([]api.Message, 0, 2*len(group))
 	for _, msg := range group {
 		if msg.Role == store.RoleUser {
@@ -210,9 +216,39 @@ func (e *Engine) exchange(ctx context.Context, a *attempt, group []store.Message
 			}
 			out = append(out, api.Text(api.RoleSystem, when))
 		}
-		out = append(out, e.message(ctx, a, msg, inline))
+		out = append(out, e.message(msg, inline, r))
 	}
 	return out
+}
+
+// reading is how the messages of an exchange are built: what a picture that is
+// not sent as one is described as, and whether a picture that is sent as one
+// carries its bytes.
+//
+// A prompt reads an exchange to send it, so it asks for what it does not know
+// and carries what it sends. A fold reads the same exchanges to weigh them, so
+// it asks nothing and loads nothing: what a picture costs is counted, and
+// pictures are counted whether or not the bytes are there. Both read them the
+// same way, or what the prompt says is over its share is not what the fold
+// takes away.
+type reading struct {
+	describe func(sha256 string) string
+	load     bool
+}
+
+// sending is how a prompt reads an exchange, under the attempt it is for.
+func (e *Engine) sending(ctx context.Context, a *attempt) reading {
+	return reading{
+		describe: func(sha256 string) string { return e.described(ctx, a, sha256) },
+		load:     true,
+	}
+}
+
+// weighing is how a fold reads an exchange it is deciding about.
+func (e *Engine) weighing(ctx context.Context) reading {
+	return reading{
+		describe: func(sha256 string) string { return e.known(ctx, sha256) },
+	}
 }
 
 // ordered puts a reply right after the messages it answers, which is not where
@@ -264,23 +300,7 @@ func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID 
 	return messages[0].ID
 }
 
-// inlineImages is how many pictures of an exchange go to the model as
-// pictures rather than as the line that describes them, which is what they
-// weigh in a prompt.
-func inlineImages(group []store.Message, inline store.MessageID) int {
-	if inline == 0 {
-		return 0
-	}
-	var n int
-	for _, msg := range group {
-		if msg.Role == store.RoleUser && msg.ID >= inline {
-			n += len(msg.Images())
-		}
-	}
-	return n
-}
-
-func (e *Engine) message(ctx context.Context, a *attempt, msg store.Message, inline store.MessageID) api.Message {
+func (e *Engine) message(msg store.Message, inline store.MessageID, r reading) api.Message {
 	if msg.Role == store.RoleAssistant {
 		return api.Text(api.RoleAssistant, msg.Text())
 	}
@@ -294,9 +314,16 @@ func (e *Engine) message(ctx context.Context, a *attempt, msg store.Message, inl
 	var images []api.Part
 	for _, p := range msg.Images() {
 		// Every image is described when it is first seen, whether or not the
-		// model is also shown the image.
-		described := e.described(ctx, a, p.SHA256)
+		// model is also shown the image: one that ages out of what is sent as
+		// pictures is carried by the line describing it from then on.
+		described := r.describe(p.SHA256)
 		if inline > 0 && msg.ID >= inline {
+			// What a picture weighs is that it is one, not what its bytes are,
+			// so weighing an exchange counts a picture without reading it.
+			if !r.load {
+				images = append(images, api.Part{Type: api.PartImage, MIME: media.MIMEJPEG})
+				continue
+			}
 			data, err := e.media.Load(p.SHA256)
 			if err == nil {
 				images = append(images, api.Part{
@@ -310,6 +337,11 @@ func (e *Engine) message(ctx context.Context, a *attempt, msg store.Message, inl
 	}
 
 	out := api.Message{Role: api.RoleUser}
-	out.Parts = append([]api.Part{{Type: api.PartText, Text: strings.Join(lines, "\n")}}, images...)
+	// A picture sent with nothing said about it is the picture: a text part
+	// with nothing in it is a message a host refuses.
+	if len(lines) > 0 {
+		out.Parts = append(out.Parts, api.Part{Type: api.PartText, Text: strings.Join(lines, "\n")})
+	}
+	out.Parts = append(out.Parts, images...)
 	return out
 }
