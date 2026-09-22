@@ -5,6 +5,7 @@ import (
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/runners/openai"
 )
 
 // provider holds the request parameters only OpenRouter documents.
@@ -68,30 +69,21 @@ var (
 	ttls        = []string{"5m", "1h"}
 )
 
+// decodeProvider reads the block only OpenRouter documents.
 func decodeProvider(s config.Section) (*provider, []error) {
-	var p provider
-	if s.Set() {
-		if err := s.Decode(&p); err != nil {
-			return nil, []error{err}
-		}
-	}
-	return &p, p.validate()
+	return openai.DecodeProvider[provider](s)
 }
 
-func (p *provider) validate() []error {
+// Validate holds the block against what the API documents.
+func (p *provider) Validate() []error {
 	out := &api.Problems{}
 	addf := out.Addf
 
-	oneOf := func(key, v string, allowed []string) {
-		if v != "" && !slices.Contains(allowed, v) {
-			addf("provider.%s: %q is not one of %v", key, v, allowed)
-		}
-	}
-	oneOf("routing.data_collection", p.Routing.DataCollection, dataCollections)
-	oneOf("routing.sort.by", p.Routing.Sort.By, sortsBy)
-	oneOf("routing.sort.partition", p.Routing.Sort.Partition, partitions)
-	oneOf("service_tier", p.ServiceTier, tiers)
-	oneOf("cache.control.ttl", p.Cache.Control.TTL, ttls)
+	api.OneOf(out, "provider.routing.data_collection", p.Routing.DataCollection, dataCollections)
+	api.OneOf(out, "provider.routing.sort.by", p.Routing.Sort.By, sortsBy)
+	api.OneOf(out, "provider.routing.sort.partition", p.Routing.Sort.Partition, partitions)
+	api.OneOf(out, "provider.service_tier", p.ServiceTier, tiers)
+	api.OneOf(out, "provider.cache.control.ttl", p.Cache.Control.TTL, ttls)
 	if t := p.Cache.Control.Type; t != "" && t != "ephemeral" {
 		addf("provider.cache.control.type: %q is not ephemeral", t)
 	}

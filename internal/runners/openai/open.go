@@ -71,6 +71,29 @@ func Decode(s config.Section, defaults Config) (Config, *api.Problems) {
 	return cfg, p
 }
 
+// Validator is a runner's own provider block, which holds itself against what
+// its API documents.
+type Validator interface {
+	Validate() []error
+}
+
+// DecodeProvider reads the provider block of a section into the type a runner
+// keeps it in, and holds it against what that API documents. A block that was
+// not written reads as one with nothing set, which every key of it then takes
+// the default of.
+func DecodeProvider[T any, P interface {
+	*T
+	Validator
+}](s config.Section) (P, []error) {
+	p := P(new(T))
+	if s.Set() {
+		if err := s.Decode(p); err != nil {
+			return nil, []error{err}
+		}
+	}
+	return p, p.Validate()
+}
+
 // Client is the client the configuration describes. The token is registered as a
 // secret of the run, since from here on it is sent with every request.
 func (c Config) Client(name string, h api.Host, hooks Hooks) *Client {

@@ -210,3 +210,11 @@ func Between(p *Problems, key string, v *float64, lo, hi float64) {
 		p.Addf("%s: %v is outside %v to %v", key, *v, lo, hi)
 	}
 }
+
+// OneOf reports a value that is not one of the ones an API documents. A value
+// that was never written is every API's own default.
+func OneOf(p *Problems, key, v string, allowed []string) {
+	if v != "" && !slices.Contains(allowed, v) {
+		p.Addf("%s: %q is not one of %v", key, v, allowed)
+	}
+}

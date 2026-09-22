@@ -1,10 +1,9 @@
 package venice
 
 import (
-	"slices"
-
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/runners/openai"
 )
 
 // maxFallbacks is the ten models a request may fall back to.
@@ -47,26 +46,17 @@ var (
 	searchers   = []string{"brave", "google"}
 )
 
+// decodeProvider reads the block only Venice documents.
 func decodeProvider(s config.Section) (*provider, []error) {
-	var p provider
-	if s.Set() {
-		if err := s.Decode(&p); err != nil {
-			return nil, []error{err}
-		}
-	}
-	return &p, p.validate()
+	return openai.DecodeProvider[provider](s)
 }
 
-func (p *provider) validate() []error {
+// Validate holds the block against what the API documents.
+func (p *provider) Validate() []error {
 	out := &api.Problems{}
-	oneOf := func(key, v string, allowed []string) {
-		if v != "" && !slices.Contains(allowed, v) {
-			out.Addf("provider.%s: %q is not one of %v", key, v, allowed)
-		}
-	}
-	oneOf("output.verbosity", p.Output.Verbosity, verbosities)
-	oneOf("cache.retention", p.Cache.Retention, retentions)
-	oneOf("search.provider", p.Search.Provider, searchers)
+	api.OneOf(out, "provider.output.verbosity", p.Output.Verbosity, verbosities)
+	api.OneOf(out, "provider.cache.retention", p.Cache.Retention, retentions)
+	api.OneOf(out, "provider.search.provider", p.Search.Provider, searchers)
 
 	api.Between(out, "provider.sampling.min_temperature", p.Sampling.MinTemperature, 0, 2)
 	api.Between(out, "provider.sampling.max_temperature", p.Sampling.MaxTemperature, 0, 2)
