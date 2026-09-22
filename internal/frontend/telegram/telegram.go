@@ -141,6 +141,10 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 	f.log.Info("telegram polling", "bot", name, "user", f.user)
 
 	a := &adapter{f: f, inputs: make(chan api.Input)}
+	// The asking is stopped with the session and waited for, so a run that has
+	// returned has written down everything it is going to.
+	defer a.polled()
+	defer stop()
 	if f.stream {
 		return session(ctx, &editing{adapter: a})
 	}
@@ -297,6 +301,9 @@ type adapter struct {
 	// wrote is what she has written that is not a finished text yet. A session
 	// hands over what she writes from the one goroutine it runs on.
 	wrote api.Written
+	// polling is closed once the asking is over, so a run knows when nothing
+	// of it is still writing.
+	polling chan struct{}
 }
 
 // Writing shows that she is writing, or stops showing it. Telegram holds the
@@ -394,8 +401,21 @@ func (a *adapter) Start(ctx context.Context) (<-chan api.Input, error) {
 	if err != nil {
 		return nil, err
 	}
-	go a.poll(ctx, offset)
+	a.polling = make(chan struct{})
+	go func() {
+		defer close(a.polling)
+		a.poll(ctx, offset)
+	}()
 	return a.inputs, nil
+}
+
+// polled waits for the asking to be over, which is what a run returns after:
+// what it writes down it writes as it goes, so a run that has returned is not
+// still writing in the data directory.
+func (a *adapter) polled() {
+	if a.polling != nil {
+		<-a.polling
+	}
 }
 
 // Send writes one thing to the chat. What she wrote as separate paragraphs is
@@ -540,11 +560,34 @@ func (f *Frontend) read() (int64, error) {
 // took writes down that an update was handed over. What is kept is the one to
 // ask for next: the API hands back everything from the offset it is given, so
 // keeping the one that was taken would have it handed over again.
+//
+// It is written beside the file and moved over it, so what is there is always
+// a whole number: a write that truncates first leaves nothing to read when the
+// run ends in the middle of it, and a run that starts on that asks for
+// everything Telegram still holds and answers it all a second time.
 func (f *Frontend) took(id int64) {
-	err := os.WriteFile(f.offset, []byte(strconv.FormatInt(id+1, 10)+"\n"), 0o600)
-	if err != nil {
+	if err := f.keep(id + 1); err != nil {
 		f.log.Error("keeping where telegram is read from", "error", err)
 	}
+}
+
+func (f *Frontend) keep(next int64) error {
+	tmp, err := os.CreateTemp(filepath.Dir(f.offset), "offset-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(strconv.FormatInt(next, 10) + "\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), f.offset)
 }
 
 // poll asks what arrived, over and over, and hands each of them to the session

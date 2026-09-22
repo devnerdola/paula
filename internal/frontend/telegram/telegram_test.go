@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -294,14 +296,18 @@ func open(t *testing.T, b *bot, dataDir, section string) (*Frontend, *strings.Bu
 }
 
 // inputs runs the frontend and gathers what arrives, until want of them have,
-// and returns them with the run stopped.
+// and returns them with the run over: what a run writes down it writes as it
+// goes, so a test that read what it wanted waits for the run before it looks
+// at the directory the run is writing in.
 func inputs(t *testing.T, f *Frontend, want int) []api.Input {
 	t.Helper()
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 
 	got := make(chan []api.Input, 1)
+	ended := make(chan struct{})
 	go func() {
+		defer close(ended)
 		var out []api.Input
 		_ = f.Run(ctx, func(ctx context.Context, a api.Adapter) error {
 			in, err := a.Start(ctx)
@@ -318,13 +324,20 @@ func inputs(t *testing.T, f *Frontend, want int) []api.Input {
 			return nil
 		})
 	}()
+	var out []api.Input
 	select {
-	case out := <-got:
-		return out
+	case out = <-got:
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for what was sent to arrive")
 		return nil
 	}
+	stop()
+	select {
+	case <-ended:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run is still going after it was stopped")
+	}
+	return out
 }
 
 func TestWhatIsSentArrives(t *testing.T) {
@@ -368,6 +381,49 @@ func TestOnlyTheOnePersonIsAnswered(t *testing.T) {
 
 // A run that ended answered what it took, so the run after it asks for what
 // came next rather than answering the same messages again.
+// What is written down is a whole number or nothing at all. A write that
+// empties the file before filling it leaves nothing to read when the run ends
+// in the middle of one, and the run after that asks for everything Telegram
+// still holds and answers all of it a second time.
+func TestWhereTelegramIsReadFromIsNeverHalfWritten(t *testing.T) {
+	dir := t.TempDir()
+	f := &Frontend{offset: filepath.Join(dir, offsetFile), log: slog.New(slog.DiscardHandler)}
+
+	written := make(chan struct{})
+	go func() {
+		defer close(written)
+		for i := range 500 {
+			f.took(int64(i))
+		}
+	}()
+
+	var reads, whole int
+	for {
+		select {
+		case <-written:
+			if reads == 0 {
+				t.Fatal("the file was never read while it was being written")
+			}
+			if whole != reads {
+				t.Errorf("%d of %d reads caught it half written", reads-whole, reads)
+			}
+			return
+		default:
+		}
+		b, err := os.ReadFile(f.offset)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		reads++
+		if _, err := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64); err == nil {
+			whole++
+		}
+	}
+}
+
 func TestTheRunAfterOneAsksForWhatCameNext(t *testing.T) {
 	dir := t.TempDir()
 	b := newBot(t, []update{from(10, 7, message{Text: "hey"})})
