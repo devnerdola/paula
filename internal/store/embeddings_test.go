@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -30,7 +29,7 @@ func TestAMemoryIsEmbeddedOncePerModel(t *testing.T) {
 	second := remembers(t, s, "I cook on saturdays", "Caio cooks for friends on Saturdays.")
 
 	// Nothing is embedded yet, so both are waiting.
-	waiting, err := s.MemoriesToEmbed(ctx, bge, 10)
+	waiting, err := s.MemoriesToEmbed(ctx, bge, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +41,7 @@ func TestAMemoryIsEmbeddedOncePerModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	waiting, err = s.MemoriesToEmbed(ctx, bge, 10)
+	waiting, err = s.MemoriesToEmbed(ctx, bge, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +52,7 @@ func TestAMemoryIsEmbeddedOncePerModel(t *testing.T) {
 	// A vector of one model says nothing about another, so under another model
 	// both are waiting again.
 	other := Embedded{Runner: "openrouter", Model: "openai/text-embedding-3-small"}
-	if waiting, err := s.MemoriesToEmbed(ctx, other, 10); err != nil || len(waiting) != 2 {
+	if waiting, err := s.MemoriesToEmbed(ctx, other, 0, 10); err != nil || len(waiting) != 2 {
 		t.Errorf("waiting under another model = %+v, %v", waiting, err)
 	}
 }
@@ -77,7 +76,7 @@ func TestMemoriesAreFoundByWhatTheyMean(t *testing.T) {
 
 	// Nearly the first, and the second next: how alike they point is what
 	// orders them, not how long they are.
-	found, err := s.NearestMemories(ctx, bge, []float32{9, 3, 0}, 2)
+	found, _, err := s.NearestMemories(ctx, bge, []float32{9, 3, 0}, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +86,7 @@ func TestMemoriesAreFoundByWhatTheyMean(t *testing.T) {
 	if found[0].Content != "Caio's sister Ana lives in Lisbon." || found[0].SaidAt.IsZero() {
 		t.Errorf("found = %+v, want the whole memory", found[0])
 	}
-	if found, err := s.NearestMemories(ctx, bge, []float32{0, 0, 1}, 1); err != nil ||
+	if found, _, err := s.NearestMemories(ctx, bge, []float32{0, 0, 1}, 1); err != nil ||
 		len(found) != 1 || found[0].ID != bike.ID {
 		t.Errorf("found %+v, %v, want the memory about the bicycle", found, err)
 	}
@@ -106,7 +105,7 @@ func TestWhatIsSearchedIsWhatStandsAndWhatThisModelEmbedded(t *testing.T) {
 
 	// The one that was replaced is kept, so that forgetting can take it too,
 	// but nothing searches it.
-	found, err := s.NearestMemories(ctx, bge, []float32{1, 0, 0}, 10)
+	found, _, err := s.NearestMemories(ctx, bge, []float32{1, 0, 0}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +114,7 @@ func TestWhatIsSearchedIsWhatStandsAndWhatThisModelEmbedded(t *testing.T) {
 	}
 	// Nothing was embedded by another model, so nothing is near anything.
 	other := Embedded{Runner: "openrouter", Model: "openai/text-embedding-3-small"}
-	if found, err := s.NearestMemories(ctx, other, []float32{1, 0, 0}, 10); err != nil || len(found) != 0 {
+	if found, _, err := s.NearestMemories(ctx, other, []float32{1, 0, 0}, 10); err != nil || len(found) != 0 {
 		t.Errorf("found %+v, %v under a model that embedded nothing", found, err)
 	}
 }
@@ -149,7 +148,7 @@ func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
 		t.Errorf("what is left is %+v, want the memory about the bicycle", left)
 	}
 	// The vectors go with them: nothing is near a memory that is not there.
-	near, err := s.NearestMemories(ctx, bge, []float32{1, 0, 0}, 10)
+	near, _, err := s.NearestMemories(ctx, bge, []float32{1, 0, 0}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,10 +186,10 @@ func TestAMemoryForgottenWhileItIsEmbeddedLeavesTheRestEmbedded(t *testing.T) {
 		t.Fatalf("a memory that went took the batch with it: %v", err)
 	}
 
-	if waiting, err := s.MemoriesToEmbed(ctx, bge, 10); err != nil || len(waiting) != 0 {
+	if waiting, err := s.MemoriesToEmbed(ctx, bge, 0, 10); err != nil || len(waiting) != 0 {
 		t.Errorf("waiting = %+v, %v, want the batch stored", waiting, err)
 	}
-	found, err := s.NearestMemories(ctx, bge, []float32{0, 0, 1}, 10)
+	found, _, err := s.NearestMemories(ctx, bge, []float32{0, 0, 1}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,20 +198,40 @@ func TestAMemoryForgottenWhileItIsEmbeddedLeavesTheRestEmbedded(t *testing.T) {
 	}
 }
 
-func TestAQueryOfAnotherWidthIsRefused(t *testing.T) {
+// A model answers at one width. Another width is another model, whatever it
+// was stored under, so measuring the two against each other would answer with
+// numbers that mean nothing — and refusing the whole search over one of them
+// would leave nothing searchable at all.
+func TestAVectorOfAnotherWidthIsAnotherModels(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	m := remembers(t, s, "Ana lives in Lisbon", "Caio's sister Ana lives in Lisbon.")
-	if err := s.Embed(ctx, bge, map[MemoryID][]float32{m.ID: {1, 0, 0}}); err != nil {
+	was := remembers(t, s, "Ana lives in Lisbon", "Caio's sister Ana lives in Lisbon.")
+	if err := s.Embed(ctx, bge, map[MemoryID][]float32{was.ID: {1, 0, 0}}); err != nil {
 		t.Fatal(err)
 	}
 
-	// A model answers at one width. Another width is another model, whatever
-	// it was stored under, and measuring the two against each other would
-	// answer with numbers that mean nothing.
-	_, err := s.NearestMemories(ctx, bge, []float32{1, 0}, 10)
-	if err == nil || !strings.Contains(err.Error(), "wide") {
-		t.Errorf("error = %v, want it to say the widths differ", err)
+	// The model now answers two wide. What it wrote three wide is left out of
+	// the search, and the search says how much of what she remembers that was.
+	found, elsewhere, err := s.NearestMemories(ctx, bge, []float32{1, 0}, 10)
+	if err != nil {
+		t.Fatalf("NearestMemories = %v, want a search of what it can measure", err)
+	}
+	if len(found) != 0 || elsewhere != 1 {
+		t.Errorf("found %+v and left out %d, want the one of another width left out", found, elsewhere)
+	}
+
+	// A memory written at the width it answers at now is what says which width
+	// its vectors are, so what it wrote before is waiting to be written again.
+	now := remembers(t, s, "Caio rides a bicycle", "Caio rides a bicycle to work.")
+	if err := s.Embed(ctx, bge, map[MemoryID][]float32{now.ID: {0, 1}}); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := s.MemoriesToEmbed(ctx, bge, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != 1 || waiting[0].ID != was.ID {
+		t.Errorf("waiting = %+v, want the one of the width it no longer answers at", waiting)
 	}
 }
 

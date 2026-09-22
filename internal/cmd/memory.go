@@ -121,9 +121,15 @@ func memorySearchCommand() *command {
 					return fmt.Errorf("the query was embedded as %d vectors", len(out.Vectors))
 				}
 				by := store.Embedded{Runner: m.Runner.Name(), Model: m.ID}
-				found, err := s.NearestMemories(ctx, by, out.Vectors[0], *n)
+				found, elsewhere, err := s.NearestMemories(ctx, by, out.Vectors[0], *n)
 				if err != nil {
 					return err
+				}
+				if elsewhere > 0 {
+					// The model answers at another width than it did when
+					// those were written, so they are another model's as far
+					// as a vector goes. A serve writes them again.
+					fmt.Fprintf(g.stderr, "%d memories are embedded at another width and are not searched\n", elsewhere)
 				}
 				return listMemories(g.stdout, found)
 			}

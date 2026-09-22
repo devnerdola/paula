@@ -162,6 +162,18 @@ type Engine struct {
 	// it, which never changes again. Every prompt carries the pictures of the
 	// messages it holds, and a fold weighs the same ones a second time.
 	captions sync.Map
+	// widths are how wide each model's vectors came back, which only an answer
+	// says: the query of a search is an answer as much as a batch is. A model
+	// answering at another width than the memories were written at is another
+	// model as far as a vector goes, and what it wrote before is waiting to be
+	// written again.
+	widths sync.Map
+	// refused are the memories the host would not turn into vectors, under the
+	// model it was asked of, which the run stops asking about: what it says of
+	// them today it says again, and the memories behind them would wait on the
+	// answer. A model given the role since is another question, and the next
+	// run asks the whole of it again.
+	refused sync.Map
 
 	posts     chan postRequest
 	stops     chan stopRequest

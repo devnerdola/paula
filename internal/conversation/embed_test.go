@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"nerdola.dev/x/paula/internal/config"
@@ -44,7 +45,7 @@ func TestWhatAFoldWroteIsEmbedded(t *testing.T) {
 	talkPast(t, r)
 	waitFor(t, "the memories to be embedded", func() bool {
 		_, by := embedding(t, r)
-		waiting, err := r.store.MemoriesToEmbed(ctx, by, 10)
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
 		return err == nil && len(waiting) == 0
 	})
 
@@ -54,7 +55,7 @@ func TestWhatAFoldWroteIsEmbedded(t *testing.T) {
 	if err != nil || len(memories) == 0 {
 		t.Fatalf("memories = %+v, %v", memories, err)
 	}
-	found, err := r.store.NearestMemories(ctx, by, []float32{1, 0, 0}, 10)
+	found, _, err := r.store.NearestMemories(ctx, by, []float32{1, 0, 0}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +111,7 @@ func TestMemoriesAreSearchedByWhatTheyMean(t *testing.T) {
 
 	talkPast(t, r)
 	waitFor(t, "the memories to be embedded", func() bool {
-		waiting, err := r.store.MemoriesToEmbed(ctx, by, 10)
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
 		return err == nil && len(waiting) == 0
 	})
 
@@ -169,7 +170,7 @@ func TestMemoriesAreEmbeddedAgainByTheModelThatTakesOverTheRole(t *testing.T) {
 	_, was := embedding(t, r)
 	talkPast(t, r)
 	waitFor(t, "the memories to be embedded", func() bool {
-		waiting, err := r.store.MemoriesToEmbed(ctx, was, 10)
+		waiting, err := r.store.MemoriesToEmbed(ctx, was, 0, 10)
 		return err == nil && len(waiting) == 0
 	})
 
@@ -180,13 +181,13 @@ func TestMemoriesAreEmbeddedAgainByTheModelThatTakesOverTheRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	by := store.Embedded{Runner: other.Runner.Name(), Model: other.ID}
-	if waiting, err := r.store.MemoriesToEmbed(ctx, by, 10); err != nil || len(waiting) == 0 {
+	if waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10); err != nil || len(waiting) == 0 {
 		t.Fatalf("waiting under the model that took over = %+v, %v", waiting, err)
 	}
 
 	r.say(t, "anything else?")
 	waitFor(t, "the memories to be embedded by the model that took over", func() bool {
-		waiting, err := r.store.MemoriesToEmbed(ctx, by, 10)
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
 		return err == nil && len(waiting) == 0
 	})
 }
@@ -232,7 +233,7 @@ func TestAModelTakesOverTheRoleWhileTheMemoriesAreBeingEmbedded(t *testing.T) {
 	by := store.Embedded{Runner: other.Runner.Name(), Model: other.ID}
 	r.say(t, "anything else?")
 	waitFor(t, "the memories to be embedded by the model that took over", func() bool {
-		waiting, err := r.store.MemoriesToEmbed(ctx, by, 10)
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
 		return err == nil && len(waiting) == 0
 	})
 }
@@ -261,6 +262,244 @@ func TestEmbeddingABatchThatComesBackShort(t *testing.T) {
 	// It is the embedding that failed, not the fold that wrote them.
 	if strings.Contains(got, "keeping the conversation inside the context") {
 		t.Errorf("the log holds %q, want nothing said of the fold", got)
+	}
+}
+
+// A host that will not take one memory says nothing about the ones behind it.
+// The batch is asked for in halves until the one it refuses is alone, and that
+// one is left aside for the run rather than left in front of every memory
+// after it, which would leave them all unsearchable for good.
+func TestAMemoryTheHostWillNotTakeIsLeftAside(t *testing.T) {
+	f := remembering("Caio's sister Ana lives in Lisbon.")
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	vectors, by := embedding(t, r)
+	var asked atomic.Int64
+	vectors.mu.Lock()
+	vectors.embed = func(req api.EmbedRequest) (*api.EmbedResult, error) {
+		asked.Add(1)
+		for _, said := range req.Input {
+			if strings.Contains(said, "bicycle") {
+				return nil, &api.APIError{Status: 400, Message: "this one cannot be embedded"}
+			}
+		}
+		return meaning(req)
+	}
+	vectors.mu.Unlock()
+
+	// Four memories, one of which the host will not take.
+	var memories []store.Memory
+	for _, said := range []string{
+		"Ana lives in Lisbon", "Caio can cook", "Caio rides a bicycle", "they like food",
+	} {
+		memories = append(memories, store.Memory{
+			Content: said, Source: add(t, r, store.RoleUser, said),
+		})
+	}
+	err := r.store.Fold(ctx, &store.Summary{
+		UptoMessageID: memories[0].Source, Content: "they talked",
+	}, memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.embed(ctx); err != nil {
+		t.Fatalf("embedding = %v, want the run to carry on without it", err)
+	}
+	if asked.Load() < 2 {
+		t.Errorf("the host was asked %d times, want the batch asked for in halves", asked.Load())
+	}
+
+	// The one it would not take is the one without a vector, and it is said so.
+	waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != 1 || !strings.Contains(waiting[0].Content, "bicycle") {
+		t.Errorf("waiting = %+v, want the one the host would not take", waiting)
+	}
+	if got := r.log.String(); !strings.Contains(got, "a memory was not turned into a vector") {
+		t.Errorf("the log holds %q, want the memory that was left aside", got)
+	}
+
+	// The run does not ask about it again: the same model would say the same
+	// thing, and the memories behind it are embedded already.
+	was := asked.Load()
+	if err := r.embed(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if asked.Load() != was {
+		t.Errorf("the host was asked %d more times about what it refused", asked.Load()-was)
+	}
+}
+
+// What was set aside is asked for and dropped every time, so a batch of them
+// is a window that reaches no further than they do. The window is widened by
+// as many rather than read as nothing left to do, which would leave every
+// memory behind them without a vector for the whole run.
+func TestAWindowOfWhatWasSetAsideDoesNotHideWhatIsBehindIt(t *testing.T) {
+	f := remembering("Caio's sister Ana lives in Lisbon.")
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	vectors, by := embedding(t, r)
+	vectors.mu.Lock()
+	vectors.embed = func(req api.EmbedRequest) (*api.EmbedResult, error) {
+		for _, said := range req.Input {
+			if strings.Contains(said, "bicycle") {
+				return nil, &api.APIError{Status: 400, Message: "this one cannot be embedded"}
+			}
+		}
+		return meaning(req)
+	}
+	vectors.mu.Unlock()
+
+	// A whole batch of memories the host will not take, and one behind them
+	// that it would.
+	var memories []store.Memory
+	for i := range embedBatch + 1 {
+		said := fmt.Sprintf("Caio rides a bicycle %d", i)
+		if i == embedBatch {
+			said = "Ana lives in Lisbon"
+		}
+		memories = append(memories, store.Memory{
+			Content: said, Source: add(t, r, store.RoleUser, said),
+		})
+	}
+	err := r.store.Fold(ctx, &store.Summary{
+		UptoMessageID: memories[0].Source, Content: "they talked",
+	}, memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.embed(ctx); err != nil {
+		t.Fatalf("embedding = %v, want the run to carry on without it", err)
+	}
+	waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 2*embedBatch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != embedBatch {
+		t.Fatalf("%d memories are waiting, want only the %d the host would not take",
+			len(waiting), embedBatch)
+	}
+	for _, mem := range waiting {
+		if !strings.Contains(mem.Content, "bicycle") {
+			t.Errorf("%q is waiting, want it embedded behind the ones set aside", mem.Content)
+		}
+	}
+}
+
+// How wide a model's vectors are is something only an answer says, and a
+// search is an answer: one that finds nothing because everything she
+// remembers was written at another width is what tells the run the width
+// moved, and what she remembers is written again behind it.
+func TestASearchSaysHowWideTheModelAnswersNow(t *testing.T) {
+	f := remembering("Caio's sister Ana lives in Lisbon.")
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	vectors, by := embedding(t, r)
+	wide := &atomic.Int64{}
+	wide.Store(3)
+	vectors.mu.Lock()
+	vectors.embed = func(req api.EmbedRequest) (*api.EmbedResult, error) {
+		out := &api.EmbedResult{Vectors: make([][]float32, len(req.Input))}
+		for i := range out.Vectors {
+			out.Vectors[i] = make([]float32, wide.Load())
+			out.Vectors[i][0] = 1
+		}
+		return out, nil
+	}
+	vectors.mu.Unlock()
+
+	talkPast(t, r)
+	waitFor(t, "the memories to be embedded", func() bool {
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
+		return err == nil && len(waiting) == 0
+	})
+
+	// The model now answers at another width. Every memory was written at the
+	// one it answered at before, so the search reaches none of them.
+	wide.Store(4)
+	found, err := r.Memories(ctx, "where does the family live", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 {
+		t.Errorf("found %+v, want nothing measured against a width of its own", found)
+	}
+	if got := r.log.String(); !strings.Contains(got, "another width") {
+		t.Errorf("the log holds %q, want what was left out of the search", got)
+	}
+
+	// The search said how wide it answers now, so what she remembers is
+	// waiting to be written again, and the next reply writes it.
+	if waiting, err := r.store.MemoriesToEmbed(ctx, by, 4, 10); err != nil || len(waiting) == 0 {
+		t.Fatalf("waiting = %+v, %v, want what was written at the width before", waiting, err)
+	}
+	r.say(t, "anything else?")
+	waitFor(t, "the memories to be written again", func() bool {
+		waiting, err := r.store.MemoriesToEmbed(ctx, by, 4, 10)
+		return err == nil && len(waiting) == 0
+	})
+	found, err = r.Memories(ctx, "where does the family live", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) == 0 {
+		t.Error("nothing was found once they were written again")
+	}
+}
+
+// A key the host will not take is the host, not the memory. Reading it as one
+// memory after another the host refuses would leave every one of them aside
+// for the run, each in a failed entry of its own, and the work would report
+// that it had nothing left to do.
+func TestAKeyTheHostWillNotTakeIsNotTheMemory(t *testing.T) {
+	f := remembering("Caio's sister Ana lives in Lisbon.")
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	vectors, by := embedding(t, r)
+	var asked atomic.Int64
+	vectors.mu.Lock()
+	vectors.embed = func(req api.EmbedRequest) (*api.EmbedResult, error) {
+		asked.Add(1)
+		return nil, &api.APIError{Status: 401, Message: "the key was not taken"}
+	}
+	vectors.mu.Unlock()
+
+	var memories []store.Memory
+	for _, said := range []string{"Ana lives in Lisbon", "Caio can cook", "they like food"} {
+		memories = append(memories, store.Memory{
+			Content: said, Source: add(t, r, store.RoleUser, said),
+		})
+	}
+	err := r.store.Fold(ctx, &store.Summary{
+		UptoMessageID: memories[0].Source, Content: "they talked",
+	}, memories)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := r.embed(ctx); err == nil {
+		t.Fatal("embedding said nothing went wrong, want the key the host would not take")
+	}
+	if asked.Load() != 1 {
+		t.Errorf("the host was asked %d times, want the batch left whole", asked.Load())
+	}
+
+	// They are all still waiting: the next try asks for the same batch.
+	waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != len(memories) {
+		t.Errorf("%d memories are waiting, want the %d the host said nothing about",
+			len(waiting), len(memories))
 	}
 }
 

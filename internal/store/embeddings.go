@@ -18,12 +18,30 @@ type Embedded struct {
 
 // MemoriesToEmbed are the memories that still stand and have no vector from
 // this model, oldest first, at most limit of them.
-func (s *Store) MemoriesToEmbed(ctx context.Context, by Embedded, limit int) ([]Memory, error) {
+//
+// A vector as wide as the model answers is one of its own; one of another
+// width is not, whatever it was stored under, since a model that answers at
+// one width and then another is two models as far as a vector is concerned. So
+// a memory holding one of those is waiting, and is written again.
+//
+// width is how wide the model answered last, which only an answer says. Zero
+// is a caller that has not had one yet, and then the newest vector the model
+// wrote is what says how wide its vectors are.
+func (s *Store) MemoriesToEmbed(ctx context.Context, by Embedded, width, limit int) ([]Memory, error) {
+	var wide any
+	if width > 0 {
+		wide = 4 * width
+	}
 	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
 		  LEFT JOIN memory_embeddings e
 		    ON e.memory_id = memories.id AND e.runner = ? AND e.model = ?
+		   AND length(e.vector) = coalesce(?,
+		         (SELECT length(vector) FROM memory_embeddings
+		           WHERE runner = ? AND model = ?
+		           ORDER BY memory_id DESC LIMIT 1))
 		 WHERE replaced_by IS NULL AND e.memory_id IS NULL
-		 ORDER BY memories.id LIMIT ?`, by.Runner, by.Model, limit)
+		 ORDER BY memories.id LIMIT ?`,
+		by.Runner, by.Model, wide, by.Runner, by.Model, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -60,16 +78,21 @@ func (s *Store) Embed(ctx context.Context, by Embedded, vectors map[MemoryID][]f
 // NearestMemories are the memories closest in meaning to a vector, the closest
 // first, at most limit of them. Only what still stands is searched, and only
 // what this model embedded: a vector of another model measures nothing here.
-func (s *Store) NearestMemories(ctx context.Context, by Embedded, to []float32, limit int) ([]Memory, error) {
+//
+// A vector of another width than the one asked about is another model's,
+// whatever it was stored under, so it is left out rather than measured. How
+// many were left out comes back with them, since a search that quietly
+// answered out of a fraction of what she remembers would say nothing about it.
+func (s *Store) NearestMemories(ctx context.Context, by Embedded, to []float32, limit int) (found []Memory, elsewhere int, err error) {
 	if len(to) == 0 || limit <= 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+`, e.vector `+memoriesFrom+`
 		  JOIN memory_embeddings e
 		    ON e.memory_id = memories.id AND e.runner = ? AND e.model = ?
 		 WHERE replaced_by IS NULL`, by.Runner, by.Model)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
@@ -79,29 +102,28 @@ func (s *Store) NearestMemories(ctx context.Context, by Embedded, to []float32, 
 		memory Memory
 		like   float64
 	}
-	var found []near
+	var measured []near
 	for rows.Next() {
 		var raw []byte
 		m, err := scanMemory(rows, &raw)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		v, err := vectorOf(raw)
 		if err != nil {
-			return nil, fmt.Errorf("memory %d: %w", m.ID, err)
+			return nil, 0, fmt.Errorf("memory %d: %w", m.ID, err)
 		}
 		if len(v) != len(to) {
-			// The model answers at one width; another width is another model,
-			// whatever it was stored under.
-			return nil, fmt.Errorf("memory %d is embedded %d wide, and the query %d", m.ID, len(v), len(to))
+			elsewhere++
+			continue
 		}
-		found = append(found, near{memory: *m, like: cosine(v, to)})
+		measured = append(measured, near{memory: *m, like: cosine(v, to)})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	slices.SortStableFunc(found, func(a, b near) int {
+	slices.SortStableFunc(measured, func(a, b near) int {
 		switch {
 		case a.like > b.like:
 			return -1
@@ -110,11 +132,11 @@ func (s *Store) NearestMemories(ctx context.Context, by Embedded, to []float32, 
 		}
 		return 0
 	})
-	out := make([]Memory, 0, min(limit, len(found)))
-	for _, n := range found[:min(limit, len(found))] {
+	out := make([]Memory, 0, min(limit, len(measured)))
+	for _, n := range measured[:min(limit, len(measured))] {
 		out = append(out, n.memory)
 	}
-	return out, nil
+	return out, elsewhere, nil
 }
 
 // cosine is how alike two vectors point, from 1 for the same way to -1 for

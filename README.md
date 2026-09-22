@@ -488,8 +488,19 @@ give the model a larger `context`, or write a shorter card.
 **Memories are found by what they mean.** The `embed` model turns each of them
 into a vector, a hundred at a time, in a piece of background work of its own —
 so a question finds the memory it is about without sharing a word with it. A
-vector is kept under the model that made it: change the model and they are made
-again, rather than measured against a space they were never in.
+vector is kept under the model that made it, and its width is part of that:
+change the model, or use one that answers at another width than it used to, and
+they are made again rather than measured against a space they were never in.
+Until they have been, they are left out of a search, which says how many. How
+wide a model answers is something only an answer says, so a search is what
+tells a run the width has moved — and what she remembers is written again
+behind it.
+
+A hundred at a time is how many are asked for, not what has to go together. A
+host that will not take one of them — too long, or something it filters — is
+asked in halves until that memory is alone, and that one is left aside for the
+run rather than left in front of every memory behind it. The next run asks
+again.
 
 The two run beside each other, each waiting its own wait after a failure of its
 own. A host that is away for the model that embeds, or merely slow with a long
