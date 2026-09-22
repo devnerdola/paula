@@ -14,9 +14,9 @@ var bge = Embedded{Runner: "venice", Model: "text-embedding-bge-m3"}
 func remembers(t *testing.T, s *Store, text, memory string, replaces ...MemoryID) Memory {
 	t.Helper()
 	m := said(t, s, text)
-	stored := []Memory{{Content: memory, Source: m.ID, Replaces: replaces, CreatedAt: now}}
+	stored := []Memory{{Content: memory, Source: m.ID, Replaces: replaces}}
 	err := s.Fold(context.Background(),
-		&Summary{UptoMessageID: m.ID, Content: "they talked", CreatedAt: now}, stored)
+		&Summary{UptoMessageID: m.ID, Content: "they talked"}, stored)
 	if err != nil {
 		t.Fatal(err)
 	}

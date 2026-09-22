@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 )
 
 // said stores a message to hang a summary and a memory on.
@@ -36,8 +35,8 @@ func TestAFoldStoresItsSummaryAndItsMemories(t *testing.T) {
 	first := said(t, s, "my sister Ana lives in Porto")
 	second := said(t, s, "she moved to Lisbon last month")
 
-	summary := &Summary{UptoMessageID: first.ID, Content: "they talked about Ana", CreatedAt: now}
-	memories := []Memory{{Content: "Ana lives in Porto", Source: first.ID, CreatedAt: now}}
+	summary := &Summary{UptoMessageID: first.ID, Content: "they talked about Ana"}
+	memories := []Memory{{Content: "Ana lives in Porto", Source: first.ID}}
 	if err := s.Fold(ctx, summary, memories); err != nil {
 		t.Fatal(err)
 	}
@@ -52,18 +51,17 @@ func TestAFoldStoresItsSummaryAndItsMemories(t *testing.T) {
 	if got.Content != "they talked about Ana" || got.UptoMessageID != first.ID {
 		t.Errorf("summary = %+v", got)
 	}
-	if !got.CreatedAt.Equal(now) {
-		t.Errorf("summary was written at %v, want %v", got.CreatedAt, now)
+	if !got.CoversUpto.Equal(first.CreatedAt) {
+		t.Errorf("summary covers up to %v, want the time of the message it covers", got.CoversUpto)
 	}
 
 	// A later fold replaces what it contradicts, and the summary it writes is
 	// the one that counts.
-	later := &Summary{UptoMessageID: second.ID, Content: "Ana moved", CreatedAt: now}
+	later := &Summary{UptoMessageID: second.ID, Content: "Ana moved"}
 	moved := []Memory{{
-		Content:   "Ana lives in Lisbon",
-		Source:    second.ID,
-		Replaces:  []MemoryID{memories[0].ID},
-		CreatedAt: now,
+		Content:  "Ana lives in Lisbon",
+		Source:   second.ID,
+		Replaces: []MemoryID{memories[0].ID},
 	}}
 	if err := s.Fold(ctx, later, moved); err != nil {
 		t.Fatal(err)
@@ -96,11 +94,10 @@ func TestASummaryCoversTheMessageItWasWrittenUpTo(t *testing.T) {
 	s := open(t)
 	first := said(t, s, "my sister Ana lives in Porto")
 
-	// A summary written again covers what it covered before, however much later
-	// it was written: the time it carries is the conversation's, not its own.
-	written := now.Add(3 * time.Hour)
+	// The time a summary carries is the conversation's rather than its own: the
+	// message it covers up to is what says how far it goes.
 	err := s.Fold(ctx, &Summary{
-		UptoMessageID: first.ID, Content: "they talked about Ana", CreatedAt: written,
+		UptoMessageID: first.ID, Content: "they talked about Ana",
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -113,9 +110,6 @@ func TestASummaryCoversTheMessageItWasWrittenUpTo(t *testing.T) {
 	if !got.CoversUpto.Equal(now) {
 		t.Errorf("summary covers up to %v, want the message at %v", got.CoversUpto, now)
 	}
-	if !got.CreatedAt.Equal(written) {
-		t.Errorf("summary was written at %v, want %v", got.CreatedAt, written)
-	}
 }
 
 // A number is given again once the row that held it is forgotten, so a fold
@@ -126,9 +120,9 @@ func TestAFoldCannotReplaceTheMemoryItIsWriting(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 	first := said(t, s, "Ana lives in Porto")
-	was := []Memory{{Content: "Ana lives in Porto.", Source: first.ID, CreatedAt: now}}
+	was := []Memory{{Content: "Ana lives in Porto.", Source: first.ID}}
 	err := s.Fold(ctx,
-		&Summary{UptoMessageID: first.ID, Content: "they talked", CreatedAt: now}, was)
+		&Summary{UptoMessageID: first.ID, Content: "they talked"}, was)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,10 +133,10 @@ func TestAFoldCannotReplaceTheMemoryItIsWriting(t *testing.T) {
 	second := said(t, s, "Ana moved to Lisbon")
 	next := []Memory{{
 		Content: "Ana lives in Lisbon.", Source: second.ID,
-		Replaces: []MemoryID{was[0].ID}, CreatedAt: now,
+		Replaces: []MemoryID{was[0].ID},
 	}}
 	err = s.Fold(ctx,
-		&Summary{UptoMessageID: second.ID, Content: "they talked", CreatedAt: now}, next)
+		&Summary{UptoMessageID: second.ID, Content: "they talked"}, next)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,8 +165,8 @@ func TestAFoldThatCannotBeStoredLeavesNothingBehind(t *testing.T) {
 	// The memory names a message that is not there, which the foreign key
 	// refuses. The summary of the same step must not be left standing alone.
 	err := s.Fold(ctx,
-		&Summary{UptoMessageID: first.ID, Content: "they said hey", CreatedAt: now},
-		[]Memory{{Content: "nothing real", Source: first.ID + 404, CreatedAt: now}})
+		&Summary{UptoMessageID: first.ID, Content: "they said hey"},
+		[]Memory{{Content: "nothing real", Source: first.ID + 404}})
 	if err == nil {
 		t.Fatal("a memory of a message that is not there was stored")
 	}
@@ -184,8 +178,8 @@ func TestAFoldThatCannotBeStoredLeavesNothingBehind(t *testing.T) {
 	// the day it was said, which is the message's, so one naming none would be
 	// listed by nothing and searched by nothing.
 	err = s.Fold(ctx,
-		&Summary{UptoMessageID: first.ID, Content: "they said hey", CreatedAt: now},
-		[]Memory{{Content: "nothing real", CreatedAt: now}})
+		&Summary{UptoMessageID: first.ID, Content: "they said hey"},
+		[]Memory{{Content: "nothing real"}})
 	if err == nil {
 		t.Fatal("a memory of no message was stored")
 	}

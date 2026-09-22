@@ -338,11 +338,17 @@ func scanRequest(row scanner) (*Request, error) {
 
 // Prune drops the request and response bodies of every entry but the latest
 // keep ones. Their summary columns stay.
+//
+// It runs after every entry, on the goroutine the conversation answers from,
+// and the table it reads grows for the life of the conversation. So it asks
+// for the oldest entry that still keeps its bodies and takes everything from
+// there down, which the index on entry_id serves, rather than holding every
+// row against the latest keep ids.
 func (s *Store) Prune(ctx context.Context, keep int) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE requests
 		   SET request_body_gz = NULL, response_body_gz = NULL, pruned = 1
-		 WHERE (request_body_gz IS NOT NULL OR response_body_gz IS NOT NULL)
-		   AND entry_id NOT IN (SELECT id FROM entries ORDER BY id DESC LIMIT ?)`, keep)
+		 WHERE pruned = 0
+		   AND entry_id <= (SELECT id FROM entries ORDER BY id DESC LIMIT 1 OFFSET ?)`, keep)
 	return err
 }
 

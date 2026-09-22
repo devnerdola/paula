@@ -118,8 +118,6 @@ func (e *Engine) compact(ctx context.Context) error {
 		return e.store.Fold(context.WithoutCancel(ctx), &store.Summary{
 			UptoMessageID: summary.UptoMessageID,
 			Content:       written,
-			EntryID:       a.entry.ID,
-			CreatedAt:     e.clock.Now(),
 		}, nil)
 	})
 	if err != nil {
@@ -235,17 +233,7 @@ func (e *Engine) foldOnce(ctx context.Context, a *attempt, m *model, summary *st
 		return false, err
 	}
 
-	now := e.clock.Now()
-	for i := range learned {
-		learned[i].EntryID = a.entry.ID
-		learned[i].CreatedAt = now
-	}
-	next := &store.Summary{
-		UptoMessageID: upto,
-		Content:       written,
-		EntryID:       a.entry.ID,
-		CreatedAt:     now,
-	}
+	next := &store.Summary{UptoMessageID: upto, Content: written}
 	if err := e.store.Fold(context.WithoutCancel(ctx), next, learned); err != nil {
 		return false, err
 	}

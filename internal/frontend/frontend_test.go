@@ -942,13 +942,12 @@ func TestTheSummaryCommand(t *testing.T) {
 		t.Errorf("message = %q", got)
 	}
 
-	// It was written again long after the conversation it covers, which is how
-	// a summary that outgrew its room is made shorter.
+	// What it says it covers is the conversation's own time: the message it was
+	// written up to, whenever the writing happened.
 	tk.mu.Lock()
 	tk.summary = &store.Summary{
 		Content:    "they talked about Lisbon",
 		CoversUpto: time.Date(2026, 9, 16, 20, 22, 0, 0, time.UTC),
-		CreatedAt:  time.Date(2026, 9, 18, 11, 5, 0, 0, time.UTC),
 	}
 	tk.mu.Unlock()
 

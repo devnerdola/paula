@@ -107,8 +107,8 @@ func TestAConversationPastItsShareIsFolded(t *testing.T) {
 	if summary.Content != "they said things" {
 		t.Errorf("summary = %q", summary.Content)
 	}
-	if summary.UptoMessageID == 0 || summary.EntryID == 0 {
-		t.Errorf("summary = %+v, want the messages it covers and the entry that wrote it", summary)
+	if summary.UptoMessageID == 0 {
+		t.Errorf("summary = %+v, want the messages it covers", summary)
 	}
 
 	memories, err := r.store.Memories(ctx)
@@ -245,7 +245,7 @@ func TestASummaryWrittenAgainFoldsNothingThatFits(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = r.store.Fold(ctx, &store.Summary{
-		UptoMessageID: messages[0].ID, Content: long, CreatedAt: r.clock.Now(),
+		UptoMessageID: messages[0].ID, Content: long,
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -295,15 +295,19 @@ func TestAFoldAnswersNoMessage(t *testing.T) {
 	r := openReplyWith(t, f, sized(f, 2000))
 	ctx := context.Background()
 
-	summary := talkPast(t, r)
+	talkPast(t, r)
 
 	// The entry of a fold names no message, so what the conversation has been
-	// answered up to is what the replies say and nothing else.
-	entry, err := r.store.Entry(ctx, summary.EntryID)
+	// answered up to is what the replies say and nothing else. The fold is the
+	// last thing that ran, so its entry is the newest.
+	entries, err := r.store.Entries(ctx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if entry.UptoMessageID != 0 || entry.AfterMessageID != 0 {
+	if len(entries) == 0 {
+		t.Fatal("nothing was written down of the fold")
+	}
+	if entry := entries[0]; entry.UptoMessageID != 0 || entry.AfterMessageID != 0 {
 		t.Errorf("the fold's entry = %+v, want one that answers nothing", entry)
 	}
 	answered, err := r.store.AnsweredUpto(ctx)

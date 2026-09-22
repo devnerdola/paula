@@ -22,8 +22,6 @@ type Summary struct {
 	UptoMessageID MessageID
 	CoversUpto    time.Time
 	Content       string
-	EntryID       EntryID
-	CreatedAt     time.Time
 }
 
 // Memory is a lasting fact a fold read out of the conversation.
@@ -36,16 +34,13 @@ type Memory struct {
 	SaidAt time.Time
 	// ReplacedBy is the memory that took its place, or zero while it stands.
 	ReplacedBy MemoryID
-	EntryID    EntryID
-	CreatedAt  time.Time
 	// Replaces are the memories this one takes the place of, which Fold reads
 	// and writes as their ReplacedBy. A memory read back carries ReplacedBy
 	// rather than this.
 	Replaces []MemoryID
 }
 
-const summaryColumns = `summaries.id, upto_message_id, content,
-	summaries.entry_id, summaries.created_at, messages.created_at`
+const summaryColumns = `summaries.id, upto_message_id, content, messages.created_at`
 
 // summariesFrom is where a summary and the time it covers up to are read from:
 // the time is the message's, rather than a copy kept beside the summary.
@@ -53,7 +48,7 @@ const summariesFrom = `FROM summaries
 	JOIN messages ON messages.id = summaries.upto_message_id`
 
 const memoryColumns = `memories.id, memories.content, source_message_id,
-	replaced_by, memories.entry_id, memories.created_at, messages.created_at`
+	replaced_by, messages.created_at`
 
 // memoriesFrom is where a memory and the day it was said are read from: the
 // day is the message's, rather than a copy kept beside the memory.
@@ -149,10 +144,8 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx, `INSERT INTO summaries
-		(upto_message_id, content, entry_id, created_at)
-		VALUES (?, ?, ?, ?)`,
-		int64(summary.UptoMessageID), summary.Content,
-		nullID(summary.EntryID), summary.CreatedAt.UnixNano())
+		(upto_message_id, content) VALUES (?, ?)`,
+		int64(summary.UptoMessageID), summary.Content)
 	if err != nil {
 		return err
 	}
@@ -165,9 +158,8 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 	for i := range memories {
 		m := &memories[i]
 		res, err := tx.ExecContext(ctx, `INSERT INTO memories
-			(content, source_message_id, entry_id, created_at)
-			VALUES (?, ?, ?, ?)`,
-			m.Content, int64(m.Source), nullID(m.EntryID), m.CreatedAt.UnixNano())
+			(content, source_message_id) VALUES (?, ?)`,
+			m.Content, int64(m.Source))
 		if err != nil {
 			return err
 		}
@@ -193,14 +185,12 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 
 func scanSummary(row scanner) (*Summary, error) {
 	var out Summary
-	var upto, entry sql.NullInt64
-	var created, covers int64
-	if err := row.Scan(&out.ID, &upto, &out.Content, &entry, &created, &covers); err != nil {
+	var upto sql.NullInt64
+	var covers int64
+	if err := row.Scan(&out.ID, &upto, &out.Content, &covers); err != nil {
 		return nil, err
 	}
 	out.UptoMessageID = MessageID(id(upto))
-	out.EntryID = EntryID(id(entry))
-	out.CreatedAt = time.Unix(0, created)
 	out.CoversUpto = time.Unix(0, covers)
 	return &out, nil
 }
@@ -221,16 +211,14 @@ func scanMemories(rows *sql.Rows) ([]Memory, error) {
 // scanMemory reads a memory, and after it whatever else the query asked for.
 func scanMemory(row scanner, extra ...any) (*Memory, error) {
 	var out Memory
-	var source, replaced, entry sql.NullInt64
-	var created, said int64
-	into := append([]any{&out.ID, &out.Content, &source, &replaced, &entry, &created, &said}, extra...)
+	var source, replaced sql.NullInt64
+	var said int64
+	into := append([]any{&out.ID, &out.Content, &source, &replaced, &said}, extra...)
 	if err := row.Scan(into...); err != nil {
 		return nil, err
 	}
 	out.Source = MessageID(id(source))
 	out.ReplacedBy = MemoryID(id(replaced))
-	out.EntryID = EntryID(id(entry))
-	out.CreatedAt = time.Unix(0, created)
 	out.SaidAt = time.Unix(0, said)
 	return &out, nil
 }

@@ -84,10 +84,10 @@ func remembered(t *testing.T) (dir string, newest, replaced, other store.MemoryI
 			t.Fatal(err)
 		}
 		stored := []store.Memory{{
-			Content: memory, Source: m.ID, Replaces: replaces, CreatedAt: when,
+			Content: memory, Source: m.ID, Replaces: replaces,
 		}}
 		err := s.Fold(ctx, &store.Summary{
-			UptoMessageID: m.ID, Content: "they talked", CreatedAt: when,
+			UptoMessageID: m.ID, Content: "they talked",
 		}, stored)
 		if err != nil {
 			t.Fatal(err)
