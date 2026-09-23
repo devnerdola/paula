@@ -81,6 +81,59 @@ func model(t *testing.T, r *Runner, id string) api.Model {
 	return *m
 }
 
+// The stream is the one a reply that asked for two tools came back in, as
+// Venice sent it: each call opened by its id and name, then built from
+// fragments of its arguments that name the id and the name as null.
+func TestTheCallsOfACapturedStreamComeBackWhole(t *testing.T) {
+	res := streamed(t, "stream_tool_calls.sse")
+	want := []api.ToolCall{
+		{ID: "chatcmpl-tool-8764b7316a7d866f", Name: "search_memories", Arguments: `{"query": "Caio's sister name"}`},
+		{ID: "chatcmpl-tool-a3fb1b90fafb4d7a", Name: "search_memories", Arguments: `{"query": "Caio family sister"}`},
+	}
+	if !slices.Equal(res.ToolCalls, want) {
+		t.Errorf("calls = %+v, want %+v", res.ToolCalls, want)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Errorf("finish reason = %q", res.FinishReason)
+	}
+}
+
+// What a model thought on its way to its calls goes back with them in the
+// field the stream gave it in.
+func TestTheReasoningOfACallGoesBackInTheFieldItCameIn(t *testing.T) {
+	res := streamed(t, "stream_tool_calls.sse")
+	if res.Reasoning == "" {
+		t.Fatal("the stream gave no reasoning")
+	}
+	out := map[string]any{}
+	hooks{}.Message(out, api.Message{
+		Role:      api.RoleAssistant,
+		ToolCalls: res.ToolCalls,
+		Reasoning: &api.Reasoning{Text: res.Reasoning},
+	})
+	if got := out["reasoning_content"]; got != res.Reasoning {
+		t.Errorf("reasoning_content = %v, want what the model thought, %q", got, res.Reasoning)
+	}
+
+	none := map[string]any{}
+	hooks{}.Message(none, api.Text(api.RoleUser, "hey"))
+	if len(none) != 0 {
+		t.Errorf("a message with no reasoning carries %+v", none)
+	}
+}
+
+// streamed is what the runner makes of a captured stream.
+func streamed(t *testing.T, name string) *api.Result {
+	t.Helper()
+	r := runner(t, answers(t, "text/event-stream", name).URL, "")
+	res, err := r.Chat(context.Background(), api.ChatRequest{Model: "m"},
+		func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
 // What Paula makes of each entry of the captured listing.
 func TestCatalogue(t *testing.T) {
 	r := runner(t, answers(t, "application/json", "models.json").URL, "")

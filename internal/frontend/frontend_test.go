@@ -526,6 +526,80 @@ func TestAReplyWrittenOutIsNotSentAgain(t *testing.T) {
 	}
 }
 
+// noting is a screen with a place of its own for what she is doing.
+type noting struct{ *streaming }
+
+func (s *noting) Note(_ context.Context, text string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.write("note " + text)
+	return nil
+}
+
+// A note goes below what she has written so far, so the stream that text is
+// on is closed first, and the reply goes on below it.
+func TestANoteGoesBelowWhatWasWritten(t *testing.T) {
+	s := &noting{&streaming{newScreen(api.Features{Channel: "web"})}}
+	tk := newTalk()
+	run(t, s, tk)
+
+	msg := &store.Message{ID: store.MessageID(replies.Add(1)), Role: store.RoleAssistant,
+		Parts: []store.Part{{Type: store.PartText, Text: "let me check\n\nfound it"}}}
+	for _, e := range []conversation.Event{
+		{Kind: conversation.ReplyStarted, Entry: 1},
+		{Kind: conversation.ReplyText, Entry: 1, Text: "let me check"},
+		{Kind: conversation.Note, Entry: 1, Text: "looking up Ana"},
+		{Kind: conversation.ReplyText, Entry: 1, Text: "let me check\n\nfound it"},
+		{Kind: conversation.ReplyDone, Entry: 1, Message: msg},
+	} {
+		tk.publish(e)
+	}
+	waitFor(t, "the reply to end", sawLine(s.screen, "end stream"))
+
+	var got []string
+	for _, l := range s.log() {
+		if l != "writing" && l != "stopped writing" {
+			got = append(got, l)
+		}
+	}
+	want := []string{"stream let me check", "end stream", "note looking up Ana",
+		"stream found it", "end stream"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the screen shows %q, want %q", got, want)
+	}
+}
+
+// A note closes the stream a reply was on, and a reply with nothing written
+// after it is on the screen already: it is not sent again when it ends.
+func TestAReplyANoteClosedIsNotSentAgain(t *testing.T) {
+	s := &streaming{newScreen(api.Features{Channel: "repl"})}
+	tk := newTalk()
+	run(t, s, tk)
+
+	msg := &store.Message{ID: store.MessageID(replies.Add(1)), Role: store.RoleAssistant,
+		Parts: []store.Part{{Type: store.PartText, Text: "got it"}}}
+	for _, e := range []conversation.Event{
+		{Kind: conversation.ReplyStarted, Entry: 1},
+		{Kind: conversation.ReplyText, Entry: 1, Text: "got it"},
+		{Kind: conversation.Note, Entry: 1, Text: "remembering"},
+		{Kind: conversation.ReplyDone, Entry: 1, Message: msg},
+	} {
+		tk.publish(e)
+	}
+	// A screen with nowhere of its own for a note is sent it in brackets.
+	waitFor(t, "the note", sawLine(s.screen, "send (remembering)"))
+	for _, e := range reply(2, "and this one") {
+		tk.publish(e)
+	}
+	waitFor(t, "the next reply", sawLine(s.screen, "stream and this one"))
+
+	for _, m := range s.messages() {
+		if m.Hers {
+			t.Errorf("sent %q again, want the reply left as it was written", m.Text)
+		}
+	}
+}
+
 // The mark goes on the end of what is already on the screen, rather than
 // arriving as a message of its own.
 func TestAStoppedReplySaysSoOnTheEndOfTheStream(t *testing.T) {
@@ -550,6 +624,31 @@ func TestAStoppedReplySaysSoOnTheEndOfTheStream(t *testing.T) {
 	if got := s.messages(); len(got) != 0 {
 		t.Errorf("sent %+v, want the mark written on the end of the reply", got)
 	}
+}
+
+// A reply stopped while a tool ran has had its stream closed by the note, so
+// the mark opens one of its own below it, where there is nothing to stand
+// apart from.
+func TestAReplyStoppedAfterANoteSaysSoBelowIt(t *testing.T) {
+	base := newScreen(api.Features{Channel: "repl"})
+	s := &streaming{base}
+	tk := newTalk()
+	run(t, s, tk)
+
+	msg := &store.Message{ID: store.MessageID(replies.Add(1)), Role: store.RoleAssistant,
+		Parts: []store.Part{{Type: store.PartText, Text: "let me check"}}}
+	for _, e := range []conversation.Event{
+		{Kind: conversation.ReplyStarted, Entry: 1},
+		{Kind: conversation.ReplyText, Entry: 1, Text: "let me check"},
+		{Kind: conversation.Note, Entry: 1, Text: "looking up Ana"},
+		{Kind: conversation.ReplyStopped, Entry: 1, Message: msg},
+	} {
+		tk.publish(e)
+	}
+	waitFor(t, "the mark", sawLine(base, "stream [stopped]"))
+	waitFor(t, "the end of the stream", func() bool {
+		return slices.Contains(base.log(), "stopped writing")
+	})
 }
 
 func TestAStoppedReplySaysSo(t *testing.T) {
@@ -579,6 +678,25 @@ func TestAFailedReplySaysWhy(t *testing.T) {
 	waitFor(t, "the failure", func() bool { return len(s.messages()) == 1 })
 	if got := s.messages()[0].Text; got != "error: 429: slow down" {
 		t.Errorf("message = %q", got)
+	}
+}
+
+// A reply that failed after it had run a tool keeps what it wrote, which is
+// shown before what went wrong.
+func TestAFailedReplyThatKeptWhatItWroteShowsIt(t *testing.T) {
+	s := newScreen(api.Features{Channel: "repl"})
+	tk := newTalk()
+	run(t, s, tk)
+
+	msg := &store.Message{ID: store.MessageID(replies.Add(1)), Role: store.RoleAssistant,
+		Parts: []store.Part{{Type: store.PartText, Text: "let me note that"}}, Interrupted: true}
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+	tk.publish(conversation.Event{Kind: conversation.ReplyFailed, Entry: 1, Message: msg, Text: "the host went away"})
+
+	waitFor(t, "the failure", func() bool { return len(s.messages()) == 2 })
+	got := s.messages()
+	if got[0].Text != "let me note that" || !got[0].Hers || got[1].Text != "error: the host went away" {
+		t.Errorf("messages = %+v, want what she wrote and then why it ended", got)
 	}
 }
 

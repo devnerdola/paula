@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -28,7 +29,8 @@ const lineLimit = 4 << 20
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string          `json:"content"`
+			ToolCalls []toolCallDelta `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
@@ -38,6 +40,58 @@ type streamChunk struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// toolCallDelta is a piece of a tool call. A call arrives over several chunks,
+// all under the index it has in the reply: its id and name in the first, and
+// its arguments a fragment at a time.
+type toolCallDelta struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// calls puts the pieces of the tool calls back together.
+type calls struct {
+	byIndex map[int]*api.ToolCall
+	order   []int
+}
+
+// add takes one piece. The first id and name a call is given are the ones it
+// keeps, and its arguments are every fragment in the order they came.
+func (c *calls) add(d toolCallDelta) {
+	if c.byIndex == nil {
+		c.byIndex = map[int]*api.ToolCall{}
+	}
+	call, ok := c.byIndex[d.Index]
+	if !ok {
+		call = &api.ToolCall{}
+		c.byIndex[d.Index] = call
+		c.order = append(c.order, d.Index)
+	}
+	if call.ID == "" {
+		call.ID = d.ID
+	}
+	if call.Name == "" {
+		call.Name = d.Function.Name
+	}
+	call.Arguments += d.Function.Arguments
+}
+
+// whole is every call, in the order of their indexes.
+func (c *calls) whole() []api.ToolCall {
+	if len(c.order) == 0 {
+		return nil
+	}
+	slices.Sort(c.order)
+	out := make([]api.ToolCall, len(c.order))
+	for i, index := range c.order {
+		out[i] = *c.byIndex[index]
+	}
+	return out
 }
 
 type streamUsage struct {
@@ -54,6 +108,7 @@ type streamUsage struct {
 func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) error {
 	var (
 		reasoning strings.Builder
+		asked     calls
 		arrived   bool
 	)
 
@@ -105,6 +160,9 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 					return fmt.Errorf("%w: %w", errCallback, err)
 				}
 			}
+			for _, d := range ch.Delta.ToolCalls {
+				asked.add(d)
+			}
 		}
 		return nil
 	})
@@ -116,6 +174,7 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 	}
 
 	res.Reasoning = reasoning.String()
+	res.ToolCalls = asked.whole()
 	return nil
 }
 

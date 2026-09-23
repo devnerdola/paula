@@ -12,6 +12,7 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 	msgs := make([]map[string]any, len(req.Messages))
 	for i, m := range req.Messages {
 		msgs[i] = message(m)
+		hooks.Message(msgs[i], m)
 	}
 	body := map[string]any{
 		"model":    req.Model,
@@ -25,6 +26,23 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 
 	if req.CacheKey != "" {
 		body["prompt_cache_key"] = req.CacheKey
+	}
+	if len(req.Tools) > 0 {
+		tools := make([]map[string]any, len(req.Tools))
+		for i, t := range req.Tools {
+			tools[i] = map[string]any{
+				"type": "function",
+				"function": map[string]any{
+					"name":        t.Name,
+					"description": t.Description,
+					"parameters":  t.Parameters,
+				},
+			}
+		}
+		body["tools"] = tools
+	}
+	if req.ToolChoice != "" {
+		body["tool_choice"] = req.ToolChoice
 	}
 
 	settings(body, req.Settings)
@@ -70,6 +88,29 @@ func message(m api.Message) map[string]any {
 			}
 		}
 		out["content"] = strings.Join(text, "\n\n")
+	}
+
+	if len(m.ToolCalls) > 0 {
+		calls := make([]map[string]any, len(m.ToolCalls))
+		for i, c := range m.ToolCalls {
+			calls[i] = map[string]any{
+				"id":   c.ID,
+				"type": "function",
+				"function": map[string]any{
+					"name":      c.Name,
+					"arguments": c.Arguments,
+				},
+			}
+		}
+		out["tool_calls"] = calls
+		// A message that is only calls says nothing, and both APIs document
+		// what says nothing beside a call as null rather than as text.
+		if out["content"] == "" {
+			out["content"] = nil
+		}
+	}
+	if m.ToolCallID != "" {
+		out["tool_call_id"] = m.ToolCallID
 	}
 	return out
 }

@@ -3,6 +3,7 @@ package openrouter
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -89,7 +90,8 @@ type streamChunk struct {
 	Provider string `json:"provider"`
 	Choices  []struct {
 		Delta struct {
-			Reasoning string `json:"reasoning"`
+			Reasoning        string            `json:"reasoning"`
+			ReasoningDetails []json.RawMessage `json:"reasoning_details"`
 		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
@@ -117,7 +119,65 @@ func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
 	if len(c.Choices) == 0 {
 		return "", nil
 	}
+	// The details are what the reasoning documentation asks to be handed back
+	// with the calls they came with, so they are kept as they arrived and read
+	// only when they go back.
+	res.ReasoningDetails = append(res.ReasoningDetails, c.Choices[0].Delta.ReasoningDetails...)
 	return c.Choices[0].Delta.Reasoning, nil
+}
+
+// Message hands back the reasoning an assistant message's calls came with, as
+// the reasoning documentation asks: the whole of each item, in the order they
+// came.
+//
+// A stream sends an item a fragment at a time under the index it has, the way
+// it sends a call, so the fragments of one index go back as the one item they
+// make — which is what a reply that was not streamed would have carried.
+func (hooks) Message(out map[string]any, m api.Message) {
+	if m.Reasoning == nil || len(m.Reasoning.Details) == 0 {
+		return
+	}
+	out["reasoning_details"] = whole(m.Reasoning.Details)
+}
+
+// grown are the fields of a reasoning item that arrive a fragment at a time.
+// Every other field is the same in each fragment it comes in, or comes in one
+// of them only, as a signature does at the end.
+var grown = []string{"text", "summary", "data"}
+
+// whole puts the fragments of each reasoning item back together, in the order
+// the items first came. A fragment that names no index is an item of its own.
+func whole(fragments []json.RawMessage) []any {
+	var items []any
+	at := map[float64]map[string]any{}
+	for _, raw := range fragments {
+		var f map[string]any
+		index, ok := 0.0, false
+		if json.Unmarshal(raw, &f) == nil {
+			index, ok = f["index"].(float64)
+		}
+		if !ok {
+			items = append(items, raw)
+			continue
+		}
+		item, seen := at[index]
+		if !seen {
+			at[index] = f
+			items = append(items, f)
+			continue
+		}
+		for k, v := range f {
+			if s, isText := v.(string); isText && slices.Contains(grown, k) {
+				was, _ := item[k].(string)
+				item[k] = was + s
+				continue
+			}
+			if was, has := item[k]; !has || was == nil || was == "" {
+				item[k] = v
+			}
+		}
+	}
+	return items
 }
 
 // retryable are the statuses the errors documentation calls safe to send

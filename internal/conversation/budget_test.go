@@ -61,7 +61,7 @@ func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
 	}
 
 	// Twenty characters counted as ten tokens is a token every two.
-	r.correct("chat", 10, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))})
+	r.correct("chat", 10, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))}, "")
 	if got := r.ratio("chat"); got != 0.5 {
 		t.Errorf("ratio = %v, want 0.5", got)
 	}
@@ -70,7 +70,7 @@ func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
 	}
 
 	// A count of nothing is a host that reported no usage.
-	r.correct("chat", 0, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))})
+	r.correct("chat", 0, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))}, "")
 	if got := r.ratio("chat"); got != 0.5 {
 		t.Errorf("ratio = %v, want the one that was counted", got)
 	}
@@ -95,7 +95,7 @@ func TestWhatAPictureCostsIsReadBackFromTheCount(t *testing.T) {
 
 	// Twenty characters at a token every 3.5 come to 6, and the rest of the
 	// count is what the picture cost.
-	r.correct("chat", 1000, withPicture(20, 1))
+	r.correct("chat", 1000, withPicture(20, 1), "")
 	if got := r.image("chat"); got != 994 {
 		t.Errorf("a picture costs %d, want 994", got)
 	}
@@ -109,12 +109,12 @@ func TestWhatAPictureCostsIsReadBackFromTheCount(t *testing.T) {
 	}
 
 	// Two of them share what is left of the count.
-	r.correct("chat", 406, withPicture(20, 2))
+	r.correct("chat", 406, withPicture(20, 2), "")
 	if got := r.image("chat"); got != 200 {
 		t.Errorf("a picture costs %d, want 200", got)
 	}
 	// A count the characters alone come to has no picture in it to read.
-	r.correct("chat", 6, withPicture(20, 1))
+	r.correct("chat", 6, withPicture(20, 1), "")
 	if got := r.image("chat"); got != 200 {
 		t.Errorf("a picture costs %d, want the one that was counted", got)
 	}

@@ -221,6 +221,14 @@ header, footer, #chat {
   30% { opacity: 1; }
 }
 
+/* What she is doing in the middle of a reply, under the dots. */
+#note {
+  padding: 0 .3rem .4rem;
+  color: var(--faint);
+  font-size: .8rem;
+  font-style: italic;
+}
+
 #quick {
   display: flex;
   flex-wrap: wrap;

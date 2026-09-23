@@ -204,6 +204,12 @@ func (e *Engine) Forget(ctx context.Context, id store.MemoryID) ([]store.Memory,
 // when there is no query. They are what she has been told, whether or not a
 // prompt had room to tell her.
 func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
+	return e.memories(ctx, query, limit, nil)
+}
+
+// memories are what Memories answers, with the request that embeds the query
+// kept by rec when a reply made it.
+func (e *Engine) memories(ctx context.Context, query string, limit int, rec api.Recorder) ([]store.Memory, error) {
 	if query == "" {
 		return e.store.LatestMemories(ctx, limit)
 	}
@@ -214,7 +220,7 @@ func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store
 	// The query is embedded by the model the memories were, since a vector of
 	// one model measures nothing against another's.
 	out, err := m.Runner.Embed(ctx, api.EmbedRequest{
-		Model: m.ID, Input: []string{query}, Settings: m.settings,
+		Model: m.ID, Input: []string{query}, Settings: m.settings, Recorder: rec,
 	})
 	if err != nil {
 		return nil, err

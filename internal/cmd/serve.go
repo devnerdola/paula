@@ -19,6 +19,7 @@ import (
 	"nerdola.dev/x/paula/internal/persona"
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/store"
+	"nerdola.dev/x/paula/internal/tools"
 )
 
 // lockFile is the file a run holds in the data directory, so a second one does
@@ -53,6 +54,17 @@ func serve(g *globals) error {
 	set, err := runners.Configure(cfg, runners.Host{Log: log, Secrets: g.secrets})
 	if err != nil {
 		return err
+	}
+	var offered []tools.Tool
+	for _, t := range cfg.Tools {
+		opened, err := tools.Open(t.Name, t.Section, tools.Host{
+			Names:    tools.Names{Character: card.Name, User: card.User.Name},
+			Language: card.Language,
+		})
+		if err != nil {
+			return err
+		}
+		offered = append(offered, opened...)
 	}
 	unlock, err := lock(cfg.DataDir)
 	if err != nil {
@@ -101,6 +113,7 @@ func serve(g *globals) error {
 		Persona: card,
 		Engine:  cfg.Engine,
 		Log:     log,
+		Tools:   offered,
 	})
 	if err != nil {
 		return err

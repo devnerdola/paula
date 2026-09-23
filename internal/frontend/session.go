@@ -46,11 +46,13 @@ type Session struct {
 
 // writing is the reply arriving now: the entry it belongs to, the text that
 // has arrived, and whether any of it went to the frontend as a stream, which is
-// both a stream to close and text that cannot be taken back.
+// text that cannot be taken back. open is a stream to close, which a note
+// closes in the middle of a reply that has streamed and goes on streaming.
 type writing struct {
 	entry    store.EntryID
 	text     string
 	streamed bool
+	open     bool
 }
 
 // begin starts on a reply, and clear forgets the one that was arriving.
@@ -388,10 +390,20 @@ func (s *Session) show(ctx context.Context, e conversation.Event) error {
 	case conversation.ReplyRestarted:
 		return s.dropped(ctx)
 	case conversation.ReplyFailed:
-		if err := s.dropped(ctx); err != nil {
+		// A reply that failed after it had run a tool keeps what it wrote, which
+		// is shown before what went wrong.
+		var err error
+		if e.Message != nil {
+			err = s.ended(ctx, e, "")
+		} else {
+			err = s.dropped(ctx)
+		}
+		if err != nil {
 			return err
 		}
 		return s.say(ctx, "error: "+e.Text)
+	case conversation.Note:
+		return s.noted(ctx, e)
 	}
 	return nil
 }
@@ -444,11 +456,32 @@ func (s *Session) streaming(ctx context.Context, e conversation.Event) error {
 	if !ok {
 		return nil
 	}
-	s.writing.streamed = true
+	// A stream a note closed goes on below the note, which parts the texts
+	// already: the blank line the reply parts them with is not written out.
+	if s.writing.streamed && !s.writing.open {
+		added = strings.TrimLeft(added, "\n")
+	}
+	s.writing.streamed, s.writing.open = true, true
 	if added == "" {
 		return nil
 	}
 	return streamer.Stream(ctx, added)
+}
+
+// noted shows what she is doing in the middle of the reply being shown: below
+// the text so far, so the stream that text is on is closed first, and the
+// rest of the reply goes on below the note.
+func (s *Session) noted(ctx context.Context, e conversation.Event) error {
+	if e.Entry != s.writing.entry {
+		return nil
+	}
+	if err := s.endStream(ctx); err != nil {
+		return err
+	}
+	if noter, ok := s.adapter.(api.Noter); ok {
+		return noter.Note(ctx, e.Text)
+	}
+	return s.send(ctx, api.Outgoing{Text: "(" + e.Text + ")"})
 }
 
 // ended shows the reply as it was stored. She has stopped writing once the
@@ -470,9 +503,17 @@ func (s *Session) showEnded(ctx context.Context, e conversation.Event, suffix st
 	written := s.writing.streamed && writes && e.Entry == s.writing.entry
 	shown := e.Message != nil && !s.already(e.Message)
 	if written && shown && suffix != "" {
-		if err := streamer.Stream(ctx, suffix); err != nil {
+		// A note may have closed the stream the reply was on. The mark opens it
+		// again below the note, where there is nothing for it to stand apart
+		// from.
+		mark := suffix
+		if !s.writing.open {
+			mark = strings.TrimLeft(mark, " ")
+		}
+		if err := streamer.Stream(ctx, mark); err != nil {
 			return err
 		}
+		s.writing.open = true
 	}
 	if err := s.endStream(ctx); err != nil {
 		return err
@@ -513,8 +554,8 @@ func (s *Session) already(m *store.Message) bool { return m.ID <= s.shown }
 func (s *Session) done(entry store.EntryID) bool { return entry > 0 && entry <= s.entries }
 
 func (s *Session) endStream(ctx context.Context) error {
-	if streamer, ok := s.adapter.(api.Streamer); ok && s.writing.streamed {
-		s.writing.streamed = false
+	if streamer, ok := s.adapter.(api.Streamer); ok && s.writing.open {
+		s.writing.open = false
 		return streamer.EndStream(ctx)
 	}
 	return nil

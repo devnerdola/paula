@@ -30,6 +30,9 @@ const (
 	ReplyStopped
 	ReplyRestarted
 	ReplyFailed
+	// Note is what she is doing in the middle of a reply, said while a tool
+	// she asked for runs.
+	Note
 )
 
 func (k Kind) String() string {
@@ -48,6 +51,8 @@ func (k Kind) String() string {
 		return "reply restarted"
 	case ReplyFailed:
 		return "reply failed"
+	case Note:
+		return "note"
 	}
 	return "unknown"
 }
@@ -59,7 +64,8 @@ type Event struct {
 	Channel string
 	// From is the frontend a stored message came from.
 	From string
-	// Text is all of a reply's text so far, or why a reply failed.
+	// Text is all of a reply's text so far, why a reply failed, or what a note
+	// says.
 	Text string
 	// Message is the message that was stored, and is nil when none was.
 	Message *store.Message

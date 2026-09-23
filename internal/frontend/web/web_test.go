@@ -586,6 +586,30 @@ func TestAReplyFillsABubbleAsSheWritesIt(t *testing.T) {
 	}
 }
 
+// What she is doing in the middle of a reply goes to the page as a note of its
+// own, for the page to show where it shows one.
+func TestANoteGoesToThePage(t *testing.T) {
+	srv, s := serving(t, running(t, t.TempDir()))
+	page := opens(t, srv)
+	page.synced()
+	a := s.opened(t)
+
+	if err := a.Note(t.Context(), "looking up Ana"); err != nil {
+		t.Fatal(err)
+	}
+	e := page.next()
+	if e.name != "note" {
+		t.Fatalf("a note arrived as %q", e.name)
+	}
+	var got struct {
+		Text string `json:"text"`
+	}
+	page.decode(e, &got)
+	if got.Text != "looking up Ana" {
+		t.Errorf("the note says %q", got.Text)
+	}
+}
+
 // A page scrolled back asks for what came before what it holds. The session is
 // what reads the conversation, so the ask goes to the session of that page and
 // what it shows comes back to the request that asked.

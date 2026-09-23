@@ -248,6 +248,82 @@ func TestEveryRunReadsTheListing(t *testing.T) {
 	}
 }
 
+// The stream is the one a reply that asked for two tools came back in, as
+// OpenRouter sent it: each call opened by its id and name and then built from
+// fragments of its arguments, some of them empty.
+func TestTheCallsOfACapturedStreamComeBackWhole(t *testing.T) {
+	res := streamed(t, "stream_tool_calls.sse")
+	want := []api.ToolCall{
+		{ID: "call_99c9ff3a556f41f49700d812", Name: "search_memories", Arguments: `{"query": "Caio's sister name"}`},
+		{ID: "call_7169b5d7266d44e1b8cc2058", Name: "search_memories", Arguments: `{"query": "sister"}`},
+	}
+	if !slices.Equal(res.ToolCalls, want) {
+		t.Errorf("calls = %+v, want %+v", res.ToolCalls, want)
+	}
+	if res.FinishReason != "tool_calls" {
+		t.Errorf("finish reason = %q", res.FinishReason)
+	}
+}
+
+// The reasoning documentation asks for the details of what a model thought to
+// go back with the calls it made. A stream sends each item a fragment at a
+// time under the index it has, so the fragments go back as the one item they
+// make: the text OpenRouter sent beside them as the reasoning, and every other
+// field as it came.
+func TestTheReasoningOfACallGoesBackAsTheItemItMakes(t *testing.T) {
+	res := streamed(t, "stream_tool_calls.sse")
+	if len(res.ReasoningDetails) < 2 {
+		t.Fatalf("%d fragments of reasoning, want the stream's several", len(res.ReasoningDetails))
+	}
+	out := map[string]any{}
+	hooks{}.Message(out, api.Message{
+		Role:      api.RoleAssistant,
+		ToolCalls: res.ToolCalls,
+		Reasoning: &api.Reasoning{Text: res.Reasoning, Details: res.ReasoningDetails},
+	})
+	b, err := json.Marshal(out["reasoning_details"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(b, &items); err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("reasoning_details = %s, want the one item the fragments make", b)
+	}
+	item := items[0]
+	if item["text"] != res.Reasoning {
+		t.Errorf("the item says %q, want the reasoning OpenRouter sent beside it, %q", item["text"], res.Reasoning)
+	}
+	if item["type"] != "reasoning.text" || item["format"] != "unknown" || item["index"] != 0.0 {
+		t.Errorf("the item = %+v, want every other field as it came", item)
+	}
+
+	// A message that thought nothing hands nothing back.
+	none := map[string]any{}
+	hooks{}.Message(none, api.Text(api.RoleUser, "hey"))
+	if len(none) != 0 {
+		t.Errorf("a message with no reasoning carries %+v", none)
+	}
+}
+
+// streamed is what the runner makes of a captured stream.
+func streamed(t *testing.T, name string) *api.Result {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, name))
+	}))
+	t.Cleanup(ts.Close)
+	res, err := runner(t, ts.URL, "").Chat(context.Background(), api.ChatRequest{Model: "m"},
+		func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
 func TestUnknownModel(t *testing.T) {
 	r := runner(t, catalogue(t).URL, "")
 	if _, err := r.Model(context.Background(), "nope/nope"); err == nil {

@@ -17,6 +17,7 @@ import (
 	"nerdola.dev/x/paula/internal/persona"
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/store"
+	toolsapi "nerdola.dev/x/paula/internal/tools/api"
 )
 
 // NewMessage is a message that arrived, on whichever frontend it was sent from.
@@ -57,6 +58,10 @@ type attempt struct {
 	// one that knows; the loop reads them once the attempt is done.
 	foldDue    bool
 	compactDue bool
+	// acted says the reply has run a tool, which stands whatever becomes of
+	// the reply. The goroutine writing it sets it; the loop reads it once the
+	// attempt is done.
+	acted bool
 
 	cancel context.CancelFunc
 	state  atomic.Int32
@@ -143,6 +148,9 @@ type Options struct {
 	// zone they are written to a model in.
 	Clock Clock
 	Log   *slog.Logger
+	// Tools are what she may do in the middle of a reply. A reply offered none
+	// is one round, as it is written.
+	Tools []toolsapi.Tool
 }
 
 type Engine struct {
@@ -155,6 +163,7 @@ type Engine struct {
 	clock    Clock
 	log      *slog.Logger
 	events   *events
+	tools    tools
 	// costs are what a character and a picture of a prompt come to, which every
 	// request that comes back counted says more about.
 	costs costs
@@ -252,6 +261,10 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	offered, err := toolsOf(o.Tools)
+	if err != nil {
+		return nil, nil, err
+	}
 	e := &Engine{
 		store:     o.Store,
 		media:     media.New(o.Store.Dir(), o.Engine.ImageMaxPx),
@@ -262,6 +275,7 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		clock:     o.Clock,
 		log:       o.Log,
 		events:    newEvents(),
+		tools:     offered,
 		posts:     make(chan postRequest),
 		stops:     make(chan stopRequest),
 		waits:     make(chan waitRequest),
@@ -316,6 +330,16 @@ func (e *Engine) recover(ctx context.Context) error {
 				entry.Status = store.StatusStopped
 			}
 			entry.Error = ""
+		} else {
+			// One that ran a tool answered its messages with what the tool did,
+			// the way a reply that runs one does when it fails.
+			calls, err := e.store.ToolCalls(ctx, entry.ID)
+			if err != nil {
+				return err
+			}
+			if len(calls) > 0 {
+				entry.Status = store.StatusStopped
+			}
 		}
 		if err := e.store.EndEntry(ctx, &entry); err != nil {
 			return err
@@ -534,10 +558,9 @@ func (l *loop) run() {
 		case r := <-e.worked:
 			l.take(r)
 			if !r.embedding && l.embedding.due(e.clock.Now()) {
-				// A fold is the only thing that writes memories, and what it
-				// wrote has no vector until this runs. It is looked at as soon
-				// as the fold is done rather than left to the next reply, which
-				// may be a long time coming.
+				// What a fold wrote has no vector until this runs. It is
+				// looked at as soon as the fold is done rather than left to
+				// the next reply, which may be a long time coming.
 				l.embed(ctx)
 			}
 		}
@@ -772,10 +795,18 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 			l.latest = r.message.ID
 		}
 	}
+	// A reply that has run a tool has answered its messages however it ends,
+	// since what the tool did stands and asking again would do it again. One
+	// that fails after that ends the way a stopped one does, with what it had
+	// written, and says what went wrong.
+	cutShort := status == store.StatusFailed && a.acted
+	if cutShort {
+		status = store.StatusStopped
+	}
 
 	a.entry.Status = status
 	a.entry.EndedAt = e.clock.Now()
-	if r.err != nil && status == store.StatusFailed {
+	if r.err != nil && (status == store.StatusFailed || cutShort) {
 		a.entry.Error = r.err.Error()
 	}
 	e.endEntry(ctx, a.entry)
@@ -792,6 +823,11 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 		e.events.publish(Event{Kind: ReplyRestarted, Entry: a.entry.ID, Channel: a.entry.Channel})
 	case store.StatusStopped:
 		l.answered = max(l.answered, a.entry.UptoMessageID)
+		if cutShort {
+			e.events.publish(Event{Kind: ReplyFailed, Entry: a.entry.ID, Channel: a.entry.Channel,
+				Message: r.message, Text: r.err.Error()})
+			break
+		}
 		e.events.publish(Event{Kind: ReplyStopped, Entry: a.entry.ID, Channel: a.entry.Channel, Message: r.message})
 	case store.StatusFailed:
 		// A reply that failed answered nothing, so the messages it was for are

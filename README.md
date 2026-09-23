@@ -131,8 +131,10 @@ again, or memories turned into vectors.
 
 `turns 42` shows which messages the reply answered, the prompt the model was
 given, whether it was asked to reason and at which effort, and the reply
-itself. `-dump` adds the headers and the exact bytes in both directions, which
-is what you want when an API behaves strangely.
+itself. A reply that asked for tools lists each call, the request of the round
+that asked for it, and why it failed if it did. `-dump` adds the headers and
+the exact bytes in both directions, and what each call was asked with and
+answered, which is what you want when an API behaves strangely.
 
 `paula memory` is what she remembers. It reads and writes the conversation a
 `serve` is holding, so it runs beside one or on its own:
@@ -183,6 +185,7 @@ share settings.
 | `default_models` | — | the model for each role; `chat` and `embed` are required |
 | `engine` | see below | how she replies |
 | `frontends` | none | how you reach her |
+| `tools` | none | what she can do in the middle of a reply |
 
 ### Runners
 
@@ -311,14 +314,13 @@ see them itself.
 An `embed` model is what memories are searched by. A model that embeds writes
 nothing, so it is a model of its own: OpenRouter lists them apart from the rest
 and Paula reads both listings, and Venice marks them in the one it serves.
-`paula serve` asks for one before it starts, since the conversation embeds what
-each fold writes; so does `paula memory search`, which asks it what the words
+`paula serve` asks for one before it starts, since the conversation embeds every
+memory she has; so does `paula memory search`, which asks it what the words
 you are looking for mean. Every other command reads the memories without
 searching them, and runs on a file that names none.
 
-The chat role asks for tools although no request carries any yet. Tools are
-part of the work ahead, and a model that cannot take them is not worth
-configuring for it.
+A reply is offered the tools the file names, so the chat role asks for a model
+that takes them.
 
 ### Engine
 
@@ -332,6 +334,7 @@ configuring for it.
 | `image_turns` | `2` | how many recent messages send their picture as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
 | `log_keep` | `500` | how many entries keep the bodies of their requests; a fold and a batch of embeddings are entries of their own |
+| `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; the round after them is asked for an answer with no call in it |
 
 ### Frontends
 
@@ -412,6 +415,35 @@ whether to notify you. While the page is open but not being looked at, the
 first text of a reply to something you sent from it comes as a notification,
 and clicking it brings the page back.
 
+### Tools
+
+A tool is something she can do in the middle of a reply: she asks for it, it
+runs, and she writes on with what it answered. Only the kinds listed under
+`tools` are offered. While one runs, the frontend says what she is doing, such
+as `searching memories for Ana`.
+
+**`memory`** reaches what she remembers.
+
+| Tool | What she does with it |
+|---|---|
+| `search_memories` | looks for memories by what they mean, past the newest ones her prompt carries; each comes with its number |
+| `remember` | keeps a lasting fact about you or about her as soon as it is said, rather than when a fold reaches it, in place of the memories she found it updates |
+| `forget_memory` | takes a memory away by its number, and the ones it replaced, when you ask her to |
+
+| Key | Default | Meaning |
+|---|---|---|
+| `results` | `10` | the most memories a search answers with; at least 1 |
+
+```yaml
+tools:
+  memory:
+    results: 10
+```
+
+A memory she keeps is dated by the message she was answering, and is turned
+into a vector with the rest once the reply is done. The memories it replaces
+must still stand: a number that names none keeps nothing, and she is told so.
+
 ## The character card
 
 The card is the whole character. Every field is optional except `name` and
@@ -452,6 +484,11 @@ Stopping keeps what she had written and marks it interrupted.
 **Failures wait for you.** If a request fails, she says so and the message
 stays unanswered. Your next message, or the next `serve`, picks it up. Nothing
 is answered twice: every stored reply records which messages it answered.
+
+A reply that has already run a tool is the exception. What the tool did stands,
+and asking again would do it again, so a failure after it ends the reply the
+way a stop does: what she had written is kept, the error is said below it, and
+the message counts as answered.
 
 **The prompt is the conversation.** It opens with one system message: the card,
 then what she remembers, then the summary of what came before. After it come
@@ -559,7 +596,8 @@ or that opens later, reads the conversation from the database instead, and
 shows only what it has not shown.
 
 **Every turn is recorded.** Each reply is an entry, and an entry holds the
-requests it made: the reply itself, and a look at any picture she was sent.
+requests it made: the reply itself, a look at any picture she was sent, and
+the question behind a search of her memories, turned into a vector.
 Each request keeps its headers, bodies, timings, tokens and cost, and shows a
 dash for a cost the host did not report. What a request turned into vectors is
 kept, and the vectors themselves are not: they are megabytes of numbers, and
@@ -588,8 +626,8 @@ only reads says to run `serve` first, rather than read a schema it does not
 know. Only one `serve` may use a directory at a time.
 
 Nothing leaves the machine except the requests to the model API. Those carry
-the prompt, the pictures and the settings, and — to the model that embeds — the
-memories a fold wrote, which are the conversation in the words it left them in.
+the prompt, the pictures and the settings, and — to the model that embeds — her
+memories, which are the conversation in the words they were written in.
 On OpenRouter the `routing` settings of the runner go with them, so where a
 reply may be routed and what a host may keep of it holds for the memories too.
 Venice takes no such settings on that endpoint.

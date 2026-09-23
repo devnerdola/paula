@@ -8,10 +8,13 @@ import (
 )
 
 // recorder keeps the requests of one purpose under the entry that made them.
+// last is the request it kept most recently, which is what a tool call names
+// as the round that asked for it.
 type recorder struct {
 	store   *store.Store
 	entry   store.EntryID
 	purpose string
+	last    int64
 }
 
 // recorder is what the requests an attempt makes are kept by.
@@ -35,6 +38,7 @@ func (r *recorder) StartRequest(ctx context.Context, rec *api.Record) error {
 		return err
 	}
 	rec.ID = req.ID
+	r.last = req.ID
 	return nil
 }
 

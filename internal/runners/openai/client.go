@@ -49,6 +49,10 @@ type Hooks interface {
 	// of what a chat request carries has no meaning here; where the request may
 	// be routed has the same meaning it always had.
 	EmbedBody(body map[string]any, req api.EmbedRequest) error
+	// Message adds the runner's own fields to one message of a chat request.
+	// It is where an assistant message that made calls hands back the
+	// reasoning it came with, in the field each API documents for it.
+	Message(out map[string]any, m api.Message)
 	// Chunk reads the runner's own fields of a stream chunk. The reasoning
 	// text it returns is passed on, and it fills in what it knows of the
 	// result.

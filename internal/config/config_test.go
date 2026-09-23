@@ -57,6 +57,7 @@ func TestDefaults(t *testing.T) {
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
+		ToolRounds:    3,
 	}
 	if c.Engine != want {
 		t.Errorf("engine = %+v, want %+v", c.Engine, want)
@@ -180,6 +181,7 @@ func TestValidationErrors(t *testing.T) {
 		{"no room for memories", minimal + "\nengine:\n  memory_ratio: 0\n", "engine.memory_ratio: 0 is not above 0 and at most 1"},
 		{"a fold that keeps everything", minimal + "\nengine:\n  history_keep: 1.5\n", "engine.history_keep: 1.5 is not above 0 and below 1"},
 		{"log keep", minimal + "\nengine:\n  log_keep: -1\n", "engine.log_keep: -1 is below zero"},
+		{"no tool rounds", minimal + "\nengine:\n  tool_rounds: 0\n", "engine.tool_rounds: 0 is below one"},
 		{"bad duration", minimal + "\nengine:\n  debounce: soon\n", "engine.debounce: \"soon\" is not a duration"},
 		{"duration that is not text", minimal + "\nengine:\n  debounce: [1, 2]\n", "engine.debounce: want a duration"},
 		{"unknown engine key", minimal + "\nengine:\n  reply_reserve: 100\n", "engine.reply_reserve: unknown key"},

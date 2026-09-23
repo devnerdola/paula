@@ -738,6 +738,52 @@ func TestAReplyStoppedByARunThatEndedReadsAsStopped(t *testing.T) {
 	}
 }
 
+// The run ended in the middle of a tool, before the reply wrote anything. What
+// the tool did stands, so the message is answered by it and the next run does
+// not do it again.
+func TestAToolRunByARunThatEndedAnswersItsMessage(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	c := newClock()
+
+	msg := &store.Message{Role: store.RoleUser, Channel: "repl",
+		Parts: []store.Part{{Type: store.PartText, Text: "remember my sister is Ana"}}, CreatedAt: c.Now()}
+	if err := st.AddMessage(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	entry := &store.Entry{Channel: "repl", UptoMessageID: msg.ID, StartedAt: c.Now()}
+	if err := st.StartEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+	req := &store.Request{EntryID: entry.ID, Purpose: store.PurposeReply, Runner: "openrouter",
+		Method: "POST", URL: "https://openrouter.ai/api/v1/chat/completions", StartedAt: c.Now()}
+	if err := st.AddRequest(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	call := &store.ToolCall{EntryID: entry.ID, RequestID: req.ID, CallID: "call_1",
+		Name: "remember", Arguments: `{"memory":"Caio's sister is Ana."}`, StartedAt: c.Now()}
+	if err := st.StartToolCall(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &replies{}
+	e := open(t, st, c, a.chat)
+	c.Advance(config.DefaultEngine().Debounce.Duration())
+	if _, err := e.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.count() != 0 {
+		t.Errorf("replies = %d, want the message answered by the tool that ran", a.count())
+	}
+	ended, err := st.Entry(ctx, entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.Status != store.StatusStopped || ended.Error != runEnded {
+		t.Errorf("entry = %+v, want it stopped by the run that ended", ended)
+	}
+}
+
 // The stop lands while a message is still waiting for its reply. It answers
 // that message with an entry of its own, so paula turns shows the turn happened
 // and the next run does not answer it again.

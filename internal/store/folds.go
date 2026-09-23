@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"slices"
 	"time"
 )
 
@@ -24,7 +26,8 @@ type Summary struct {
 	Content       string
 }
 
-// Memory is a lasting fact a fold read out of the conversation.
+// Memory is a lasting fact of the conversation: one a fold read out of it, or
+// one she kept herself in the middle of a reply.
 type Memory struct {
 	ID      MemoryID
 	Content string
@@ -34,9 +37,9 @@ type Memory struct {
 	SaidAt time.Time
 	// ReplacedBy is the memory that took its place, or zero while it stands.
 	ReplacedBy MemoryID
-	// Replaces are the memories this one takes the place of, which Fold reads
-	// and writes as their ReplacedBy. A memory read back carries ReplacedBy
-	// rather than this.
+	// Replaces are the memories this one takes the place of, which Fold and
+	// Remember read and write as their ReplacedBy. A memory read back carries
+	// ReplacedBy rather than this.
 	Replaces []MemoryID
 }
 
@@ -130,6 +133,55 @@ func (s *Store) Forget(ctx context.Context, id MemoryID) ([]Memory, error) {
 		}
 	}
 	return out, tx.Commit()
+}
+
+// Remember keeps a memory she wrote down herself in the middle of a reply,
+// rather than one a fold read out of the conversation, and fills in its ID.
+//
+// What it replaces are numbers she chose, so one that does not name a memory
+// that stands keeps nothing, where a fold would leave it be: she is told, and
+// asks again with what she meant.
+func (s *Store) Remember(ctx context.Context, m *Memory) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `INSERT INTO memories
+		(content, source_message_id) VALUES (?, ?)`,
+		m.Content, int64(m.Source))
+	if err != nil {
+		return err
+	}
+	stored, err := res.LastInsertId()
+	if err != nil {
+		return err
+	}
+	for i, replaced := range m.Replaces {
+		// A number named twice is one memory, replaced once.
+		if slices.Contains(m.Replaces[:i], replaced) {
+			continue
+		}
+		// A number that named nothing before this memory was kept may be the
+		// one it was given, so only an older memory is taken.
+		res, err := tx.ExecContext(ctx, `UPDATE memories SET replaced_by = ?
+			 WHERE id = ? AND id < ? AND replaced_by IS NULL`,
+			stored, int64(replaced), stored)
+		if err != nil {
+			return err
+		}
+		if n, err := res.RowsAffected(); err != nil {
+			return err
+		} else if n == 0 {
+			return fmt.Errorf("%w: memory %d does not stand", ErrNotFound, replaced)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	m.ID = MemoryID(stored)
+	return nil
 }
 
 // Fold stores what one step of a fold learned: the summary as it now reads,

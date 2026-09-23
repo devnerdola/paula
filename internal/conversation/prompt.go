@@ -83,7 +83,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	// place its id gives it.
 	last := a.entry.UptoMessageID
 	image := e.costs.image(m.Name)
-	head := size([]api.Message{card}, ratio, image)
+	// The tools a reply is offered go with every round of it, beside the card.
+	head := size([]api.Message{card, api.Text(api.RoleSystem, e.tools.text)}, ratio, image)
 	taken := head
 
 	// The newest exchange is built first and the older ones are added while

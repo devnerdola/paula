@@ -184,6 +184,12 @@ type (
 	Writer interface {
 		Writing(ctx context.Context, on bool) error
 	}
+	// Noter shows what she is doing in the middle of a reply, below what she
+	// has written of it so far. A frontend that has nowhere of its own to show
+	// one is sent it as a line in brackets.
+	Noter interface {
+		Note(ctx context.Context, text string) error
+	}
 	// CommandShower is told everything that can be typed here, its own
 	// commands among them, as a session opens. A frontend that has somewhere
 	// to list them lists them there.

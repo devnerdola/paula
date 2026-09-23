@@ -8,6 +8,7 @@ id noted below.
 | `embedding_models.json` | `GET /embeddings/models`, three of the thirty-three entries; the models that write text are listed apart from these |
 | `endpoints.json` | `GET /models/deepseek/deepseek-v4-pro-0813/endpoints`, three endpoints |
 | `stream_reply.sse` | `POST /chat/completions`, streaming, `reasoning.enabled` |
+| `stream_tool_calls.sse` | `POST /chat/completions` with `deepseek/deepseek-v4-flash-0731`, streaming, `reasoning.enabled`, one tool offered; two calls came back |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 400; the `user_id` the answer carries is dropped |
 | `error_unauthorized.json` | `POST /chat/completions` with a key that does not exist, 401 |
 

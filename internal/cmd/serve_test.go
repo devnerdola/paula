@@ -222,6 +222,8 @@ engine:
   debounce: 10ms
 frontends:
   repl:
+tools:
+  memory:
 `)
 
 	// The run is stopped the way an interrupt stops it: by the context the
@@ -301,7 +303,13 @@ frontends:
 		t.Fatal(err)
 	}
 	if len(requests) != 1 || requests[0].Status != 200 || requests[0].Provider == "" {
-		t.Errorf("requests = %+v, want the one that was sent, as it came back", requests)
+		t.Fatalf("requests = %+v, want the one that was sent, as it came back", requests)
+	}
+	// The reply was offered the tools the file names.
+	for _, name := range []string{"search_memories", "remember", "forget_memory"} {
+		if !strings.Contains(string(requests[0].RequestBody), `"name":"`+name+`"`) {
+			t.Errorf("the request offered no %s:\n%s", name, requests[0].RequestBody)
+		}
 	}
 }
 

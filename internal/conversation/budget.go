@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"sync"
 	"unicode/utf8"
@@ -53,9 +54,11 @@ func (c *costs) image(model string) int     { return c.at(model).image }
 // picture in it says what a character costs. One with pictures says what a
 // picture costs: what is left of the count once the characters are paid for is
 // what the pictures came to, so the characters are paid for at the rate the
-// prompts before it settled on.
-func (c *costs) correct(model string, tokens int, messages []api.Message) {
+// prompts before it settled on. The tools a request offers are text the host
+// counted as well.
+func (c *costs) correct(model string, tokens int, messages []api.Message, offered string) {
 	chars, images := measure(messages)
+	chars += utf8.RuneCountInString(offered)
 	if tokens <= 0 {
 		return
 	}
@@ -87,7 +90,8 @@ func (c *costs) correct(model string, tokens int, messages []api.Message) {
 }
 
 // measure counts the characters of what is sent as text, and the pictures sent
-// as pictures.
+// as pictures. The calls a reply made are text a model reads back: what each is
+// called, and what it was asked with.
 func measure(messages []api.Message) (chars, images int) {
 	for _, m := range messages {
 		for _, p := range m.Parts {
@@ -98,8 +102,24 @@ func measure(messages []api.Message) (chars, images int) {
 				images++
 			}
 		}
+		for _, c := range m.ToolCalls {
+			chars += utf8.RuneCountInString(c.Name) + utf8.RuneCountInString(c.Arguments)
+		}
 	}
 	return chars, images
+}
+
+// toolsText is the tools a request offers as the text a model reads of them:
+// what each is called, what it does, and what it takes.
+func toolsText(offered []api.ToolDef) string {
+	if len(offered) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(offered)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // size is what messages take of a context: their characters at what one costs,

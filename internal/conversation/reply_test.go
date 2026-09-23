@@ -18,6 +18,7 @@ import (
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
+	toolsapi "nerdola.dev/x/paula/internal/tools/api"
 )
 
 // fakeRunner answers with whatever a test hands it, and remembers what it was
@@ -257,6 +258,13 @@ func openReply(t *testing.T, f *fakeRunner) *replyEngine {
 // about which models are there.
 func openReplyWith(t *testing.T, f *fakeRunner, set *runners.Setup) *replyEngine {
 	t.Helper()
+	return openReplyOffering(t, f, set, config.DefaultEngine())
+}
+
+// openReplyOffering opens an engine that offers tools, under engine settings of
+// the test's own.
+func openReplyOffering(t *testing.T, f *fakeRunner, set *runners.Setup, cfg config.Engine, tools ...toolsapi.Tool) *replyEngine {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "data"))
 	if err != nil {
@@ -270,9 +278,10 @@ func openReplyWith(t *testing.T, f *fakeRunner, set *runners.Setup) *replyEngine
 		Store:   st,
 		Runners: set,
 		Persona: fullCard(),
-		Engine:  config.DefaultEngine(),
+		Engine:  cfg,
 		Clock:   c,
 		Log:     slog.New(slog.NewTextHandler(written, nil)),
+		Tools:   tools,
 	})
 	if err != nil {
 		t.Fatal(err)

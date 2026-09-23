@@ -96,6 +96,9 @@ func (p parts) EmbedBody(body map[string]any, req api.EmbedRequest) error {
 	return p.embed(body, req)
 }
 
+// Message adds nothing: what a runner hands back with a message is its own.
+func (parts) Message(map[string]any, api.Message) {}
+
 func (p parts) Chunk(raw []byte, res *api.Result) (string, error) {
 	if p.chunk == nil {
 		return "", nil
@@ -637,6 +640,113 @@ func TestAMessageOfSeveralTextParts(t *testing.T) {
 	}
 	if got := msgs[0]["content"]; got != "one\n\ntwo" {
 		t.Errorf("content = %q, want the parts joined by a blank line", got)
+	}
+}
+
+// A round that asked for tools goes back with what it asked for, and each
+// answer goes back under the call it answers, as both APIs document them.
+func TestARoundOfCallsGoesBackAsTheAPIsDocumentIt(t *testing.T) {
+	params := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)
+	body, err := chatBody(api.ChatRequest{
+		Model: "some/model",
+		Messages: []api.Message{
+			api.Text(api.RoleUser, "where does Ana live?"),
+			{Role: api.RoleAssistant, ToolCalls: []api.ToolCall{
+				{ID: "call_1", Name: "search_memories", Arguments: `{"query":"Ana"}`},
+			}},
+			{Role: api.RoleTool, ToolCallID: "call_1",
+				Parts: []api.Part{{Type: api.PartText, Text: "Ana lives in Lisbon"}}},
+		},
+		Tools: []api.ToolDef{{Name: "search_memories", Description: "Looks something up.", Parameters: params}},
+	}, parts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []struct {
+			Role       string  `json:"role"`
+			Content    *string `json:"content"`
+			ToolCallID string  `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+		Tools []struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name        string          `json:"name"`
+				Description string          `json:"description"`
+				Parameters  json.RawMessage `json:"parameters"`
+			} `json:"function"`
+		} `json:"tools"`
+		ToolChoice *string `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+
+	asked := got.Messages[1]
+	// What says nothing beside a call is null rather than text.
+	if asked.Content != nil {
+		t.Errorf("the call's message says %q, want null beside the call", *asked.Content)
+	}
+	if len(asked.ToolCalls) != 1 || asked.ToolCalls[0].ID != "call_1" || asked.ToolCalls[0].Type != "function" ||
+		asked.ToolCalls[0].Function.Name != "search_memories" || asked.ToolCalls[0].Function.Arguments != `{"query":"Ana"}` {
+		t.Errorf("the call went as %+v", asked.ToolCalls)
+	}
+	answered := got.Messages[2]
+	if answered.Role != "tool" || answered.ToolCallID != "call_1" || answered.Content == nil ||
+		*answered.Content != "Ana lives in Lisbon" {
+		t.Errorf("the answer went as %+v", answered)
+	}
+	if len(got.Tools) != 1 || got.Tools[0].Type != "function" || got.Tools[0].Function.Name != "search_memories" ||
+		string(got.Tools[0].Function.Parameters) != string(params) {
+		t.Errorf("the tools went as %+v", got.Tools)
+	}
+	// Nothing is said of the choice unless there is one to say.
+	if got.ToolChoice != nil {
+		t.Errorf("tool_choice = %q, want it left out", *got.ToolChoice)
+	}
+}
+
+// A round asked for an answer with no call in it says so.
+func TestARoundWithNoCallSaysSo(t *testing.T) {
+	body, err := chatBody(api.ChatRequest{
+		Model:      "some/model",
+		Messages:   []api.Message{api.Text(api.RoleUser, "hey")},
+		ToolChoice: api.ToolChoiceNone,
+	}, parts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := body["tool_choice"]; got != "none" {
+		t.Errorf("tool_choice = %v, want none", got)
+	}
+}
+
+// A request that offers no tools says nothing of them, so it is the request it
+// always was.
+func TestARequestOfferingNoToolsSaysNothingOfThem(t *testing.T) {
+	body, err := chatBody(api.ChatRequest{
+		Model:    "some/model",
+		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+	}, parts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"tools", "tool_choice"} {
+		if _, ok := body[key]; ok {
+			t.Errorf("the body carries %s: %v", key, body[key])
+		}
 	}
 }
 

@@ -29,6 +29,9 @@ const (
 	PurposeCompaction = "compaction"
 	// PurposeEmbedding turns memories into vectors.
 	PurposeEmbedding = "embedding"
+	// PurposeMemorySearch turns what a reply looks for among the memories into
+	// a vector.
+	PurposeMemorySearch = "memory-search"
 )
 
 // EntryID numbers the entries of the turn log.

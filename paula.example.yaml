@@ -50,3 +50,7 @@ frontends:
   # reaches the address and has the token reads the conversation.
   # web:
   #   listen: 127.0.0.1:8484
+
+# What she can do in the middle of a reply: search, keep and forget memories.
+tools:
+  memory:

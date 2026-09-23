@@ -59,7 +59,9 @@ func (e *Engine) cacheKey(purpose string) string {
 	return "paula-" + e.persona.ID + "-" + purpose
 }
 
-// reply writes one reply and stores it.
+// reply writes one reply and stores it. A reply offered tools goes in rounds:
+// the model asks for tools, they run, what they answered goes back to it, and
+// it goes on, until it answers without asking for any.
 func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) {
 	m, err := e.roleModel(ctx, config.RoleChat)
 	if err != nil {
@@ -70,51 +72,145 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		return nil, err
 	}
 
-	var text strings.Builder
-	res, err := m.Runner.Chat(ctx, api.ChatRequest{
-		Model:    m.ID,
-		Messages: messages,
-		Settings: m.settings,
-		CacheKey: e.cacheKey(store.PurposeReply),
-		Recorder: e.recorder(a, store.PurposeReply),
-	}, func(c api.Chunk) error {
-		if c.Kind != api.ChunkText || c.Text == "" {
-			return nil
+	// written is the text of every round, as the frontends were sent it: they
+	// are given the whole of it each time and show what is new, so it only
+	// ever grows. thought is the reasoning of every round.
+	var written strings.Builder
+	var thought []string
+	var res *api.Result
+	for round := 1; ; round++ {
+		// The round after the last a reply may take calls in is asked for an
+		// answer with none, so a model that keeps asking still answers.
+		choice := ""
+		if round > e.cfg.ToolRounds {
+			choice = api.ToolChoiceNone
 		}
-		// A reply a new message restarted shows nothing, not even what landed
-		// while it was being cancelled.
-		if !a.started() {
+		rec := e.recorder(a, store.PurposeReply)
+		var said strings.Builder
+		res, err = m.Runner.Chat(ctx, api.ChatRequest{
+			Model:      m.ID,
+			Messages:   messages,
+			Settings:   m.settings,
+			Tools:      e.tools.defs,
+			ToolChoice: choice,
+			CacheKey:   e.cacheKey(store.PurposeReply),
+			Recorder:   rec,
+		}, func(c api.Chunk) error {
+			if c.Kind != api.ChunkText || c.Text == "" {
+				return nil
+			}
+			// A reply a new message restarted shows nothing, not even what
+			// landed while it was being cancelled.
+			if !a.started() {
+				return nil
+			}
+			// What a round writes after another has is a text of its own: what
+			// came before it is what she said before a call.
+			if said.Len() == 0 {
+				written.WriteString(gap(written.String()))
+			}
+			said.WriteString(c.Text)
+			written.WriteString(c.Text)
+			e.events.publish(Event{
+				Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: written.String(),
+			})
 			return nil
-		}
-		text.WriteString(c.Text)
-		e.events.publish(Event{
-			Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: text.String(),
 		})
-		return nil
-	})
 
-	// What the host counted this prompt as is what a character costs on this
-	// model, whatever became of the reply.
-	if res != nil {
-		e.costs.correct(m.Name, res.Usage.PromptTokens, messages)
-	}
-
-	// A restart keeps nothing, even when the reply finished as it landed.
-	if a.was(restarted) {
-		return nil, context.Canceled
-	}
-	if err != nil {
-		// A reply that was stopped keeps what it had written.
-		if a.was(stopped) {
-			return e.replyMessage(a, text.String(), "", true), nil
+		// What the host counted this prompt as is what a character costs on
+		// this model, whatever became of the reply.
+		if res != nil {
+			e.costs.correct(m.Name, res.Usage.PromptTokens, messages, e.tools.text)
 		}
-		return nil, err
+
+		// A restart keeps nothing, even when the reply finished as it landed.
+		if a.was(restarted) {
+			return nil, context.Canceled
+		}
+		if err != nil {
+			// A reply that was stopped keeps what it had written, and so does
+			// one that has run a tool, however it failed.
+			if a.was(stopped) {
+				return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), nil
+			}
+			if a.acted {
+				return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), err
+			}
+			return nil, err
+		}
+		if res.Reasoning != "" {
+			thought = append(thought, res.Reasoning)
+		}
+		if len(res.ToolCalls) == 0 {
+			break
+		}
+
+		if choice == api.ToolChoiceNone {
+			// A model asked for an answer with no call in it that asks anyway
+			// has its calls written down and left: what it wrote beside them
+			// is its answer.
+			for _, c := range res.ToolCalls {
+				e.call(ctx, a, rec.last, c, false)
+			}
+			break
+		}
+
+		// A reply that runs a tool has done something, so a message that
+		// arrives while it does no longer takes its place.
+		if !a.started() {
+			return nil, context.Canceled
+		}
+		a.acted = true
+		messages = append(messages, asked(said.String(), res))
+		for _, c := range res.ToolCalls {
+			result := e.call(ctx, a, rec.last, c, true)
+			messages = append(messages, api.Message{
+				Role:       api.RoleTool,
+				ToolCallID: c.ID,
+				Parts:      []api.Part{{Type: api.PartText, Text: result}},
+			})
+		}
+		// A stop while a tool ran keeps what she had written before it.
+		if a.was(stopped) {
+			return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), nil
+		}
 	}
-	if strings.TrimSpace(text.String()) == "" {
+
+	// What she wrote in any round is what she said: a model often puts the
+	// whole of its answer beside the call it makes, and has nothing to add
+	// once the call is answered.
+	if strings.TrimSpace(written.String()) == "" {
 		return nil, fmt.Errorf("the model returned no text (finish reason %s)", reason(res))
 	}
 	a.finished()
-	return e.replyMessage(a, text.String(), res.Reasoning, false), nil
+	return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), false), nil
+}
+
+// asked is a round that asked for tools, as the rounds after it are told it:
+// what it wrote, what it asked for, and the reasoning it came with, which a
+// model that reasons across rounds reads again.
+func asked(said string, res *api.Result) api.Message {
+	m := api.Message{Role: api.RoleAssistant, ToolCalls: res.ToolCalls}
+	if said != "" {
+		m.Parts = []api.Part{{Type: api.PartText, Text: said}}
+	}
+	if res.Reasoning != "" || len(res.ReasoningDetails) > 0 {
+		m.Reasoning = &api.Reasoning{Text: res.Reasoning, Details: res.ReasoningDetails}
+	}
+	return m
+}
+
+// gap is what goes between what a reply has written and what a new round of it
+// writes: a blank line, less whatever of one the text already ends with. A
+// blank line is where one text ends and the next begins.
+func gap(written string) string {
+	switch {
+	case written == "", strings.HasSuffix(written, "\n\n"):
+		return ""
+	case strings.HasSuffix(written, "\n"):
+		return "\n"
+	}
+	return "\n\n"
 }
 
 func reason(res *api.Result) string {

@@ -247,6 +247,67 @@ func TestTurnsDump(t *testing.T) {
 	}
 }
 
+// A reply that asked for tools says which it asked for, from which of its
+// requests, and what came of each: what the model was sent back, and why a
+// call failed. The dump names each call by the id the bodies it shows give it.
+func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
+	dir, entry, _ := filled(t)
+	s, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	requests, err := s.Requests(ctx, entry)
+	if err != nil || len(requests) != 1 {
+		t.Fatalf("requests = %+v, %v", requests, err)
+	}
+	for _, c := range []*store.ToolCall{
+		{CallID: "call_1", Name: "search_memories", Arguments: `{"query":"Ana"}`,
+			Result: "Ana is coming over"},
+		{CallID: "call_2", Name: "read_minds", Arguments: `{}`,
+			Result: "error: no tool is called read_minds", Error: "no tool is called read_minds"},
+	} {
+		c.EntryID, c.RequestID, c.StartedAt = entry, requests[0].ID, when
+		if err := s.StartToolCall(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+		c.EndedAt = when.Add(30 * time.Millisecond)
+		if err := s.EndToolCall(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	id := strconv.FormatInt(int64(entry), 10)
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", id)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %s", code, errOut)
+	}
+	line(t, out, "TOOL CALL ")
+	if row := line(t, out, "1          1 "); !strings.Contains(row, "search_memories") || !strings.Contains(row, "30ms") {
+		t.Errorf("the first call reads %q", row)
+	}
+	if row := line(t, out, "2          1 "); !strings.Contains(row, "read_minds") || !strings.Contains(row, "no tool is called") {
+		t.Errorf("the second call reads %q", row)
+	}
+
+	code, out, errOut = exec(t, "-config", turnsConfig(t, dir), "turns", "-dump", id)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %s", code, errOut)
+	}
+	for _, want := range []string{
+		"== tool call 1  search_memories  call_1  asked by request 1",
+		`{"query":"Ana"}`,
+		"Ana is coming over",
+		"== tool call 2  read_minds  call_2  asked by request 1",
+		"error\nno tool is called read_minds",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output has no %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestTurnsShowsWhenBodiesWerePruned(t *testing.T) {
 	dir, entry, _ := filled(t)
 	s, err := store.Open(dir)

@@ -38,6 +38,7 @@ type Config struct {
 	DefaultModels DefaultModels
 	Engine        Engine
 	Frontends     []Frontend
+	Tools         []Tool
 }
 
 // Runner is one entry of the runners mapping. Its section holds every key,
@@ -75,6 +76,12 @@ func (c *Config) FrontendSection(name string) Section {
 	return Section{}
 }
 
+// Tool is one entry of the tools mapping: a kind of tool, and its settings.
+type Tool struct {
+	Name    string
+	Section Section
+}
+
 type DefaultModels struct {
 	Chat   string `yaml:"chat"`
 	Vision string `yaml:"vision"`
@@ -106,6 +113,9 @@ type Engine struct {
 	ImageTurns  int     `yaml:"image_turns"`
 	ImageMaxPx  int     `yaml:"image_max_px"`
 	LogKeep     int     `yaml:"log_keep"`
+	// ToolRounds is how many rounds of tool calls a reply may take. The round
+	// after them is asked for an answer with no call in it.
+	ToolRounds int `yaml:"tool_rounds"`
 }
 
 // DefaultEngine is the engine section a file that writes none gets.
@@ -119,6 +129,7 @@ func DefaultEngine() Engine {
 		ImageTurns:    2,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
+		ToolRounds:    3,
 	}
 }
 
@@ -153,6 +164,7 @@ type file struct {
 	DefaultModels DefaultModels `yaml:"default_models"`
 	Engine        Engine        `yaml:"engine"`
 	Frontends     yaml.Node     `yaml:"frontends"`
+	Tools         yaml.Node     `yaml:"tools"`
 }
 
 // Find returns the configuration file to read: the given path, then
@@ -205,6 +217,7 @@ func Load(path string) (*Config, error) {
 	c.Runners = readRunners(p, &f.Runners)
 	c.Models = readModels(p, &f.Models, c.Runners)
 	c.Frontends = readFrontends(p, &f.Frontends)
+	c.Tools = readTools(p, &f.Tools)
 	checkDefaultModels(p, c)
 	checkEngine(p, c.Engine)
 
@@ -304,6 +317,19 @@ func readFrontends(p *Problems, n *yaml.Node) []Frontend {
 	return out
 }
 
+func readTools(p *Problems, n *yaml.Node) []Tool {
+	entries, err := entries(n, "tools")
+	if err != nil {
+		p.Add(err)
+		return nil
+	}
+	var out []Tool
+	for _, e := range entries {
+		out = append(out, Tool{Name: e.name, Section: e.section})
+	}
+	return out
+}
+
 // checkDefaultModels holds every role to a model the file names. Only chat is
 // needed to read a file at all: what serving takes of it is serve's to say,
 // since the commands that only read a conversation run without it.
@@ -352,6 +378,11 @@ func checkEngine(p *Problems, e Engine) {
 	}
 	if e.LogKeep < 0 {
 		p.Addf("engine.log_keep: %d is below zero", e.LogKeep)
+	}
+	// A reply that could take no round of calls would be offered tools it can
+	// never use.
+	if e.ToolRounds < 1 {
+		p.Addf("engine.tool_rounds: %d is below one", e.ToolRounds)
 	}
 }
 

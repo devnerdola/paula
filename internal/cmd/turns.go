@@ -170,6 +170,23 @@ func showTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 		})
 	}
 
+	calls, err := s.ToolCalls(ctx, id)
+	if err != nil {
+		return err
+	}
+	if len(calls) > 0 {
+		// A call names the request of the round that asked for it, which is
+		// numbered here the way the table above numbers it.
+		round := rounds(requests)
+		fmt.Fprintln(w)
+		table(w, []string{"TOOL CALL", "REQUEST", "NAME", "DURATION", "ERROR"}, func(row func(...string)) {
+			for i, c := range calls {
+				row(strconv.Itoa(i+1), round[c.RequestID], c.Name,
+					since(c.StartedAt, c.EndedAt), orDash(c.Error))
+			}
+		})
+	}
+
 	// The reply's own request shows what was sent; an entry with no reply
 	// shows every request it made.
 	asked := lastOf(requests, store.PurposeReply)
@@ -356,6 +373,25 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 		writeUsage(w, r)
 	}
 
+	calls, err := s.ToolCalls(ctx, id)
+	if err != nil {
+		return err
+	}
+	round := rounds(requests)
+	for i, c := range calls {
+		fmt.Fprintf(w, "\n== tool call %d  %s  %s  asked by request %s  started %s",
+			i+1, c.Name, c.CallID, round[c.RequestID], clock(c.StartedAt))
+		if !c.EndedAt.IsZero() {
+			fmt.Fprintf(w, "  ended %s", clock(c.EndedAt))
+		}
+		fmt.Fprintln(w)
+		writeBody(w, "arguments", []byte(c.Arguments))
+		if c.Error != "" {
+			writeBody(w, "error", []byte(c.Error))
+		}
+		writeBody(w, "result", []byte(c.Result))
+	}
+
 	if reply != nil {
 		fmt.Fprintf(w, "\n== message %d  %s  %s\n", reply.ID, reply.Role, orDash(reply.Channel))
 		if reply.Reasoning != "" {
@@ -364,6 +400,16 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 		writeBody(w, "text", []byte(reply.Text()))
 	}
 	return nil
+}
+
+// rounds numbers the requests of an entry by their place in it, which is how
+// a tool call names the request of the round that asked for it.
+func rounds(requests []store.Request) map[int64]string {
+	out := make(map[int64]string, len(requests))
+	for i, r := range requests {
+		out[r.ID] = strconv.Itoa(i + 1)
+	}
+	return out
 }
 
 // writeBody prints one block of a snapshot under its own name, leaving out

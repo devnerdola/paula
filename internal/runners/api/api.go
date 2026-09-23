@@ -6,6 +6,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -80,11 +81,13 @@ func (n Needs) With(o Needs) Needs {
 	}
 }
 
-// Roles a message can have.
+// Roles a message can have. A tool message is what a tool answered, sent back
+// to the model that asked for it.
 const (
 	RoleSystem    = "system"
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
+	RoleTool      = "tool"
 )
 
 // Part types a message is made of.
@@ -103,6 +106,22 @@ type Part struct {
 type Message struct {
 	Role  string
 	Parts []Part
+	// ToolCalls are what an assistant message asked to be run, and ToolCallID
+	// the call a tool message answers.
+	ToolCalls  []ToolCall
+	ToolCallID string
+	// Reasoning is what the model thought on its way to the calls an
+	// assistant message made. It goes back with them, since a model that
+	// reasons across the rounds of a reply reads its own thinking again rather
+	// than starting it over.
+	Reasoning *Reasoning
+}
+
+// Reasoning is a model's thinking as its runner received it: the text, and
+// the items the host sent beside it, in order, to be handed back unchanged.
+type Reasoning struct {
+	Text    string
+	Details []json.RawMessage
 }
 
 // Text builds a text message.
@@ -110,10 +129,33 @@ func Text(role, text string) Message {
 	return Message{Role: role, Parts: []Part{{Type: PartText, Text: text}}}
 }
 
+// ToolDef is a tool a model is offered: what it is called, what it does, and
+// the JSON schema of what it takes.
+type ToolDef struct {
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+}
+
+// ToolCall is a tool a model asked to be run, with the arguments exactly as it
+// wrote them.
+type ToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+}
+
+// ToolChoiceNone asks a model for an answer with no tool call in it.
+const ToolChoiceNone = "none"
+
 type ChatRequest struct {
 	Model    string
 	Messages []Message
 	Settings Settings
+	// Tools are what the model may ask to be run, and ToolChoice is empty or
+	// ToolChoiceNone.
+	Tools      []ToolDef
+	ToolChoice string
 	// CacheKey groups the requests that share a prompt prefix.
 	CacheKey string
 	// Recorder keeps what was sent and what came back. A request made with none
@@ -146,8 +188,14 @@ type Result struct {
 	Provider     string
 	FinishReason string
 	Usage        Usage
-	// Reasoning is what the model thought on its way to the reply.
-	Reasoning string
+	// Reasoning is what the model thought on its way to the reply, and
+	// ReasoningDetails what the host sent beside it to be handed back
+	// unchanged when the reply goes on in another round.
+	Reasoning        string
+	ReasoningDetails []json.RawMessage
+	// ToolCalls are the tools the model asked to be run, whole, in the order
+	// it asked for them.
+	ToolCalls []ToolCall
 }
 
 // EmbedRequest asks a model to turn text into vectors, one for each string it

@@ -191,6 +191,14 @@ func (a *adapter) says(on bool) {
 	}
 }
 
+// Note shows what she is doing in the middle of a reply, which the page shows
+// under the dots until the reply goes on.
+func (a *adapter) Note(_ context.Context, text string) error {
+	return a.event("note", struct {
+		Text string `json:"text"`
+	}{text})
+}
+
 // ShowCommands hands the page everything that can be typed on it, for it to
 // offer however it does.
 func (a *adapter) ShowCommands(_ context.Context, cs []api.Command) error {

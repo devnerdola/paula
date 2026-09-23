@@ -89,6 +89,85 @@ func TestAFoldStoresItsSummaryAndItsMemories(t *testing.T) {
 	}
 }
 
+// A memory she keeps herself stands beside the ones a fold wrote, dated by the
+// message it was said in. One said in no message is refused, since the day it
+// was said is read from that message.
+func TestAMemoryKeptOnItsOwnStandsWithTheMessageItWasSaidIn(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+
+	if err := s.Remember(ctx, &Memory{Content: "Ana lives in Lisbon", Source: 99}); err == nil {
+		t.Error("a memory said in no message was kept")
+	}
+
+	first := said(t, s, "my sister Ana lives in Lisbon")
+	kept := &Memory{Content: "Ana lives in Lisbon", Source: first.ID}
+	if err := s.Remember(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	if kept.ID == 0 {
+		t.Fatal("no id was filled in")
+	}
+	standing, err := s.Memories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(standing) != 1 || standing[0].ID != kept.ID || standing[0].Content != "Ana lives in Lisbon" {
+		t.Fatalf("memories = %+v, want the one kept", standing)
+	}
+	if standing[0].Source != first.ID || !standing[0].SaidAt.Equal(first.CreatedAt) {
+		t.Errorf("memory = %+v, want it said in message %d", standing[0], first.ID)
+	}
+}
+
+// A memory she keeps herself replaces only memories that stand. A number that
+// is not one keeps nothing at all, since she chose it and is told so.
+func TestAMemoryKeptOnItsOwnReplacesOnlyWhatStands(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	first := said(t, s, "my sister Ana lives in Porto")
+	porto := Memory{Content: "Ana lives in Porto", Source: first.ID}
+	if err := s.Fold(ctx, &Summary{UptoMessageID: first.ID, Content: "Ana"}, []Memory{porto}); err != nil {
+		t.Fatal(err)
+	}
+	standing, err := s.Memories(ctx)
+	if err != nil || len(standing) != 1 {
+		t.Fatalf("memories = %+v, %v", standing, err)
+	}
+	porto = standing[0]
+
+	// The next number is the one the memory would be given, and it names
+	// nothing yet.
+	for _, replaces := range []MemoryID{porto.ID + 1, porto.ID + 5} {
+		err := s.Remember(ctx, &Memory{Content: "Ana lives in Lisbon", Source: first.ID, Replaces: []MemoryID{replaces}})
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("replacing #%d = %v, want it refused", replaces, err)
+		}
+	}
+	if got, _ := s.Memories(ctx); len(got) != 1 || got[0].ID != porto.ID {
+		t.Fatalf("memories = %+v, want only the one there was", got)
+	}
+
+	// A number named twice is the one memory it names.
+	lisbon := &Memory{Content: "Ana lives in Lisbon", Source: first.ID, Replaces: []MemoryID{porto.ID, porto.ID}}
+	if err := s.Remember(ctx, lisbon); err != nil {
+		t.Fatal(err)
+	}
+	standing, err = s.Memories(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(standing) != 1 || standing[0].ID != lisbon.ID {
+		t.Errorf("memories = %+v, want the one that replaced it", standing)
+	}
+
+	// What was replaced once is not replaced again.
+	err = s.Remember(ctx, &Memory{Content: "Ana lives in Faro", Source: first.ID, Replaces: []MemoryID{porto.ID}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("replacing a memory already replaced = %v, want it refused", err)
+	}
+}
+
 func TestASummaryCoversTheMessageItWasWrittenUpTo(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

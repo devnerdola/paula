@@ -9,6 +9,7 @@ const picked = document.getElementById('pick')
 const pictures = document.getElementById('pictures')
 const quick = document.getElementById('quick')
 const writing = document.getElementById('writing')
+const note = document.getElementById('note')
 const stop = document.getElementById('stop')
 const pill = document.getElementById('pill')
 const bell = document.getElementById('bell')
@@ -44,6 +45,7 @@ function stream() {
   es.addEventListener('said', e => shows(...stored(JSON.parse(e.data))))
   es.addEventListener('message', e => {
     const m = JSON.parse(e.data)
+    note.hidden = true
     shows(bubbled(m))
     told(m)
   })
@@ -51,15 +53,25 @@ function stream() {
     const m = JSON.parse(e.data)
     const el = chat.querySelector(`[data-key="b${m.id}"]`)
     if (el) {
+      note.hidden = true
       words(el, m.text)
       if (page.reading) bottom()
     }
+  })
+  // A note is what she is doing in the middle of a reply, shown under the dots
+  // until the reply goes on.
+  es.addEventListener('note', e => {
+    note.textContent = JSON.parse(e.data).text
+    note.hidden = false
   })
   es.addEventListener('replying', e => {
     const on = JSON.parse(e.data).on
     writing.hidden = !on
     stop.hidden = !on
-    if (!on) page.mine = false
+    if (!on) {
+      page.mine = false
+      note.hidden = true
+    }
   })
   es.addEventListener('commands', e => offers(JSON.parse(e.data).commands))
 }
