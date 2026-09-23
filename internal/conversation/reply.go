@@ -158,7 +158,12 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		if res.Reasoning != "" {
 			thought = append(thought, res.Reasoning)
 		}
-		details = append(details, res.ReasoningDetails...)
+		// A reply goes back as one message, and what that message was in the
+		// answer is its last round: the details that go back with it are that
+		// round's, exactly as they came, since a host holds a signed thought
+		// to the response it was in. What the rounds before it thought went
+		// back with their calls.
+		details = res.ReasoningDetails
 		if len(res.ToolCalls) == 0 {
 			break
 		}

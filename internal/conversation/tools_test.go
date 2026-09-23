@@ -336,9 +336,11 @@ func TestTheReasoningOfARoundGoesBackWithItsCalls(t *testing.T) {
 }
 
 // A model offered tools reads the thinking of every reply before the one it is
-// writing, so each goes back with what it thought: the text, and the details
-// its runner sent, of every round, in order. A reply that thought nothing goes
-// back with nothing.
+// writing, so each goes back with what it thought: the text of every round,
+// and the details of the round that answered. The reply goes back as one
+// message, which in the answer was that round, and a host holds signed details
+// to the response they came in: a round's with another's are not what either
+// sent. A reply that thought nothing goes back with nothing.
 func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
 	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
 	// The details are what OpenRouter sent of a reply that asked for a tool,
@@ -372,8 +374,8 @@ func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
 	if thought == nil || thought.Text != "I need to search memories for Caio's sister's name.\n\nShe lives in Lisbon." {
 		t.Fatalf("the first reply went back with %+v, want what both its rounds thought", thought)
 	}
-	if len(thought.Details) != 2 || string(thought.Details[0]) != string(asking) || string(thought.Details[1]) != string(answered) {
-		t.Errorf("the first reply went back with the details %s, want each round's as it came", thought.Details)
+	if len(thought.Details) != 1 || string(thought.Details[0]) != string(answered) {
+		t.Errorf("the first reply went back with the details %s, want the answering round's as it came", thought.Details)
 	}
 	if replies[1].Reasoning != nil {
 		t.Errorf("a reply that thought nothing went back with %+v", replies[1].Reasoning)
