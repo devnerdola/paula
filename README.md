@@ -236,10 +236,12 @@ of them accepts every parameter she sends and serves the context you asked for.
 A base name covers its variants, so `novita` matches `novita/fp8`.
 
 Most models cache a prompt without being asked. Claude does not: it caches
-only what a request marks, and `cache.control` is what marks it. Set on a
-Claude model, every request carries a top-level `cache_control`, which
-OpenRouter turns into a marker at the end of the prompt that moves forward as
-the conversation grows:
+only where a request marks it, and `cache.control` is what marks it. Set on a
+Claude model, every request carries it twice. A top-level `cache_control`
+marks the end of the prompt, where the rounds of a reply find what the round
+before them wrote. What she remembers and what time it is now change from one
+reply to the next, so the last message before them is marked too, and the next
+reply finds everything up to it:
 
 ```yaml
 models:
@@ -258,15 +260,20 @@ tenth of the input price; writing it costs 1.25 times the input price with
 `5m` and twice with `1h`, and each reply writes only what is new since the one
 before. Texts are often more than five minutes apart, which a `5m` cache does
 not outlast, so `1h` is the one for a conversation. Claude caches nothing
-shorter than its minimum, 4,096 tokens on Opus, so a conversation that has
-just begun shows none.
+shorter than the minimum of its model, so a conversation that has just begun
+may show none.
 
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
 from `GET /models?type=all` and checks the key with `GET
 /api_keys/rate_limits`. She sends `429` again at the time in
-`x-ratelimit-reset-requests`, at most `retries` times. She refuses a model
-whose `privacy` is not `private`, keeps Venice's own system prompt off unless
-`provider.system_prompt` turns it on, and wants `sampling.seed` above zero.
+`x-ratelimit-reset-requests`, at most `retries` times. She keeps Venice's own
+system prompt off unless `provider.system_prompt` turns it on, and wants
+`sampling.seed` above zero.
+
+Venice labels each model with a privacy. A `private` model runs where nothing
+of a request is kept. An `anonymized` one, such as Claude, is passed to the
+company that makes it with nothing that names you, and that company reads the
+prompt. The catalogue page of each model says which it is.
 
 | `provider` setting | Request field |
 |---|---|
@@ -357,7 +364,7 @@ that takes them.
 | `system_ratio` | `0.5` | share of the context the system message may take; above 0 and below 1 |
 | `memory_ratio` | `0.5` | share of what is left of the system message, once the card is written, that memories may take; the summary takes the rest; above 0 and at most 1 |
 | `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
-| `image_turns` | `2` | how many recent messages send their picture as a picture |
+| `image_messages` | `2` | how many of the latest messages that carry a picture send it as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
 | `log_keep` | `500` | how many entries keep the bodies of their requests; a fold and a batch of embeddings are entries of their own |
 | `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; the round after them is asked for an answer with no call in it |
@@ -517,11 +524,12 @@ way a stop does: what she had written is kept, the error is said below it, and
 the message counts as answered.
 
 **The prompt is the conversation.** It opens with a system message: the card,
-then the summary of what came before. What she remembers follows in a system
-message of its own, since it changes whenever she keeps or forgets something
-and the card and the summary stand until a fold; it takes its share of the
-system message's room, as the summary does. After it come the messages the
-summary does not cover, in order, each reply after what it answers.
+then the summary of what came before. After it come the messages the summary
+does not cover, in order, each reply after what it answers. What she remembers
+is a system message of its own, just before the time of the message she is
+answering: it changes whenever she keeps or forgets something, and a host that
+cached the prompt still has everything before it when it does. It takes its
+share of the system message's room, as the summary does.
 
 Each reply goes back with what she thought on the way to it, as the API sent
 it: the reasoning text, and on OpenRouter the details it sent beside it, which

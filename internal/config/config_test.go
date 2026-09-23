@@ -54,7 +54,7 @@ func TestDefaults(t *testing.T) {
 		SystemRatio:   0.5,
 		MemoryRatio:   0.5,
 		HistoryKeep:   0.5,
-		ImageTurns:    2,
+		ImageMessages: 2,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
 		ToolRounds:    3,
@@ -173,7 +173,7 @@ func TestValidationErrors(t *testing.T) {
 		{"unknown role", strings.Replace(minimal, "  chat: chat\n", "  chat: chat\n  audio: chat\n", 1), "default_models.audio: unknown key"},
 		{"runners is not a mapping", "runners: [a, b]\ndefault_models:\n  chat: a\n", "runners: want a mapping"},
 		{"image max px", minimal + "\nengine:\n  image_max_px: -1\n", "engine.image_max_px: -1 is below zero"},
-		{"image turns", minimal + "\nengine:\n  image_turns: -1\n", "engine.image_turns: -1 is below zero"},
+		{"image messages", minimal + "\nengine:\n  image_messages: -1\n", "engine.image_messages: -1 is below zero"},
 		// What a picture costs is read back from what a host counted, not set:
 		// a key for it is one the file does not know.
 		{"image tokens", minimal + "\nengine:\n  image_tokens: 1000\n", "engine.image_tokens: unknown key"},
@@ -209,12 +209,12 @@ models:
 default_models:
   chat: b
 engine:
-  image_turns: -1
+  image_messages: -1
 `)
 	if err == nil {
 		t.Fatal("Load succeeded")
 	}
-	for _, want := range []string{"models.a.runner", "models.a.id", "default_models.chat", "engine.image_turns"} {
+	for _, want := range []string{"models.a.runner", "models.a.id", "default_models.chat", "engine.image_messages"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want %q in it", err, want)
 		}

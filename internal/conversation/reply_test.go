@@ -414,7 +414,7 @@ func TestTheTimeIsToldBeforeTheMessageSheIsAnswering(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &attempt{entry: &store.Entry{Channel: "repl", UptoMessageID: answering}}
-	prompt, err := r.prompt(ctx, a, m)
+	prompt, _, err := r.prompt(ctx, a, m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -837,7 +837,7 @@ func TestOnlyTheLatestImagesAreSent(t *testing.T) {
 	sendPhoto(t, r, "two", photo(t))
 	sendPhoto(t, r, "three", photo(t))
 
-	// engine.image_turns is 2, so the oldest of the three is described.
+	// engine.image_messages is 2, so the oldest of the three is described.
 	var sent, described int
 	for _, m := range f.asked().Messages[1:] {
 		if len(images(m)) > 0 {

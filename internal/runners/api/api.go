@@ -156,8 +156,11 @@ type ChatRequest struct {
 	// ToolChoiceNone.
 	Tools      []ToolDef
 	ToolChoice string
-	// CacheKey groups the requests that share a prompt prefix.
+	// CacheKey groups the requests that share a prompt prefix, and Standing is
+	// how many of the first messages the next request of the group sends again
+	// as they are, or zero when that is not known.
 	CacheKey string
+	Standing int
 	// Recorder keeps what was sent and what came back. A request made with none
 	// is not recorded, which is every request that belongs to no turn.
 	Recorder Recorder

@@ -37,21 +37,23 @@ func (e *Engine) now() string {
 
 // prompt builds the messages of a reply: what she is told outside the
 // conversation, then the messages the summary does not cover, with the time
-// before every message she was sent.
-func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Message, error) {
+// before every message she was sent. standing is how many of its first
+// messages the prompt of the next reply sends again as they are, and zero when
+// that is not known.
+func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Message, standing int, _ error) {
 	summary, err := e.summary(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	memories, err := e.store.Memories(ctx)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	// What a fold has written is told in the system message, so the messages
 	// it covers are not carried one by one any more.
 	messages, err := e.store.MessagesAfter(ctx, coveredUpto(summary))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var kept []store.Message
 	for _, msg := range messages {
@@ -73,7 +75,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		a.compactDue = size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0) > room
 	}
 	if len(kept) == 0 {
-		return append([]api.Message{card}, told...), nil
+		return append([]api.Message{card}, told...), 0, nil
 	}
 
 	inline := e.inlineFrom(kept, m)
@@ -83,15 +85,22 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	// higher id of the two, and one whose message the summary covers keeps the
 	// place its id gives it.
 	last := a.entry.UptoMessageID
-	// What she remembers is a system message of its own, after the card and
-	// the summary and before the conversation: it changes whenever she keeps or
-	// forgets something, and the card and the summary before it stand until a
-	// fold. It is counted with the system message, whose share of the context
-	// it is held to.
-	lead := append([]api.Message{card}, told...)
+	// What she remembers is told just before that message, not beside the
+	// card: it changes whenever she keeps or forgets something, and a host
+	// keeps what it read of a prompt only up to the first thing that changed.
+	// Told there, a change costs what follows it, which is the newest of the
+	// conversation, rather than the whole of it. It is counted with the system
+	// message, whose share of the context it is held to.
+	//
+	// A message the summary covers is not carried, and what she remembers then
+	// follows the card, since there is nothing later to tell it before.
+	lead := []api.Message{card}
+	if !slices.ContainsFunc(kept, func(msg store.Message) bool { return msg.ID == last }) {
+		lead, told = append(lead, told...), nil
+	}
 	image := e.costs.image(m.Name)
 	// The tools a reply is offered go with every round of it, beside the card.
-	head := size(slices.Concat(lead, []api.Message{api.Text(api.RoleSystem, e.tools.text)}), ratio, image)
+	head := size(slices.Concat(lead, []api.Message{api.Text(api.RoleSystem, e.tools.text)}, told), ratio, image)
 	taken := head
 
 	// The newest exchange is built first and the older ones are added while
@@ -99,13 +108,21 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	// picture of one is loaded, and none is sent to be described.
 	groups := exchanges(kept)
 	built := make([][]api.Message, 0, len(groups))
+	answering, tail := -1, 0
 	dropped := 0
 	sending := e.sending(ctx, a)
 	for i, group := range slices.Backward(groups) {
-		msgs := e.exchange(group, inline, last, sending)
+		msgs, at := e.exchange(group, inline, last, told, sending)
+		n := size(msgs, ratio, image)
+		if at >= 0 {
+			n -= size(told, ratio, 0)
+		}
 		// The exchange being answered goes whatever it takes, since leaving it
 		// out would answer nothing.
-		if n := size(msgs, ratio, image); i == len(groups)-1 || limit <= 0 || taken+n <= limit {
+		if i == len(groups)-1 || limit <= 0 || taken+n <= limit {
+			if at >= 0 {
+				answering, tail = len(built), at
+			}
 			taken += n
 			built = append(built, msgs)
 			continue
@@ -128,11 +145,17 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		a.foldDue = taken-head > history || (dropped > 0 && head <= system)
 	}
 
+	// What she remembers and what time it is now are all that the next reply's
+	// prompt does not send again as this one sends it, and they come just
+	// before the message she is answering.
 	out := lead
-	for _, b := range slices.Backward(built) {
+	for i, b := range slices.Backward(built) {
+		if i == answering {
+			standing = len(out) + tail
+		}
 		out = append(out, b...)
 	}
-	return out, nil
+	return out, standing, nil
 }
 
 // systemMessage is what a reply is told outside the conversation that stands
@@ -213,13 +236,17 @@ func coveredUpto(summary *store.Summary) store.MessageID {
 // and what time it is now before the one she is answering, whose last line is
 // then what was said rather than a time. Each of those stands once it is
 // written, so a host that keeps a prompt keeps all of it but the time before
-// the last message.
-func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, r reading) []api.Message {
-	out := make([]api.Message, 0, 2*len(group))
+// the last message. What she remembers, told, goes before that time, and at is
+// where in the exchange the two begin, or -1 when the last message is not in it.
+func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, told []api.Message, r reading) (out []api.Message, at int) {
+	out = make([]api.Message, 0, 2*len(group)+len(told))
+	at = -1
 	for _, msg := range group {
 		if msg.Role == store.RoleUser {
 			var when string
 			if msg.ID == last {
+				at = len(out)
+				out = append(out, told...)
 				when = e.now()
 			} else {
 				when = e.sentAt(msg.CreatedAt)
@@ -228,7 +255,7 @@ func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, r
 		}
 		out = append(out, e.message(msg, inline, r))
 	}
-	return out
+	return out, at
 }
 
 // reading is how the messages of an exchange are built: what a picture that is
@@ -289,10 +316,10 @@ func ordered(messages []store.Message) []store.Message {
 }
 
 // inlineFrom is the oldest message whose images go to the model as images,
-// counting back engine.image_turns of the messages that carry any. Zero sends
+// counting back engine.image_messages of the messages that carry any. Zero sends
 // none, which is what a model without vision is sent.
 func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID {
-	if !m.catalogue.Vision || e.cfg.ImageTurns <= 0 || len(messages) == 0 {
+	if !m.catalogue.Vision || e.cfg.ImageMessages <= 0 || len(messages) == 0 {
 		return 0
 	}
 	var seen int
@@ -301,7 +328,7 @@ func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID 
 			continue
 		}
 		seen++
-		if seen == e.cfg.ImageTurns {
+		if seen == e.cfg.ImageMessages {
 			return msg.ID
 		}
 	}

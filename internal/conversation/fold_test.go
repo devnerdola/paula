@@ -128,7 +128,7 @@ func TestAConversationPastItsShareIsFolded(t *testing.T) {
 	if !strings.Contains(card, "Earlier in your conversation with Caio:\nthey said things") {
 		t.Errorf("the system message is %q, want the summary in it", card)
 	}
-	told := text(req.Messages[1])
+	told := text(req.Messages[len(req.Messages)-3])
 	if !strings.Contains(told, "- (said on ") || !strings.Contains(told, "Caio has a sister") {
 		t.Errorf("what she remembers is told as %q, want the memory in it", told)
 	}
@@ -557,11 +557,11 @@ func TestACardThatFillsItsShareIsSaidAtStartup(t *testing.T) {
 	}
 }
 
-// What she remembers changes whenever she keeps or forgets something, and the
-// card and the summary only at a fold, so it is a system message of its own
-// after them, before the conversation: a memory kept between two replies
-// leaves the second prompt the card as the first sent it.
-func TestWhatSheRemembersIsToldApartFromTheCard(t *testing.T) {
+// What she remembers changes whenever she keeps or forgets something, so it is
+// told just before the message she is answering rather than beside the card:
+// a memory kept between two replies leaves the second prompt what the first
+// was up to where its memories stood, which is everything but its newest.
+func TestWhatSheRemembersIsToldBeforeTheMessageSheIsAnswering(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hello")}
 	r := openReply(t, f)
 	ctx := context.Background()
@@ -585,20 +585,68 @@ func TestWhatSheRemembersIsToldApartFromTheCard(t *testing.T) {
 	requests := f.all()
 	before, now := requests[1].Messages, requests[2].Messages
 	for i, prompt := range [][]api.Message{before, now} {
+		n := len(prompt)
 		if strings.Contains(text(prompt[0]), "Caio's sister is Ana.") {
-			t.Errorf("prompt %d tells the memories in the card", i+2)
+			t.Errorf("prompt %d tells the memories beside the card", i+2)
 		}
-		if prompt[1].Role != api.RoleSystem || !strings.Contains(text(prompt[1]), "Caio's sister is Ana.") ||
-			!strings.HasPrefix(text(prompt[2]), "The next message was sent at ") {
-			t.Errorf("prompt %d goes on with %q, then %q; want what she remembers, then the conversation",
-				i+2, text(prompt[1]), text(prompt[2]))
+		if !strings.Contains(text(prompt[n-3]), "Caio's sister is Ana.") ||
+			!strings.HasPrefix(text(prompt[n-2]), "It is now ") || prompt[n-1].Role != api.RoleUser {
+			t.Errorf("prompt %d ends with %q, %q, %q; want the memories, the time, then the message",
+				i+2, text(prompt[n-3]), text(prompt[n-2]), text(prompt[n-1]))
 		}
 	}
-	if !strings.Contains(text(now[1]), "Caio cooks on Saturdays.") {
-		t.Errorf("the memory kept since is not told: %q", text(now[1]))
+	if !strings.Contains(text(now[len(now)-3]), "Caio cooks on Saturdays.") {
+		t.Errorf("the memory kept since is not told: %q", text(now[len(now)-3]))
 	}
-	if !reflect.DeepEqual(now[0], before[0]) {
-		t.Errorf("the card changed when a memory was kept")
+	// Everything before where the first prompt told its memories stands, as
+	// it was sent.
+	kept := len(before) - 3
+	if !reflect.DeepEqual(now[:kept], before[:kept]) {
+		t.Errorf("the second prompt changed what the first sent before its memories")
+	}
+}
+
+// A request says how much of it the next reply sends again as it was sent: all
+// of it up to what she remembers and the time of the message she is answering,
+// whether or not she remembers anything yet. The first reply has only the card
+// to say it of.
+func TestAReplySaysHowMuchOfItsPromptTheNextSendsAgain(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hello")}
+	r := openReply(t, f)
+	ctx := context.Background()
+
+	r.say(t, "hey")
+	first, err := r.store.MessagesAfter(ctx, 0)
+	if err != nil || len(first) == 0 {
+		t.Fatalf("messages = %+v, %v", first, err)
+	}
+	if err := r.store.Remember(ctx, &store.Memory{Content: "Caio's sister is Ana.", Source: first[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "you there?")
+	r.say(t, "hello??")
+
+	requests := f.all()
+	if len(requests) != 3 {
+		t.Fatalf("%d requests were sent, want three", len(requests))
+	}
+	if n := requests[0].Standing; n != 1 {
+		t.Errorf("the first reply says %d of its messages stand, want the card alone", n)
+	}
+	for i := range len(requests) - 1 {
+		was, next := requests[i], requests[i+1]
+		n := was.Standing
+		if n == 0 || n >= len(next.Messages) {
+			t.Errorf("reply %d says %d of its messages stand, of the %d the next sends", i+1, n, len(next.Messages))
+			continue
+		}
+		if !reflect.DeepEqual(next.Messages[:n], was.Messages[:n]) {
+			t.Errorf("reply %d says %d of its messages stand, and the next changed them", i+1, n)
+		}
+		if reflect.DeepEqual(next.Messages[n], was.Messages[n]) {
+			t.Errorf("reply %d says %d of its messages stand, and the next sends %q again after them",
+				i+1, n, text(was.Messages[n]))
+		}
 	}
 }
 

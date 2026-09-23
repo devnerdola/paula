@@ -1,6 +1,7 @@
 package openrouter
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -956,6 +957,84 @@ provider:
 	}
 	if !slices.Equal(sent.Provider.Only, []string{"ionstream"}) || !sent.Provider.ZDR {
 		t.Errorf("provider = %+v", sent.Provider)
+	}
+}
+
+// A cache is written only where a request marks it, and the end of a prompt is
+// what the next reply changes. So the last message the next reply sends again is
+// marked beside the end, and only on a model that is told to cache.
+func TestTheLastMessageThatStandsIsMarkedForTheCache(t *testing.T) {
+	var bodies [][]byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, b)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+
+	messages := []api.Message{
+		api.Text(api.RoleSystem, "You are Paula."),
+		api.Text(api.RoleUser, "hey"),
+		api.Text(api.RoleAssistant, "hi love"),
+		api.Text(api.RoleSystem, "It is now Wednesday."),
+		api.Text(api.RoleUser, "you there?"),
+	}
+	plain := runner(t, ts.URL, "")
+	cached := runner(t, ts.URL, "provider:\n  cache:\n    control:\n      type: ephemeral\n      ttl: 1h\n")
+	for _, c := range []struct {
+		r        *Runner
+		standing int
+	}{{plain, 3}, {cached, 0}, {cached, 3}} {
+		_, err := c.r.Chat(context.Background(), api.ChatRequest{
+			Model: "some/model", Messages: messages, Settings: c.r.Settings(), Standing: c.standing,
+		}, func(api.Chunk) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	type sent struct {
+		Messages []struct {
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	var got []sent
+	for _, b := range bodies {
+		var s sent
+		if err := json.Unmarshal(b, &s); err != nil {
+			t.Fatalf("the body was not read back: %v (%s)", err, b)
+		}
+		got = append(got, s)
+	}
+	if len(got) != 3 {
+		t.Fatalf("%d requests were sent, want three", len(got))
+	}
+	for i, s := range got {
+		for j, m := range s.Messages {
+			marked := i == 2 && j == 2
+			if !marked && bytes.Contains(m.Content, []byte("cache_control")) {
+				t.Errorf("request %d marks message %d: %s", i+1, j, m.Content)
+			}
+			if !marked && m.Content[0] != '"' {
+				t.Errorf("request %d sends message %d as %s, want its text", i+1, j, m.Content)
+			}
+		}
+	}
+	var parts []struct {
+		Type    string `json:"type"`
+		Text    string `json:"text"`
+		Control struct {
+			Type string `json:"type"`
+			TTL  string `json:"ttl"`
+		} `json:"cache_control"`
+	}
+	if err := json.Unmarshal(got[2].Messages[2].Content, &parts); err != nil {
+		t.Fatalf("the marked message is %s: %v", got[2].Messages[2].Content, err)
+	}
+	if len(parts) != 1 || parts[0].Type != "text" || parts[0].Text != "hi love" ||
+		parts[0].Control.Type != "ephemeral" || parts[0].Control.TTL != "1h" {
+		t.Errorf("the marked message is %+v, want its text as one part carrying the marker", parts)
 	}
 }
 

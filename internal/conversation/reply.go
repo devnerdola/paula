@@ -69,7 +69,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	if err != nil {
 		return nil, err
 	}
-	messages, err := e.prompt(ctx, a, m)
+	messages, standing, err := e.prompt(ctx, a, m)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +101,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			Tools:      e.tools.defs,
 			ToolChoice: choice,
 			CacheKey:   e.cacheKey(store.PurposeReply),
+			Standing:   standing,
 			Recorder:   rec,
 		}, func(c api.Chunk) error {
 			if c.Kind != api.ChunkText || c.Text == "" {

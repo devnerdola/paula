@@ -188,7 +188,8 @@ func (e *Engine) foldStep(ctx context.Context) (bool, error) {
 	weighing := e.weighing(ctx)
 	sizes := make([]int, len(groups))
 	for i, group := range groups {
-		sizes[i] = size(e.exchange(group, inline, 0, weighing), ratio, image)
+		msgs, _ := e.exchange(group, inline, 0, nil, weighing)
+		sizes[i] = size(msgs, ratio, image)
 	}
 
 	// What the sizes say to take is what a fold wants; what it may take is a

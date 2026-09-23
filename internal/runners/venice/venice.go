@@ -1,11 +1,10 @@
-// Package venice talks to Venice, which serves models that keep nothing of a
-// request behind an OpenAI-compatible API.
+// Package venice talks to Venice, which serves models behind an
+// OpenAI-compatible API.
 package venice
 
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
@@ -25,10 +24,6 @@ const (
 // defaultIdleTimeout is how long a request may go without a byte.
 const defaultIdleTimeout = config.Duration(2 * time.Minute)
 
-// private is the only privacy Paula serves a model with, so nothing of a
-// conversation is kept by the host.
-const private = "private"
-
 // embedding is the type the catalogue gives a model that turns text into a
 // vector rather than into more text.
 const embedding = "embedding"
@@ -38,12 +33,6 @@ type Runner struct {
 	client   *openai.Client
 	settings api.Settings
 	serves   openai.Catalogue
-
-	// refused are the models Venice serves with a privacy Paula does not, and
-	// why, so a model named in the file is refused in those words rather than
-	// as one that is not there. The listing fills it in.
-	mu      sync.Mutex
-	refused map[string]string
 }
 
 // Open reads a runner section and builds the runner it describes.
@@ -71,7 +60,7 @@ func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 		settings: cfg.Settings,
 	}
 	r.settings.Provider = cfg.Provider
-	r.serves.Read = r.read
+	r.serves.Read = r.listing
 	r.client = cfg.Client(name, h, hooks{})
 	return r, nil
 }
@@ -115,8 +104,7 @@ func (r *Runner) Models(ctx context.Context) ([]api.Model, error) {
 	return r.serves.Models(ctx)
 }
 
-// Model returns what the catalogue says about one model, and why a model Venice
-// serves is not one Paula does.
+// Model returns what the catalogue says about one model.
 func (r *Runner) Model(ctx context.Context, id string) (*api.Model, error) {
 	m, ok, err := r.serves.Find(ctx, id)
 	if err != nil {
@@ -125,26 +113,7 @@ func (r *Runner) Model(ctx context.Context, id string) (*api.Model, error) {
 	if ok {
 		return m, nil
 	}
-	r.mu.Lock()
-	why, refused := r.refused[id]
-	r.mu.Unlock()
-	if refused {
-		return nil, fmt.Errorf("%s serves %q with privacy %q, and Paula serves only %q", r.name, id, why, private)
-	}
 	return nil, fmt.Errorf("%s serves no model called %q", r.name, id)
-}
-
-// read is the listing, and remembers the models it named that Paula does not
-// serve, for Model to say why.
-func (r *Runner) read(ctx context.Context) ([]api.Model, error) {
-	models, refused, err := r.listing(ctx)
-	if err != nil {
-		return nil, err
-	}
-	r.mu.Lock()
-	r.refused = refused
-	r.mu.Unlock()
-	return models, nil
 }
 
 type listing struct {
@@ -152,10 +121,9 @@ type listing struct {
 		ID        string `json:"id"`
 		Type      string `json:"type"`
 		ModelSpec struct {
-			Privacy                string `json:"privacy"`
-			AvailableContextTokens int    `json:"availableContextTokens"`
-			MaxInputTokens         int    `json:"maxInputTokens"`
-			EmbeddingDimensions    int    `json:"embeddingDimensions"`
+			AvailableContextTokens int `json:"availableContextTokens"`
+			MaxInputTokens         int `json:"maxInputTokens"`
+			EmbeddingDimensions    int `json:"embeddingDimensions"`
 			Capabilities           struct {
 				SupportsVision          bool     `json:"supportsVision"`
 				SupportsFunctionCalling bool     `json:"supportsFunctionCalling"`
@@ -168,24 +136,18 @@ type listing struct {
 	} `json:"data"`
 }
 
-// listing is what the API serves, as the models Paula speaks of and the ones it
-// serves with another privacy.
-func (r *Runner) listing(ctx context.Context) ([]api.Model, map[string]string, error) {
+// listing is what the API serves, as the models Paula speaks of.
+func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 	var list listing
 	if err := r.client.Get(ctx, "/models?type=all", &list); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	var out []api.Model
-	refused := map[string]string{}
 	for _, m := range list.Data {
 		// The models that write text, and the ones that embed it. Nothing
 		// Paula does asks anything of the rest.
 		if m.Type != "text" && m.Type != embedding {
-			continue
-		}
-		if m.ModelSpec.Privacy != private {
-			refused[m.ID] = m.ModelSpec.Privacy
 			continue
 		}
 		if m.Type == embedding {
@@ -213,7 +175,7 @@ func (r *Runner) listing(ctx context.Context) ([]api.Model, map[string]string, e
 		}
 		out = append(out, model)
 	}
-	return out, refused, nil
+	return out, nil
 }
 
 // Check reports every way a model and its settings do not fit what the

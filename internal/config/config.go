@@ -107,12 +107,12 @@ type Engine struct {
 	// MemoryRatio the share of what is left of it, once the card is written,
 	// that memories may take; the summary takes the rest. HistoryKeep is the
 	// share of the messages' part of the context a fold leaves behind.
-	SystemRatio float64 `yaml:"system_ratio"`
-	MemoryRatio float64 `yaml:"memory_ratio"`
-	HistoryKeep float64 `yaml:"history_keep"`
-	ImageTurns  int     `yaml:"image_turns"`
-	ImageMaxPx  int     `yaml:"image_max_px"`
-	LogKeep     int     `yaml:"log_keep"`
+	SystemRatio   float64 `yaml:"system_ratio"`
+	MemoryRatio   float64 `yaml:"memory_ratio"`
+	HistoryKeep   float64 `yaml:"history_keep"`
+	ImageMessages int     `yaml:"image_messages"`
+	ImageMaxPx    int     `yaml:"image_max_px"`
+	LogKeep       int     `yaml:"log_keep"`
 	// ToolRounds is how many rounds of tool calls a reply may take. The round
 	// after them is asked for an answer with no call in it.
 	ToolRounds int `yaml:"tool_rounds"`
@@ -126,7 +126,7 @@ func DefaultEngine() Engine {
 		SystemRatio:   0.5,
 		MemoryRatio:   0.5,
 		HistoryKeep:   0.5,
-		ImageTurns:    2,
+		ImageMessages: 2,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
 		ToolRounds:    3,
@@ -370,8 +370,8 @@ func checkEngine(p *Problems, e Engine) {
 	if e.HistoryKeep <= 0 || e.HistoryKeep >= 1 {
 		p.Addf("engine.history_keep: %v is not above 0 and below 1", e.HistoryKeep)
 	}
-	if e.ImageTurns < 0 {
-		p.Addf("engine.image_turns: %d is below zero", e.ImageTurns)
+	if e.ImageMessages < 0 {
+		p.Addf("engine.image_messages: %d is below zero", e.ImageMessages)
 	}
 	if e.ImageMaxPx < 0 {
 		p.Addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)

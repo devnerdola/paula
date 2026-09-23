@@ -39,6 +39,13 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 			control["ttl"] = c.TTL
 		}
 		out["cache_control"] = control
+		// The top-level marker is the end of the prompt, where the rounds of a
+		// reply find what the round before them wrote. A cache is written only
+		// where a request marks it, and the next reply changes the end of this
+		// prompt, so the last message that it sends again is marked too.
+		if msgs, ok := out["messages"].([]map[string]any); ok && req.Standing > 0 {
+			mark(msgs[req.Standing-1], control)
+		}
 	}
 	if prov.ServiceTier != "" {
 		out["service_tier"] = prov.ServiceTier
@@ -54,6 +61,22 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 		out["session_id"] = req.CacheKey
 	}
 	return nil
+}
+
+// mark puts a cache marker on the last part of a message. A marker goes on a
+// part, so a message written as text is sent as the one part it is; one that
+// says nothing has no part to carry it.
+func mark(msg map[string]any, control map[string]any) {
+	switch content := msg["content"].(type) {
+	case string:
+		if content != "" {
+			msg["content"] = []map[string]any{{"type": "text", "text": content, "cache_control": control}}
+		}
+	case []map[string]any:
+		if len(content) > 0 {
+			content[len(content)-1]["cache_control"] = control
+		}
+	}
 }
 
 // EmbedBody carries the routing settings and nothing else. Which hosts a
