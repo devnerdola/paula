@@ -840,6 +840,52 @@ func TestAProblemInsideTheProviderIsNamedInFull(t *testing.T) {
 
 // The settings this API names differently go where it documents them, not where
 // an OpenAI body would carry them.
+// The requests that share a prompt are kept on the host that has read it by
+// the session id the prompt caching documentation names; a request that shares
+// its prompt with nothing names none.
+func TestARequestNamesTheSessionItsPromptBelongsTo(t *testing.T) {
+	var bodies []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(b))
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(read(t, "stream_reply.sse"))
+	}))
+	t.Cleanup(ts.Close)
+
+	r := runner(t, ts.URL, "")
+	for _, key := range []string{"", "paula-paula-reply"} {
+		_, err := r.Chat(context.Background(), api.ChatRequest{
+			Model:    "some/model",
+			Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+			CacheKey: key,
+		}, func(api.Chunk) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	type named struct {
+		Session *string `json:"session_id"`
+	}
+	var sent []named
+	for _, b := range bodies {
+		var s named
+		if err := json.Unmarshal([]byte(b), &s); err != nil {
+			t.Fatal(err)
+		}
+		sent = append(sent, s)
+	}
+	if len(sent) != 2 {
+		t.Fatalf("%d requests were sent, want two", len(sent))
+	}
+	if sent[0].Session != nil {
+		t.Errorf("a request with no cache key names the session %q", *sent[0].Session)
+	}
+	if sent[1].Session == nil || *sent[1].Session != "paula-paula-reply" {
+		t.Errorf("the session is %v, want the cache key", sent[1].Session)
+	}
+}
+
 func TestTheRequestBodyCarriesWhatOnlyOpenRouterDocuments(t *testing.T) {
 	var body []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

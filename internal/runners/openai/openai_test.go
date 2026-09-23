@@ -530,6 +530,40 @@ func TestTheCacheKeyIsSent(t *testing.T) {
 	}
 }
 
+// The conversation is what grows from one request to the next, so it is the
+// last of the body: the model, the settings and the tools come before it.
+func TestTheConversationIsTheLastOfTheBody(t *testing.T) {
+	ts, srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"content":"hey","role":"assistant"},"finish_reason":"stop"}]}`+"\n\n")
+		io.WriteString(w, "data: [DONE]\n\n")
+	})
+	c, _ := client(t, ts.URL, parts{})
+	_, err := c.Chat(context.Background(), api.ChatRequest{
+		Model:    "some/model",
+		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+		Tools:    []api.ToolDef{{Name: "search_memories", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		CacheKey: "paula-paula-reply",
+	}, func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := srv.bodies[0]
+	messages := strings.Index(body, `"messages":`)
+	for _, field := range []string{`"model":`, `"prompt_cache_key":`, `"stream":`, `"tools":`} {
+		if at := strings.Index(body, field); at < 0 || at > messages {
+			t.Errorf("%s comes after the conversation: %s", field, body)
+		}
+	}
+	if !strings.HasSuffix(body, `"role":"user"}]}`) {
+		t.Errorf("the body ends %q, want the conversation", body[max(0, len(body)-40):])
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
+		t.Errorf("the body is not JSON: %v", err)
+	}
+}
+
 // A record says what the stream reported, or nothing at all. A stream that
 // reported nothing is not one that cost zero, and paula turns adds these up.
 func TestWhatARecordSaysAboutTheTokens(t *testing.T) {

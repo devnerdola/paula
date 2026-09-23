@@ -64,7 +64,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	ratio := e.costs.ratio(m.Name)
 	limit := m.limit()
 	system, history := e.split(m)
-	card := e.systemMessage(memories, summary, system, ratio)
+	card := e.systemMessage(summary)
+	told := e.remembering(memories, system, ratio)
 	// The summary is told whole, so nothing else notices when it has outgrown
 	// what is left of the system message once the card and the memories are
 	// written. This is where both numbers are known.
@@ -72,7 +73,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		a.compactDue = size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0) > room
 	}
 	if len(kept) == 0 {
-		return []api.Message{card}, nil
+		return append([]api.Message{card}, told...), nil
 	}
 
 	inline := e.inlineFrom(kept, m)
@@ -82,9 +83,15 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 	// higher id of the two, and one whose message the summary covers keeps the
 	// place its id gives it.
 	last := a.entry.UptoMessageID
+	// What she remembers is a system message of its own, after the card and
+	// the summary and before the conversation: it changes whenever she keeps or
+	// forgets something, and the card and the summary before it stand until a
+	// fold. It is counted with the system message, whose share of the context
+	// it is held to.
+	lead := append([]api.Message{card}, told...)
 	image := e.costs.image(m.Name)
 	// The tools a reply is offered go with every round of it, beside the card.
-	head := size([]api.Message{card, api.Text(api.RoleSystem, e.tools.text)}, ratio, image)
+	head := size(slices.Concat(lead, []api.Message{api.Text(api.RoleSystem, e.tools.text)}), ratio, image)
 	taken := head
 
 	// The newest exchange is built first and the older ones are added while
@@ -121,44 +128,46 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) ([]api.Messag
 		a.foldDue = taken-head > history || (dropped > 0 && head <= system)
 	}
 
-	out := []api.Message{card}
+	out := lead
 	for _, b := range slices.Backward(built) {
 		out = append(out, b...)
 	}
 	return out, nil
 }
 
-// systemMessage is the whole of what a reply is told outside the conversation:
-// the card, the memories that still stand, and the summary of the messages it
-// no longer carries. Each section is left out when it holds nothing, and the
-// card is the one that always stands, so a run with no fold behind it reads
-// exactly as it did before there were folds.
-func (e *Engine) systemMessage(memories []store.Memory, summary *store.Summary, room int, ratio float64) api.Message {
-	card := api.Text(api.RoleSystem, e.rendered)
+// systemMessage is what a reply is told outside the conversation that stands
+// until a fold: the card, and the summary of the messages it no longer carries,
+// left out while there is none, so a run with no fold behind it reads exactly
+// as it did before there were folds.
+func (e *Engine) systemMessage(summary *store.Summary) api.Message {
 	sections := []string{e.rendered}
-
-	// What is left of the system message once the card is written is divided
-	// between the memories and the summary. Nothing bounding the prompt leaves
-	// both of them whole.
-	loc := e.clock.Now().Location()
-	told := memories
-	if room > 0 {
-		left := max(0, room-size([]api.Message{card}, ratio, 0))
-		told = remembered(memories, share(left, e.cfg.MemoryRatio), ratio, loc)
-	}
-	if len(told) > 0 {
-		lines := []string{"What you remember from your conversations with " +
-			e.persona.User.Name + ", oldest first:"}
-		for _, m := range told {
-			lines = append(lines, memoryLine(m, loc))
-		}
-		sections = append(sections, strings.Join(lines, "\n"))
-	}
 	if summary != nil && summary.Content != "" {
 		sections = append(sections, "Earlier in your conversation with "+
 			e.persona.User.Name+":\n"+summary.Content)
 	}
 	return api.Text(api.RoleSystem, strings.Join(sections, "\n\n"))
+}
+
+// remembering is what she remembers, as a message of its own, and nothing
+// while she remembers nothing. What is left of the system message's room once
+// the card is written is divided between the memories and the summary, and
+// nothing bounding the prompt leaves both of them whole.
+func (e *Engine) remembering(memories []store.Memory, room int, ratio float64) []api.Message {
+	loc := e.clock.Now().Location()
+	told := memories
+	if room > 0 {
+		left := max(0, room-size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, ratio, 0))
+		told = remembered(memories, share(left, e.cfg.MemoryRatio), ratio, loc)
+	}
+	if len(told) == 0 {
+		return nil
+	}
+	lines := []string{"What you remember from your conversations with " +
+		e.persona.User.Name + ", oldest first:"}
+	for _, m := range told {
+		lines = append(lines, memoryLine(m, loc))
+	}
+	return []api.Message{api.Text(api.RoleSystem, strings.Join(lines, "\n"))}
 }
 
 // memoryLine is one memory as a model reads it, dated by the day it was said

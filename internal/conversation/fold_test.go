@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -127,8 +128,9 @@ func TestAConversationPastItsShareIsFolded(t *testing.T) {
 	if !strings.Contains(card, "Earlier in your conversation with Caio:\nthey said things") {
 		t.Errorf("the system message is %q, want the summary in it", card)
 	}
-	if !strings.Contains(card, "- (said on ") || !strings.Contains(card, "Caio has a sister") {
-		t.Errorf("the system message is %q, want the memory in it", card)
+	told := text(req.Messages[1])
+	if !strings.Contains(told, "- (said on ") || !strings.Contains(told, "Caio has a sister") {
+		t.Errorf("what she remembers is told as %q, want the memory in it", told)
 	}
 	for _, said := range said(req, api.RoleUser) {
 		if strings.HasPrefix(said, "message 0:") {
@@ -555,6 +557,51 @@ func TestACardThatFillsItsShareIsSaidAtStartup(t *testing.T) {
 	}
 }
 
+// What she remembers changes whenever she keeps or forgets something, and the
+// card and the summary only at a fold, so it is a system message of its own
+// after them, before the conversation: a memory kept between two replies
+// leaves the second prompt the card as the first sent it.
+func TestWhatSheRemembersIsToldApartFromTheCard(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hello")}
+	r := openReply(t, f)
+	ctx := context.Background()
+	keep := func(content string) {
+		t.Helper()
+		first, err := r.store.MessagesAfter(ctx, 0)
+		if err != nil || len(first) == 0 {
+			t.Fatalf("messages = %+v, %v", first, err)
+		}
+		if err := r.store.Remember(ctx, &store.Memory{Content: content, Source: first[0].ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	r.say(t, "hey")
+	keep("Caio's sister is Ana.")
+	r.say(t, "you there?")
+	keep("Caio cooks on Saturdays.")
+	r.say(t, "hello??")
+
+	requests := f.all()
+	before, now := requests[1].Messages, requests[2].Messages
+	for i, prompt := range [][]api.Message{before, now} {
+		if strings.Contains(text(prompt[0]), "Caio's sister is Ana.") {
+			t.Errorf("prompt %d tells the memories in the card", i+2)
+		}
+		if prompt[1].Role != api.RoleSystem || !strings.Contains(text(prompt[1]), "Caio's sister is Ana.") ||
+			!strings.HasPrefix(text(prompt[2]), "The next message was sent at ") {
+			t.Errorf("prompt %d goes on with %q, then %q; want what she remembers, then the conversation",
+				i+2, text(prompt[1]), text(prompt[2]))
+		}
+	}
+	if !strings.Contains(text(now[1]), "Caio cooks on Saturdays.") {
+		t.Errorf("the memory kept since is not told: %q", text(now[1]))
+	}
+	if !reflect.DeepEqual(now[0], before[0]) {
+		t.Errorf("the card changed when a memory was kept")
+	}
+}
+
 func TestEveryMemoryIsToldWhenNothingBoundsThePrompt(t *testing.T) {
 	cfg := config.DefaultEngine()
 	// Memories may take the whole of what is left of the system message once
@@ -565,13 +612,16 @@ func TestEveryMemoryIsToldWhenNothingBoundsThePrompt(t *testing.T) {
 
 	// A model that says nothing of its context holds the system message to
 	// nothing, so every memory is told whatever share memories have of it.
-	got := text(e.systemMessage([]store.Memory{
+	told := e.remembering([]store.Memory{
 		{Content: "Caio's sister is Ana", SaidAt: said},
 		{Content: "Caio cooks on Saturdays", SaidAt: said},
-	}, nil, 0, 1.0/3.5))
+	}, 0, 1.0/3.5)
+	if len(told) != 1 {
+		t.Fatalf("what she remembers is %d messages, want one", len(told))
+	}
 	for _, want := range []string{"Caio's sister is Ana", "Caio cooks on Saturdays"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("the system message is %q, want %q in it", got, want)
+		if !strings.Contains(text(told[0]), want) {
+			t.Errorf("what she remembers is %q, want %q in it", text(told[0]), want)
 		}
 	}
 }

@@ -46,6 +46,13 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	if o := reasoningObject(req.Settings, prov); len(o) > 0 {
 		out["reasoning"] = o
 	}
+	// The requests that share a prompt go to the host that has read it. The
+	// prompt caching documentation names session_id as the key a conversation
+	// is kept on one host by; without it, the requests of one conversation
+	// land where they land, and none of them finds the prompt before it.
+	if req.CacheKey != "" {
+		out["session_id"] = req.CacheKey
+	}
 	return nil
 }
 

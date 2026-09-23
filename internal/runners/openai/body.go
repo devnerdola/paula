@@ -1,8 +1,12 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"nerdola.dev/x/paula/internal/runners/api"
@@ -50,6 +54,36 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 		return nil, err
 	}
 	return body, nil
+}
+
+// encode writes a chat body with the conversation last. Everything else is
+// the same in every request of a conversation, and a host reads a request from
+// its start: what grows goes after what does not.
+func encode(body map[string]any) ([]byte, error) {
+	keys := slices.Sorted(maps.Keys(body))
+	if i := slices.Index(keys, "messages"); i >= 0 {
+		keys = append(slices.Delete(keys, i, i+1), "messages")
+	}
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i, k := range keys {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		name, err := json.Marshal(k)
+		if err != nil {
+			return nil, err
+		}
+		value, err := json.Marshal(body[k])
+		if err != nil {
+			return nil, err
+		}
+		b.Write(name)
+		b.WriteByte(':')
+		b.Write(value)
+	}
+	b.WriteByte('}')
+	return b.Bytes(), nil
 }
 
 func message(m api.Message) map[string]any {

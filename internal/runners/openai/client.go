@@ -171,7 +171,7 @@ func (c *Client) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chun
 	if err != nil {
 		return nil, err
 	}
-	b, err := json.Marshal(body)
+	b, err := encode(body)
 	if err != nil {
 		return nil, err
 	}

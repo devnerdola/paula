@@ -490,10 +490,12 @@ and asking again would do it again, so a failure after it ends the reply the
 way a stop does: what she had written is kept, the error is said below it, and
 the message counts as answered.
 
-**The prompt is the conversation.** It opens with one system message: the card,
-then what she remembers, then the summary of what came before. After it come
-the messages the summary does not cover, in order, each reply after what it
-answers.
+**The prompt is the conversation.** It opens with a system message: the card,
+then the summary of what came before. What she remembers follows in a system
+message of its own, since it changes whenever she keeps or forgets something
+and the card and the summary stand until a fold; it takes its share of the
+system message's room, as the summary does. After it come the messages the
+summary does not cover, in order, each reply after what it answers.
 
 Each reply goes back with what she thought on the way to it, as the API sent
 it: the reasoning text, and on OpenRouter the details it sent beside it, which
@@ -584,6 +586,12 @@ inside the message it is answering starts stamping its own replies with one. As
 a message of its own it is read rather than copied, it needs no notation to
 explain, and since only the one before your latest message ever changes, what a
 host has cached of everything earlier still stands.
+
+A host keeps a prompt on the machine that read it, so the requests of one
+conversation name it: `prompt_cache_key` on both APIs, which Venice routes by,
+and on OpenRouter also `session_id`, which is what keeps them on one host. The
+name is the card's `id` and what the request is for. `paula turns` shows how
+much of each prompt a host had cached.
 
 **Pictures are described once.** She accepts JPEG, PNG, GIF and WebP up to 64
 megapixels. Each one is scaled to `image_max_px`, turned upright by its EXIF
