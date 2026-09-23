@@ -235,6 +235,32 @@ times, and gives up on a wait longer than two minutes.
 of them accepts every parameter she sends and serves the context you asked for.
 A base name covers its variants, so `novita` matches `novita/fp8`.
 
+Most models cache a prompt without being asked. Claude does not: it caches
+only what a request marks, and `cache.control` is what marks it. Set on a
+Claude model, every request carries a top-level `cache_control`, which
+OpenRouter turns into a marker at the end of the prompt that moves forward as
+the conversation grows:
+
+```yaml
+models:
+  opus:
+    runner: openrouter
+    id: anthropic/claude-opus-5.5
+    provider:
+      cache:
+        control:
+          type: ephemeral
+          ttl: 1h
+```
+
+`type` is `ephemeral`, and `ttl` is `5m` or `1h`. Reading the cache costs a
+tenth of the input price; writing it costs 1.25 times the input price with
+`5m` and twice with `1h`, and each reply writes only what is new since the one
+before. Texts are often more than five minutes apart, which a `5m` cache does
+not outlast, so `1h` is the one for a conversation. Claude caches nothing
+shorter than its minimum, 4,096 tokens on Opus, so a conversation that has
+just begun shows none.
+
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
 from `GET /models?type=all` and checks the key with `GET
 /api_keys/rate_limits`. She sends `429` again at the time in
