@@ -311,6 +311,19 @@ func TestModelsAvailable(t *testing.T) {
 	if !strings.Contains(out, other) {
 		t.Errorf("the catalogue does not hold %s:\n%s", other, out)
 	}
+
+	// A model whose reasoning cannot be turned off says so in the one entry
+	// of the list that is its reasoning, and one whose reasoning can does not.
+	for _, tc := range []struct{ id, want string }{
+		{"~openai/gpt-astra-latest", ",always-reasoning("},
+		{"~deepseek/deepseek-flash-latest", ",reasoning("},
+	} {
+		row := line(t, out, tc.id+" ")
+		capabilities := strings.Fields(row)[2]
+		if !strings.Contains(capabilities, tc.want) || strings.HasSuffix(capabilities, "always") {
+			t.Errorf("%s has the capabilities %q, want %q in them", tc.id, capabilities, tc.want)
+		}
+	}
 }
 
 func TestModelsWithoutAConfigurationFile(t *testing.T) {

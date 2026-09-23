@@ -158,12 +158,14 @@ func capabilities(m *api.Model) string {
 		out = append(out, "embeddings")
 	}
 	if m.Reasoning {
+		// Reasoning a model cannot be asked to leave off is one entry of the
+		// list like the rest, so the column reads as the list it is.
 		s := "reasoning"
+		if m.Mandatory {
+			s = "always-reasoning"
+		}
 		if len(m.Efforts) > 0 {
 			s += "(" + strings.Join(m.Efforts, ",") + ")"
-		}
-		if m.Mandatory {
-			s += " always"
 		}
 		out = append(out, s)
 	}
