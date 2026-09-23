@@ -453,6 +453,40 @@ func TestAStopWhileAToolRunsKeepsWhatWasWritten(t *testing.T) {
 	}
 }
 
+// A stop that lands as a round asks for a call runs none of it, and keeps what
+// she had written.
+func TestAStopAsARoundAsksForACallRunsNone(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "found"}
+	started := make(chan struct{})
+	f := &fakeRunner{model: chatModel(), chat: func(ctx context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		if err := fn(api.Chunk{Kind: api.ChunkText, Text: "let me check"}); err != nil {
+			return nil, err
+		}
+		close(started)
+		<-ctx.Done()
+		return &api.Result{FinishReason: "tool_calls", ToolCalls: []api.ToolCall{lookup("call_1", `{"query":"a"}`)}}, nil
+	}}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+
+	post(t, r.Engine, "look it up")
+	r.clock.Advance(config.DefaultEngine().Debounce.Duration())
+	<-started
+	if stopped, err := r.Stop(context.Background()); err != nil || !stopped {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+	if _, err := r.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	reply, calls := stored(t, r)
+	if reply.Text() != "let me check" || !reply.Interrupted {
+		t.Errorf("the reply is %+v, want what was written before the call, cut short", reply)
+	}
+	if got := look.calls(); len(got) != 0 || len(calls) != 0 {
+		t.Errorf("the tool ran %q and the entry kept %+v, want no call", got, calls)
+	}
+}
+
 // A reply that has run a tool has done something, so a message that arrives
 // while the tool runs does not take its place.
 func TestAMessageWhileAToolRunsDoesNotTakeTheRepliesPlace(t *testing.T) {
@@ -607,6 +641,45 @@ func TestAToolWritesADayAsThePromptDoes(t *testing.T) {
 	_, calls := stored(t, r)
 	if len(calls) != 1 || calls[0].Result != "Sunday, 20 September 2026" {
 		t.Errorf("the calls are %+v, want the day written as Sunday, 20 September 2026", calls)
+	}
+}
+
+// A call that names no tool runs nothing, so a round that fails after it
+// leaves the reply failed and its message unanswered: asking again repeats
+// nothing that was done.
+func TestARoundThatFailsAfterACallThatRanNothingAnswersNothing(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "found"}
+	var rounds atomic.Int32
+	f := &fakeRunner{model: chatModel(), chat: func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		switch rounds.Add(1) {
+		case 1:
+			return answering(round{calls: []api.ToolCall{{ID: "call_1", Name: "read_minds", Arguments: `{}`}}})(ctx, req, fn)
+		case 2:
+			return nil, errHostAway
+		}
+		return says("sure")(ctx, req, fn)
+	}}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	ctx := context.Background()
+	r.say(t, "what do you think?")
+
+	entries, err := r.store.Entries(ctx, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries = %+v, %v", entries, err)
+	}
+	if entries[0].Status != store.StatusFailed {
+		t.Errorf("entry = %+v, want it failed", entries[0])
+	}
+
+	// The next reply answers the message again.
+	r.say(t, "hello?")
+	entries, err = r.store.Entries(ctx, 10)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("entries = %+v, %v", entries, err)
+	}
+	if entries[0].AfterMessageID != entries[1].AfterMessageID {
+		t.Errorf("the next reply answers after %d, want after %d, which the failed one was for",
+			entries[0].AfterMessageID, entries[1].AfterMessageID)
 	}
 }
 

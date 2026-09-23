@@ -177,11 +177,11 @@ func showTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 	if len(calls) > 0 {
 		// A call names the request of the round that asked for it, which is
 		// numbered here the way the table above numbers it.
-		round := rounds(requests)
+		request := numbered(requests)
 		fmt.Fprintln(w)
 		table(w, []string{"TOOL CALL", "REQUEST", "NAME", "DURATION", "ERROR"}, func(row func(...string)) {
 			for i, c := range calls {
-				row(strconv.Itoa(i+1), round[c.RequestID], c.Name,
+				row(strconv.Itoa(i+1), request[c.RequestID], c.Name,
 					since(c.StartedAt, c.EndedAt), orDash(c.Error))
 			}
 		})
@@ -377,10 +377,10 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 	if err != nil {
 		return err
 	}
-	round := rounds(requests)
+	request := numbered(requests)
 	for i, c := range calls {
 		fmt.Fprintf(w, "\n== tool call %d  %s  %s  asked by request %s  started %s",
-			i+1, c.Name, c.CallID, round[c.RequestID], clock(c.StartedAt))
+			i+1, c.Name, c.CallID, request[c.RequestID], clock(c.StartedAt))
 		if !c.EndedAt.IsZero() {
 			fmt.Fprintf(w, "  ended %s", clock(c.EndedAt))
 		}
@@ -402,9 +402,10 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 	return nil
 }
 
-// rounds numbers the requests of an entry by their place in it, which is how
-// a tool call names the request of the round that asked for it.
-func rounds(requests []store.Request) map[int64]string {
+// numbered is the requests of an entry numbered by their place in it, a search
+// between two rounds included, which is how a tool call names the request of
+// the round that asked for it.
+func numbered(requests []store.Request) map[int64]string {
 	out := make(map[int64]string, len(requests))
 	for i, r := range requests {
 		out[r.ID] = strconv.Itoa(i + 1)

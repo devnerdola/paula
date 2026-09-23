@@ -89,6 +89,9 @@ func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool) 
 	e.events.publish(Event{
 		Kind: Note, Entry: a.entry.ID, Channel: a.entry.Channel, Text: tool.Note(args),
 	})
+	// From here the reply has done something, whatever the tool answers: a
+	// call that named no tool, or gave no arguments one could read, did not.
+	a.acted = true
 	return tool.Call(ctx, env{e: e, a: a}, args)
 }
 

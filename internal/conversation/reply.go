@@ -178,7 +178,10 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		if !a.started() {
 			return nil, context.Canceled
 		}
-		a.acted = true
+		// A stop that lands as a round asks for its calls runs none of them.
+		if a.was(stopped) {
+			return kept(true), nil
+		}
 		messages = append(messages, asked(said.String(), res))
 		for _, c := range res.ToolCalls {
 			result := e.call(ctx, a, rec.last, c, true)
