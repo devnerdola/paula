@@ -50,13 +50,15 @@ type Hooks interface {
 	// be routed has the same meaning it always had.
 	EmbedBody(body map[string]any, req api.EmbedRequest) error
 	// Message adds the runner's own fields to one message of a chat request.
-	// It is where an assistant message that made calls hands back the
-	// reasoning it came with, in the field each API documents for it.
+	// It is where an assistant message hands back the reasoning it came with,
+	// in the field each API documents for it.
 	Message(out map[string]any, m api.Message)
 	// Chunk reads the runner's own fields of a stream chunk. The reasoning
 	// text it returns is passed on, and it fills in what it knows of the
 	// result.
 	Chunk(raw []byte, res *api.Result) (string, error)
+	// End finishes what Chunk made of the result, once the stream is done.
+	End(res *api.Result)
 	// Retry says whether a status is worth sending again, and after how long,
 	// counted from the time it is given.
 	Retry(now time.Time, status int, h http.Header) (time.Duration, bool)

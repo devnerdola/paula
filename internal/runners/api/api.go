@@ -110,10 +110,10 @@ type Message struct {
 	// the call a tool message answers.
 	ToolCalls  []ToolCall
 	ToolCallID string
-	// Reasoning is what the model thought on its way to the calls an
-	// assistant message made. It goes back with them, since a model that
-	// reasons across the rounds of a reply reads its own thinking again rather
-	// than starting it over.
+	// Reasoning is what the model thought on its way to an assistant message.
+	// It goes back with it, since a model that reasons reads its own thinking
+	// again: across the rounds of a reply, and in the replies before it, which
+	// a model offered tools reads as it reads its own.
 	Reasoning *Reasoning
 }
 
@@ -189,8 +189,8 @@ type Result struct {
 	FinishReason string
 	Usage        Usage
 	// Reasoning is what the model thought on its way to the reply, and
-	// ReasoningDetails what the host sent beside it to be handed back
-	// unchanged when the reply goes on in another round.
+	// ReasoningDetails what the host sent beside it, whole, to be handed back
+	// unchanged with the reply.
 	Reasoning        string
 	ReasoningDetails []json.RawMessage
 	// ToolCalls are the tools the model asked to be run, whole, in the order

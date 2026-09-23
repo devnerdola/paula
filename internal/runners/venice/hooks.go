@@ -93,8 +93,12 @@ func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
 	return c.Choices[0].Delta.ReasoningContent, nil
 }
 
-// Message hands back the reasoning an assistant message's calls came with, in
-// the field the stream gave it in.
+// End has nothing to finish: the reasoning comes as text, whole once it is
+// read.
+func (hooks) End(*api.Result) {}
+
+// Message hands back the reasoning an assistant message came with, in the
+// field the stream gave it in.
 func (hooks) Message(out map[string]any, m api.Message) {
 	if m.Reasoning != nil && m.Reasoning.Text != "" {
 		out["reasoning_content"] = m.Reasoning.Text

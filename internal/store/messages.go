@@ -37,6 +37,9 @@ type Message struct {
 	Channel   string
 	Parts     []Part
 	Reasoning string
+	// ReasoningDetails are what a reply thought as its API sent it, which
+	// goes back to that API with the reply.
+	ReasoningDetails []json.RawMessage
 	// Interrupted says a reply is the part of one that was stopped.
 	Interrupted bool
 	ReplyTo     MessageID
@@ -67,7 +70,7 @@ func (m *Message) Images() []Part {
 }
 
 const messageColumns = `id, role, channel, parts_json, reasoning,
-	interrupted, reply_to, entry_id, created_at`
+	reasoning_details, interrupted, reply_to, entry_id, created_at`
 
 // AddMessage stores a message and fills in its id.
 func (s *Store) AddMessage(ctx context.Context, m *Message) error {
@@ -75,11 +78,18 @@ func (s *Store) AddMessage(ctx context.Context, m *Message) error {
 	if err != nil {
 		return err
 	}
+	details, err := json.Marshal(m.ReasoningDetails)
+	if err != nil {
+		return err
+	}
+	if m.ReasoningDetails == nil {
+		details = []byte("[]")
+	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO messages
-		(role, channel, parts_json, reasoning, interrupted, reply_to, entry_id,
-		 created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		m.Role, m.Channel, string(parts), m.Reasoning,
+		(role, channel, parts_json, reasoning, reasoning_details, interrupted,
+		 reply_to, entry_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		m.Role, m.Channel, string(parts), m.Reasoning, string(details),
 		m.Interrupted, nullID(m.ReplyTo), nullID(m.EntryID),
 		m.CreatedAt.UnixNano())
 	if err != nil {
@@ -160,18 +170,25 @@ func scanMessage(row scanner) (*Message, error) {
 	var (
 		m        Message
 		parts    string
+		details  string
 		replyTo  sql.NullInt64
 		entryID  sql.NullInt64
 		created  int64
 		interrup int64
 	)
 	err := row.Scan(&m.ID, &m.Role, &m.Channel, &parts,
-		&m.Reasoning, &interrup, &replyTo, &entryID, &created)
+		&m.Reasoning, &details, &interrup, &replyTo, &entryID, &created)
 	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(parts), &m.Parts); err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal([]byte(details), &m.ReasoningDetails); err != nil {
+		return nil, err
+	}
+	if len(m.ReasoningDetails) == 0 {
+		m.ReasoningDetails = nil
 	}
 	m.Interrupted = interrup != 0
 	m.ReplyTo = MessageID(id(replyTo))

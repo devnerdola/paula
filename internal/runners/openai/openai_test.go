@@ -99,6 +99,8 @@ func (p parts) EmbedBody(body map[string]any, req api.EmbedRequest) error {
 // Message adds nothing: what a runner hands back with a message is its own.
 func (parts) Message(map[string]any, api.Message) {}
 
+func (parts) End(*api.Result) {}
+
 func (p parts) Chunk(raw []byte, res *api.Result) (string, error) {
 	if p.chunk == nil {
 		return "", nil

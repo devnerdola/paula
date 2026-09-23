@@ -105,6 +105,11 @@ func measure(messages []api.Message) (chars, images int) {
 		for _, c := range m.ToolCalls {
 			chars += utf8.RuneCountInString(c.Name) + utf8.RuneCountInString(c.Arguments)
 		}
+		// What a message thought goes with it, and is counted once: details
+		// carry the same text in the shape their host sent it.
+		if m.Reasoning != nil {
+			chars += utf8.RuneCountInString(m.Reasoning.Text)
+		}
 	}
 	return chars, images
 }

@@ -303,7 +303,16 @@ func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID 
 
 func (e *Engine) message(msg store.Message, inline store.MessageID, r reading) api.Message {
 	if msg.Role == store.RoleAssistant {
-		return api.Text(api.RoleAssistant, msg.Text())
+		// A reply goes back with what she thought on the way to it. A model
+		// offered tools reads the thinking of every reply before the one it is
+		// writing, and one shown replies that thought nothing learns to think
+		// nothing: it skips its thinking, or leaves it open and writes the
+		// reply inside it.
+		out := api.Text(api.RoleAssistant, msg.Text())
+		if msg.Reasoning != "" || len(msg.ReasoningDetails) > 0 {
+			out.Reasoning = &api.Reasoning{Text: msg.Reasoning, Details: msg.ReasoningDetails}
+		}
+		return out
 	}
 
 	// What was said, and a line for every picture that is not sent as one.

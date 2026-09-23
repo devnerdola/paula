@@ -265,46 +265,61 @@ func TestTheCallsOfACapturedStreamComeBackWhole(t *testing.T) {
 	}
 }
 
-// The reasoning documentation asks for the details of what a model thought to
-// go back with the calls it made. A stream sends each item a fragment at a
-// time under the index it has, so the fragments go back as the one item they
+// A stream sends each item of what a model thought a fragment at a time under
+// the index it has, so a reply comes back with the one item its fragments
 // make: the text OpenRouter sent beside them as the reasoning, and every other
 // field as it came.
-func TestTheReasoningOfACallGoesBackAsTheItemItMakes(t *testing.T) {
+func TestTheReasoningOfAReplyComesBackAsTheItemItMakes(t *testing.T) {
 	res := streamed(t, "stream_tool_calls.sse")
-	if len(res.ReasoningDetails) < 2 {
-		t.Fatalf("%d fragments of reasoning, want the stream's several", len(res.ReasoningDetails))
+	if len(res.ReasoningDetails) != 1 {
+		t.Fatalf("reasoning_details = %s, want the one item the fragments make", res.ReasoningDetails)
 	}
-	out := map[string]any{}
-	hooks{}.Message(out, api.Message{
-		Role:      api.RoleAssistant,
-		ToolCalls: res.ToolCalls,
-		Reasoning: &api.Reasoning{Text: res.Reasoning, Details: res.ReasoningDetails},
-	})
-	b, err := json.Marshal(out["reasoning_details"])
-	if err != nil {
+	var item map[string]any
+	if err := json.Unmarshal(res.ReasoningDetails[0], &item); err != nil {
 		t.Fatal(err)
 	}
-	var items []map[string]any
-	if err := json.Unmarshal(b, &items); err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("reasoning_details = %s, want the one item the fragments make", b)
-	}
-	item := items[0]
 	if item["text"] != res.Reasoning {
 		t.Errorf("the item says %q, want the reasoning OpenRouter sent beside it, %q", item["text"], res.Reasoning)
 	}
 	if item["type"] != "reasoning.text" || item["format"] != "unknown" || item["index"] != 0.0 {
 		t.Errorf("the item = %+v, want every other field as it came", item)
 	}
+}
 
+// The reasoning documentation asks for the details of what a model thought to
+// go back with what it wrote, as they came. A reply whose reasoning came as
+// text alone, as a runner that sends no details keeps it, goes back as the
+// text.
+func TestTheReasoningOfAReplyGoesBackAsItCame(t *testing.T) {
 	// A message that thought nothing hands nothing back.
 	none := map[string]any{}
-	hooks{}.Message(none, api.Text(api.RoleUser, "hey"))
+	hooks{}.Message(none, api.Text(api.RoleAssistant, "hey"))
 	if len(none) != 0 {
 		t.Errorf("a message with no reasoning carries %+v", none)
+	}
+
+	res := streamed(t, "stream_tool_calls.sse")
+	out := map[string]any{}
+	hooks{}.Message(out, api.Message{
+		Role:      api.RoleAssistant,
+		Reasoning: &api.Reasoning{Text: res.Reasoning, Details: res.ReasoningDetails},
+	})
+	sent, err := json.Marshal(out["reasoning_details"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	came, err := json.Marshal(res.ReasoningDetails)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(sent) != string(came) || out["reasoning"] != nil {
+		t.Errorf("the message carries %s and %v, want the details as they came, %s", sent, out["reasoning"], came)
+	}
+
+	text := map[string]any{}
+	hooks{}.Message(text, api.Message{Role: api.RoleAssistant, Reasoning: &api.Reasoning{Text: res.Reasoning}})
+	if text["reasoning"] != res.Reasoning || text["reasoning_details"] != nil {
+		t.Errorf("a reply that thought in text alone carries %+v, want the text", text)
 	}
 }
 

@@ -335,6 +335,74 @@ func TestTheReasoningOfARoundGoesBackWithItsCalls(t *testing.T) {
 	}
 }
 
+// A model offered tools reads the thinking of every reply before the one it is
+// writing, so each goes back with what it thought: the text, and the details
+// its runner sent, of every round, in order. A reply that thought nothing goes
+// back with nothing.
+func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
+	// The details are what OpenRouter sent of a reply that asked for a tool,
+	// in the item its fragments make, and what it sent of one that answered.
+	asking := json.RawMessage(`{"type":"reasoning.text","text":"I need to search memories for Caio's sister's name.","format":"unknown","index":0}`)
+	answered := json.RawMessage(`{"type":"reasoning.text","text":"She lives in Lisbon.","format":"unknown","index":0}`)
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{reasoning: "I need to search memories for Caio's sister's name.", details: []json.RawMessage{asking},
+			calls: []api.ToolCall{lookup("call_1", `{"query":"sister"}`)}},
+		round{text: "Ana, in Lisbon", reasoning: "She lives in Lisbon.", details: []json.RawMessage{answered}},
+		round{text: "hi"},
+		round{text: "sure"},
+	)}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "what's my sister's name?")
+	r.say(t, "hey")
+	r.say(t, "ok")
+
+	requests := f.all()
+	msgs := requests[len(requests)-1].Messages
+	var replies []api.Message
+	for _, m := range msgs {
+		if m.Role == api.RoleAssistant {
+			replies = append(replies, m)
+		}
+	}
+	if len(replies) != 2 {
+		t.Fatalf("the last prompt carries %d replies, want the two before it", len(replies))
+	}
+	thought := replies[0].Reasoning
+	if thought == nil || thought.Text != "I need to search memories for Caio's sister's name.\n\nShe lives in Lisbon." {
+		t.Fatalf("the first reply went back with %+v, want what both its rounds thought", thought)
+	}
+	if len(thought.Details) != 2 || string(thought.Details[0]) != string(asking) || string(thought.Details[1]) != string(answered) {
+		t.Errorf("the first reply went back with the details %s, want each round's as it came", thought.Details)
+	}
+	if replies[1].Reasoning != nil {
+		t.Errorf("a reply that thought nothing went back with %+v", replies[1].Reasoning)
+	}
+}
+
+// A round that sends a blank line before the calls it asks for has written
+// nothing: no text of it is shown, and the reply is what the next round
+// writes.
+func TestABlankLineBeforeACallIsNotWritten(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "found"}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{text: "\n\n", calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{text: "found it"},
+	)}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "look it up")
+
+	var texts []string
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyText {
+			texts = append(texts, ev.Text)
+		}
+	}
+	if len(texts) != 1 || texts[0] != "found it" {
+		t.Errorf("the reply was published as %q, want only what the round after the call wrote", texts)
+	}
+}
+
 // What she is doing in the middle of a reply is said while it runs, in the
 // words of the tool she asked for.
 func TestANoteIsSaidForEachCall(t *testing.T) {

@@ -495,6 +495,14 @@ then what she remembers, then the summary of what came before. After it come
 the messages the summary does not cover, in order, each reply after what it
 answers.
 
+Each reply goes back with what she thought on the way to it, as the API sent
+it: the reasoning text, and on OpenRouter the details it sent beside it, which
+may be signed and so go back exactly as they came. A model offered tools reads
+the thinking of every earlier reply, and one shown replies with no thinking
+learns to skip its own, or to leave it open and write the reply inside it.
+That thinking is part of the prompt, so it is counted against the context and
+folded away with the messages it belongs to.
+
 **The oldest of it is folded away.** The model's `context`, or the largest its
 catalogue reports, is split between that system message and the messages —
 `system_ratio` says how. When the messages outgrow their half, a fold runs in

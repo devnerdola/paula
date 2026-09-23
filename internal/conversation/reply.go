@@ -2,9 +2,11 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners"
@@ -74,10 +76,15 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 
 	// written is the text of every round, as the frontends were sent it: they
 	// are given the whole of it each time and show what is new, so it only
-	// ever grows. thought is the reasoning of every round.
+	// ever grows. thought is the reasoning of every round, and details what
+	// its runner sent of it to be handed back.
 	var written strings.Builder
 	var thought []string
+	var details []json.RawMessage
 	var res *api.Result
+	kept := func(interrupted bool) *store.Message {
+		return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), details, interrupted)
+	}
 	for round := 1; ; round++ {
 		// The round after the last a reply may take calls in is asked for an
 		// answer with none, so a model that keeps asking still answers.
@@ -99,6 +106,16 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			if c.Kind != api.ChunkText || c.Text == "" {
 				return nil
 			}
+			// What a round writes starts at its first word: one that sends a
+			// blank line before the calls it asks for has written nothing, and
+			// has not started the reply.
+			text := c.Text
+			if said.Len() == 0 {
+				text = strings.TrimLeftFunc(text, unicode.IsSpace)
+				if text == "" {
+					return nil
+				}
+			}
 			// A reply a new message restarted shows nothing, not even what
 			// landed while it was being cancelled.
 			if !a.started() {
@@ -109,8 +126,8 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			if said.Len() == 0 {
 				written.WriteString(gap(written.String()))
 			}
-			said.WriteString(c.Text)
-			written.WriteString(c.Text)
+			said.WriteString(text)
+			written.WriteString(text)
 			e.events.publish(Event{
 				Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: written.String(),
 			})
@@ -131,16 +148,17 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			// A reply that was stopped keeps what it had written, and so does
 			// one that has run a tool, however it failed.
 			if a.was(stopped) {
-				return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), nil
+				return kept(true), nil
 			}
 			if a.acted {
-				return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), err
+				return kept(true), err
 			}
 			return nil, err
 		}
 		if res.Reasoning != "" {
 			thought = append(thought, res.Reasoning)
 		}
+		details = append(details, res.ReasoningDetails...)
 		if len(res.ToolCalls) == 0 {
 			break
 		}
@@ -172,7 +190,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		}
 		// A stop while a tool ran keeps what she had written before it.
 		if a.was(stopped) {
-			return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), true), nil
+			return kept(true), nil
 		}
 	}
 
@@ -183,7 +201,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		return nil, fmt.Errorf("the model returned no text (finish reason %s)", reason(res))
 	}
 	a.finished()
-	return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), false), nil
+	return kept(false), nil
 }
 
 // asked is a round that asked for tools, as the rounds after it are told it:
@@ -223,19 +241,20 @@ func reason(res *api.Result) string {
 // replyMessage is the reply as a message of its own, for the loop to store. How
 // the model finished is kept with the request that asked, which paula turns
 // shows, so it is not kept here a second time.
-func (e *Engine) replyMessage(a *attempt, text, reasoning string, interrupted bool) *store.Message {
+func (e *Engine) replyMessage(a *attempt, text, reasoning string, details []json.RawMessage, interrupted bool) *store.Message {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
 	}
 	return &store.Message{
-		Role:        store.RoleAssistant,
-		Channel:     a.entry.Channel,
-		Parts:       []store.Part{{Type: store.PartText, Text: text}},
-		Reasoning:   reasoning,
-		Interrupted: interrupted,
-		ReplyTo:     a.entry.UptoMessageID,
-		EntryID:     a.entry.ID,
-		CreatedAt:   e.clock.Now(),
+		Role:             store.RoleAssistant,
+		Channel:          a.entry.Channel,
+		Parts:            []store.Part{{Type: store.PartText, Text: text}},
+		Reasoning:        reasoning,
+		ReasoningDetails: details,
+		Interrupted:      interrupted,
+		ReplyTo:          a.entry.UptoMessageID,
+		EntryID:          a.entry.ID,
+		CreatedAt:        e.clock.Now(),
 	}
 }

@@ -175,6 +175,7 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 
 	res.Reasoning = reasoning.String()
 	res.ToolCalls = asked.whole()
+	c.Hooks.End(res)
 	return nil
 }
 

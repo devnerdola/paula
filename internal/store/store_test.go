@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -128,14 +129,21 @@ func TestMessagesRoundTrip(t *testing.T) {
 	if got.Channel != "telegram" || !got.CreatedAt.Equal(now) {
 		t.Errorf("message = %+v", got)
 	}
+	if got.ReasoningDetails != nil {
+		t.Errorf("a message that thought nothing reads back with %s", got.ReasoningDetails)
+	}
 
+	// The details are what OpenRouter sent of a reply that asked for a tool,
+	// in the one item its fragments make.
+	detail := json.RawMessage(`{"type":"reasoning.text","text":"I need to search memories for Caio's sister's name.","format":"unknown","index":0}`)
 	reply := &Message{
 		Role: RoleAssistant, Channel: "telegram",
-		Parts:       []Part{{Type: PartText, Text: "nice"}},
-		Reasoning:   "thinking",
-		Interrupted: true,
-		ReplyTo:     m.ID,
-		CreatedAt:   now.Add(time.Second),
+		Parts:            []Part{{Type: PartText, Text: "nice"}},
+		Reasoning:        "thinking",
+		ReasoningDetails: []json.RawMessage{detail},
+		Interrupted:      true,
+		ReplyTo:          m.ID,
+		CreatedAt:        now.Add(time.Second),
 	}
 	if err := s.AddMessage(ctx, reply); err != nil {
 		t.Fatal(err)
@@ -146,6 +154,9 @@ func TestMessagesRoundTrip(t *testing.T) {
 	}
 	if got.Reasoning != "thinking" || !got.Interrupted || got.ReplyTo != m.ID {
 		t.Errorf("reply = %+v", got)
+	}
+	if len(got.ReasoningDetails) != 1 || !bytes.Equal(got.ReasoningDetails[0], detail) {
+		t.Errorf("the details read back as %s, want them as they were kept", got.ReasoningDetails)
 	}
 
 	if _, err := s.Message(ctx, 999); !errors.Is(err, ErrNotFound) {

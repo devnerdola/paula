@@ -74,6 +74,16 @@ func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
 	if got := r.ratio("chat"); got != 0.5 {
 		t.Errorf("ratio = %v, want the one that was counted", got)
 	}
+
+	// What a reply thought goes back with it, and is text the host counted:
+	// ten characters written and thirty thought, counted as ten tokens, is a
+	// token every four.
+	thought := api.Text(api.RoleAssistant, strings.Repeat("a", 10))
+	thought.Reasoning = &api.Reasoning{Text: strings.Repeat("b", 30)}
+	r.correct("chat", 10, []api.Message{thought}, "")
+	if got := r.ratio("chat"); got != 0.25 {
+		t.Errorf("ratio = %v, want 0.25", got)
+	}
 }
 
 // A host bills a picture by how big it is, and each of them by its own

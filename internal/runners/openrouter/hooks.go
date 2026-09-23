@@ -120,24 +120,43 @@ func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
 		return "", nil
 	}
 	// The details are what the reasoning documentation asks to be handed back
-	// with the calls they came with, so they are kept as they arrived and read
-	// only when they go back.
+	// with the reply they came with, so they are kept as they arrived until
+	// the stream is done.
 	res.ReasoningDetails = append(res.ReasoningDetails, c.Choices[0].Delta.ReasoningDetails...)
 	return c.Choices[0].Delta.Reasoning, nil
 }
 
-// Message hands back the reasoning an assistant message's calls came with, as
-// the reasoning documentation asks: the whole of each item, in the order they
-// came.
-//
-// A stream sends an item a fragment at a time under the index it has, the way
-// it sends a call, so the fragments of one index go back as the one item they
-// make — which is what a reply that was not streamed would have carried.
-func (hooks) Message(out map[string]any, m api.Message) {
-	if m.Reasoning == nil || len(m.Reasoning.Details) == 0 {
+// End makes the details whole. A stream sends an item a fragment at a time
+// under the index it has, the way it sends a call, so the fragments of one
+// index are the one item they make — which is what a reply that was not
+// streamed would have carried, and what goes back.
+func (hooks) End(res *api.Result) {
+	if len(res.ReasoningDetails) == 0 {
 		return
 	}
-	out["reasoning_details"] = whole(m.Reasoning.Details)
+	items := whole(res.ReasoningDetails)
+	res.ReasoningDetails = make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		raw, err := json.Marshal(item)
+		if err != nil {
+			continue
+		}
+		res.ReasoningDetails = append(res.ReasoningDetails, raw)
+	}
+}
+
+// Message hands back the reasoning an assistant message came with, as the
+// reasoning documentation asks: its details as they came. A message whose
+// reasoning came as text alone, from a runner that sends no details, hands
+// back the text in the field a reply carries it in.
+func (hooks) Message(out map[string]any, m api.Message) {
+	switch {
+	case m.Reasoning == nil:
+	case len(m.Reasoning.Details) > 0:
+		out["reasoning_details"] = m.Reasoning.Details
+	case m.Reasoning.Text != "":
+		out["reasoning"] = m.Reasoning.Text
+	}
 }
 
 // grown are the fields of a reasoning item that arrive a fragment at a time.
