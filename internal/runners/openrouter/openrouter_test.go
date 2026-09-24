@@ -896,8 +896,10 @@ provider:
 
 // A cache is written only where a request marks it, and the end of a prompt is
 // what the next reply changes. So the last message the next reply sends again is
-// marked beside the end, and only on a model that is told to cache.
-func TestTheLastMessageThatStandsIsMarkedForTheCache(t *testing.T) {
+// marked beside the end, and so is the last of them the model was given, which
+// is the only kind OpenAI takes a marker on. Only a model told to cache is
+// marked.
+func TestTheLastMessagesThatStandAreMarkedForTheCache(t *testing.T) {
 	var bodies [][]byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -944,31 +946,37 @@ func TestTheLastMessageThatStandsIsMarkedForTheCache(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("%d requests were sent, want three", len(got))
 	}
+	// Her reply, and the message it answered.
+	want := map[int]string{1: "hey", 2: "hi love"}
 	for i, s := range got {
 		for j, m := range s.Messages {
-			marked := i == 2 && j == 2
-			if !marked && bytes.Contains(m.Content, []byte("cache_control")) {
-				t.Errorf("request %d marks message %d: %s", i+1, j, m.Content)
+			text, marked := want[j]
+			marked = marked && i == 2
+			if !marked {
+				if bytes.Contains(m.Content, []byte("cache_control")) {
+					t.Errorf("request %d marks message %d: %s", i+1, j, m.Content)
+				}
+				if m.Content[0] != '"' {
+					t.Errorf("request %d sends message %d as %s, want its text", i+1, j, m.Content)
+				}
+				continue
 			}
-			if !marked && m.Content[0] != '"' {
-				t.Errorf("request %d sends message %d as %s, want its text", i+1, j, m.Content)
+			var parts []struct {
+				Type    string `json:"type"`
+				Text    string `json:"text"`
+				Control struct {
+					Type string `json:"type"`
+					TTL  string `json:"ttl"`
+				} `json:"cache_control"`
+			}
+			if err := json.Unmarshal(m.Content, &parts); err != nil {
+				t.Fatalf("marked message %d is %s: %v", j, m.Content, err)
+			}
+			if len(parts) != 1 || parts[0].Type != "text" || parts[0].Text != text ||
+				parts[0].Control.Type != "ephemeral" || parts[0].Control.TTL != "1h" {
+				t.Errorf("marked message %d is %+v, want its text as one part carrying the marker", j, parts)
 			}
 		}
-	}
-	var parts []struct {
-		Type    string `json:"type"`
-		Text    string `json:"text"`
-		Control struct {
-			Type string `json:"type"`
-			TTL  string `json:"ttl"`
-		} `json:"cache_control"`
-	}
-	if err := json.Unmarshal(got[2].Messages[2].Content, &parts); err != nil {
-		t.Fatalf("the marked message is %s: %v", got[2].Messages[2].Content, err)
-	}
-	if len(parts) != 1 || parts[0].Type != "text" || parts[0].Text != "hi love" ||
-		parts[0].Control.Type != "ephemeral" || parts[0].Control.TTL != "1h" {
-		t.Errorf("the marked message is %+v, want its text as one part carrying the marker", parts)
 	}
 }
 

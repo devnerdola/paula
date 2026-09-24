@@ -43,8 +43,19 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 		// reply find what the round before them wrote. A cache is written only
 		// where a request marks it, and the next reply changes the end of this
 		// prompt, so the last message that it sends again is marked too.
+		//
+		// That message is usually her reply, and some hosts take a marker only on
+		// a message the model was given, not on one it wrote. So the last of
+		// those that stands is marked as well: a host that takes both reads from
+		// the later marker, and the others from this one.
 		if msgs, ok := out["messages"].([]map[string]any); ok && req.Standing > 0 {
 			mark(msgs[req.Standing-1], control)
+			for _, msg := range slices.Backward(msgs[:req.Standing]) {
+				if msg["role"] != api.RoleAssistant {
+					mark(msg, control)
+					break
+				}
+			}
 		}
 	}
 	if prov.ServiceTier != "" {

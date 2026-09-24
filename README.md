@@ -225,13 +225,16 @@ times, and gives up on a wait longer than two minutes.
 of them accepts every parameter she sends and serves the context you asked for.
 A base name covers its variants, so `novita` matches `novita/fp8`.
 
-Most models cache a prompt without being asked. Claude does not: it caches
-only where a request marks it, and `cache.control` is what marks it. Set on a
-Claude model, every request carries it twice. A top-level `cache_control`
-marks the end of the prompt, where the rounds of a reply find what the round
-before them wrote. What she remembers and what time it is now change from one
-reply to the next, so the last message before them is marked too, and the next
-reply finds everything up to it:
+Most models cache a prompt without being asked. Claude, and OpenAI's models
+from GPT-5.6 on, write a cache only where a request marks it, and
+`cache.control` is what marks it. Set on such a model, every request carries
+it three times. A top-level `cache_control` marks the end of the prompt, where
+the rounds of a reply find what the round before them wrote. What she
+remembers and what time it is now change from one reply to the next, so the
+last message before them is marked too, which is usually her reply, and so is
+the last message she was sent before it, since OpenAI takes a marker only on a
+message the model was given. The next reply finds everything up to the later
+of the two on Claude, and up to the earlier on OpenAI:
 
 ```yaml
 models:
@@ -249,9 +252,10 @@ models:
 tenth of the input price; writing it costs 1.25 times the input price with
 `5m` and twice with `1h`, and each reply writes only what is new since the one
 before. Texts are often more than five minutes apart, which a `5m` cache does
-not outlast, so `1h` is the one for a conversation. Claude caches nothing
-shorter than the minimum of its model, so a conversation that has just begun
-may show none.
+not outlast, so `1h` is the one for a conversation. On OpenAI the `ttl` is
+dropped: a cache lasts at least 30 minutes, reading it costs a tenth of the
+input price and writing it 1.25 times. Neither caches anything shorter than
+the minimum of its model, so a conversation that has just begun may show none.
 
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
 from `GET /models?type=all` and checks the key with `GET
