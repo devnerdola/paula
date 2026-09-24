@@ -390,7 +390,7 @@ func (e *Engine) remember(ctx context.Context, a *attempt, m *model, stored []st
 		b.WriteString("\n")
 	}
 	b.WriteString("New messages:\n")
-	b.WriteString(e.chunkText(chunk))
+	b.WriteString(e.chunkText(ctx, chunk))
 
 	text, err := e.answer(ctx, a, m, store.PurposeMemories,
 		e.fill(memoryPrompt, 0), b.String())
@@ -451,7 +451,7 @@ func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *s
 	if len(chunk) > 0 {
 		prompt, purpose = summaryPrompt, store.PurposeSummary
 		b.WriteString("Messages to add:\n")
-		b.WriteString(e.chunkText(chunk))
+		b.WriteString(e.chunkText(ctx, chunk))
 	}
 
 	text, err := e.answer(ctx, a, m, purpose,
@@ -481,8 +481,10 @@ func (e *Engine) words(input string, room int, ratio float64) int {
 }
 
 // chunkText is how the messages of a chunk are written to a model: the number
-// they are named by, when they were sent, and who said what.
-func (e *Engine) chunkText(chunk []store.Message) string {
+// they are named by, when they were sent, who said what, and a line for every
+// picture, as a prompt writes one it does not send as a picture. A fold asks
+// nothing of a picture, so the line is whatever has been described of it.
+func (e *Engine) chunkText(ctx context.Context, chunk []store.Message) string {
 	loc := e.clock.Now().Location()
 	var b strings.Builder
 	for _, msg := range chunk {
@@ -490,8 +492,15 @@ func (e *Engine) chunkText(chunk []store.Message) string {
 		if msg.Role == store.RoleAssistant {
 			name = e.persona.Name
 		}
+		var lines []string
+		if text := msg.Text(); text != "" {
+			lines = append(lines, text)
+		}
+		for _, p := range msg.Images() {
+			lines = append(lines, e.known(ctx, p.SHA256))
+		}
 		fmt.Fprintf(&b, "#%d %s %s: %s\n",
-			msg.ID, timeText(loc, msg.CreatedAt), name, msg.Text())
+			msg.ID, timeText(loc, msg.CreatedAt), name, strings.Join(lines, "\n"))
 	}
 	return b.String()
 }

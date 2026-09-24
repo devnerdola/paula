@@ -697,3 +697,26 @@ func TestTheMemoriesAPromptTellsFitTheirRoom(t *testing.T) {
 		t.Errorf("memories told = %+v, want none", got)
 	}
 }
+
+// A picture is described once and the description stays in the conversation,
+// so a fold reads it the way a prompt does: a message that was a picture is
+// not folded away as one that said nothing.
+func TestAFoldReadsAPictureByWhatItShowed(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: folding("hm", "Caio sent a picture", "they looked at a picture")}
+	eyes := &fakeRunner{model: visionModel(), chat: says("a red square")}
+	set := withVision(f, eyes)
+	set.Models[0].Context = 2000
+	r := openReplyWith(t, f, set)
+
+	sendPhoto(t, r, "look at this", photo(t))
+	talkPast(t, r)
+
+	asked := f.sentFor(store.PurposeMemories)
+	if len(asked) == 0 {
+		t.Fatal("no memories were asked for")
+	}
+	shown := text(mine(asked[0]))
+	if !strings.Contains(shown, "look at this\n[photo: a red square]") {
+		t.Errorf("the fold was shown:\n%s\nwant the picture described under what was said with it", shown)
+	}
+}
