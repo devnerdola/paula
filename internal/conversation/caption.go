@@ -29,6 +29,9 @@ func (e *Engine) described(ctx context.Context, a *attempt, sha256 string) strin
 		return e.caption(sha256, m.Caption)
 	}
 	if m.CaptionError != "" {
+		// One that could not be described is never asked about again, so
+		// what it reads as is settled too.
+		e.captions.Store(sha256, "[photo]")
 		return "[photo]"
 	}
 	caption, err := e.ask(ctx, a, sha256)
