@@ -317,6 +317,9 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 		return 0, err
 	}
 	req.Header = a.header.Clone()
+	// What the record says of the answer is this try's: one whose connection
+	// went got no status and no body, not the ones of the try before it.
+	rec.Status, rec.ResponseHeaders, rec.ResponseBody = 0, nil, nil
 
 	// The wait for an answer counts as silence too, so a host that takes the
 	// request and says nothing is given up on.

@@ -1028,3 +1028,40 @@ func TestAnAnswerThatTakesTooLong(t *testing.T) {
 		t.Errorf("the request took %s, want it given up after %s", took, limit)
 	}
 }
+
+// A try whose connection went got no answer, and the record says so: the
+// status and the body of the try before it are that try's alone.
+func TestATryWhoseConnectionWentLeavesNoStatus(t *testing.T) {
+	ts, srv := newServer(t,
+		answer(http.StatusBadGateway, `{"error":{"message":"bad gateway"}}`),
+		func(w http.ResponseWriter, r *http.Request) {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		},
+	)
+	hooks := parts{retry: func(_ time.Time, status int, _ http.Header) (time.Duration, bool) {
+		return 0, status == http.StatusBadGateway
+	}}
+	c, _ := client(t, ts.URL, hooks)
+	rec := &recorder{}
+	if err := asked(context.Background(), c, rec); err == nil {
+		t.Fatal("Chat succeeded")
+	}
+	if srv.requests.Load() != 2 {
+		t.Fatalf("requests = %d, want the first and the one sent again", srv.requests.Load())
+	}
+	r := rec.ended[0]
+	if len(r.Attempts) != 2 || r.Attempts[0].Status != http.StatusBadGateway || r.Attempts[1].Status != 0 {
+		t.Fatalf("attempts = %+v", r.Attempts)
+	}
+	if r.Status != 0 || len(r.ResponseHeaders) != 0 || len(r.ResponseBody) != 0 {
+		t.Errorf("record = status %d, headers %v, body %q, want nothing of the try before",
+			r.Status, r.ResponseHeaders, r.ResponseBody)
+	}
+	if r.Error == "" {
+		t.Error("the record kept no error")
+	}
+}
