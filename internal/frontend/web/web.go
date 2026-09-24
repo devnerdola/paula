@@ -86,8 +86,10 @@ type Frontend struct {
 	mu    sync.Mutex
 	pages map[string]*adapter
 	// live is every session running on a page, so a run ends with none of them
-	// still writing.
-	live sync.WaitGroup
+	// still writing, and ending says the run is over: a page that opens after
+	// that is not run, so none is counted once the count has been waited for.
+	live   sync.WaitGroup
+	ending bool
 }
 
 // Open reads the web section and builds the server it describes.
@@ -159,11 +161,21 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 		// to wait to finish: the sessions on them end with the context.
 		srv.Close()
 	}()
-	defer f.live.Wait()
+	defer f.wait()
 	if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil
+}
+
+// wait waits for every session to end. The run is over, so a page that opens
+// from here on is not run: a session counted after the count is read would
+// outlive the run.
+func (f *Frontend) wait() {
+	f.mu.Lock()
+	f.ending = true
+	f.mu.Unlock()
+	f.live.Wait()
 }
 
 // page is everything a browser is served: the page itself and what it is built
@@ -276,9 +288,9 @@ func (f *Frontend) events(ctx context.Context, session func(context.Context, api
 		stop()
 	}()
 
-	f.live.Add(1)
-	defer f.live.Done()
-	f.opened(a)
+	if !f.opened(a) {
+		return
+	}
 	defer f.closed(a)
 	// The beat runs beside the session, and the response belongs to the server
 	// again the moment this returns. A reply that was arriving here is arriving
@@ -317,16 +329,23 @@ func (f *Frontend) page(r *http.Request) (*adapter, bool) {
 	return a, ok
 }
 
-func (f *Frontend) opened(a *adapter) {
+// opened counts a page in, and reports false once the run is ending.
+func (f *Frontend) opened(a *adapter) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.ending {
+		return false
+	}
+	f.live.Add(1)
 	f.pages[a.id] = a
+	return true
 }
 
 func (f *Frontend) closed(a *adapter) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.pages, a.id)
+	f.live.Done()
 }
 
 // pageHeader is how a request says which browser it came from. The number is

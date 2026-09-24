@@ -933,6 +933,21 @@ func TestATokenThatCannotBeUsedIsReported(t *testing.T) {
 	}
 }
 
+// A run ends with no session still writing. A page that opens as the run ends
+// is not run, so none is counted once the sessions have been waited for.
+func TestAPageThatOpensAsTheRunEndsIsNotRun(t *testing.T) {
+	f := running(t, t.TempDir())
+	a := &adapter{f: f, id: "one"}
+	if !f.opened(a) {
+		t.Fatal("a page was refused while the run was up")
+	}
+	f.closed(a)
+	f.wait()
+	if f.opened(&adapter{f: f, id: "two"}) {
+		t.Error("a page opened after the run ended")
+	}
+}
+
 // A browser that closed the page is gone for good, so the session on it ends
 // rather than writing to nobody.
 func TestAPageThatWentAwayEndsItsSession(t *testing.T) {
