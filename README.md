@@ -258,8 +258,8 @@ input price and writing it 1.25 times. Neither caches anything shorter than
 the minimum of its model, so a conversation that has just begun may show none.
 
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
-from `GET /models?type=all` and checks the key with `GET
-/api_keys/rate_limits`. She sends `429` again at the time in
+from `GET /models`, which lists the models that write text, and checks the key
+with `GET /api_keys/rate_limits`. She sends `429` again at the time in
 `x-ratelimit-reset-requests`, at most `retries` times. She keeps Venice's own
 system prompt off unless `provider.system_prompt` turns it on, and wants
 `sampling.seed` above zero.

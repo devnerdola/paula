@@ -111,7 +111,6 @@ func (r *Runner) Model(ctx context.Context, id string) (*api.Model, error) {
 type listing struct {
 	Data []struct {
 		ID        string `json:"id"`
-		Type      string `json:"type"`
 		ModelSpec struct {
 			AvailableContextTokens int `json:"availableContextTokens"`
 			Capabilities           struct {
@@ -126,20 +125,17 @@ type listing struct {
 	} `json:"data"`
 }
 
-// listing is what the API serves, as the models Paula speaks of.
+// listing is what the API serves, as the models Paula speaks of. The listing
+// with no type is the models that write text, and nothing Paula does asks
+// anything of the rest.
 func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 	var list listing
-	if err := r.client.Get(ctx, "/models?type=all", &list); err != nil {
+	if err := r.client.Get(ctx, "/models", &list); err != nil {
 		return nil, err
 	}
 
 	var out []api.Model
 	for _, m := range list.Data {
-		// Only the models that write text: nothing Paula does asks anything of
-		// the rest.
-		if m.Type != "text" {
-			continue
-		}
 		c := m.ModelSpec.Capabilities
 		model := api.Model{
 			ID:                m.ID,

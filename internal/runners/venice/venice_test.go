@@ -164,14 +164,27 @@ func TestCatalogue(t *testing.T) {
 		t.Errorf("%s = %+v, want no reasoning", m.ID, m)
 	}
 
-	// An embedding model is not one she can use, so it is not in the catalogue
-	// at all: the listing holds one, and asking for it says it is not served.
-	if _, err := r.Model(context.Background(), "text-embedding-bge-m3"); err == nil {
-		t.Error("an embedding model was served as a model Paula can use")
-	}
-
 	if _, err := r.Model(context.Background(), "nope"); err == nil {
 		t.Error("Model of an unknown id succeeded")
+	}
+}
+
+// The listing with no type is the models that write text, which are the only
+// ones she can use: the images, the voices and the embeddings are not asked for.
+func TestTheCatalogueIsTheModelsThatWrite(t *testing.T) {
+	var asked []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.RequestURI())
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(read(t, "models.json"))
+	}))
+	t.Cleanup(ts.Close)
+
+	if _, err := runner(t, ts.URL, "").Models(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(asked, []string{"/v1/models"}) {
+		t.Errorf("asked %q, want the listing with no type", asked)
 	}
 }
 

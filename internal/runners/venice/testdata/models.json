@@ -206,34 +206,8 @@
       "object": "model",
       "owned_by": "venice.ai",
       "type": "text"
-    },
-    {
-      "created": 1741924661,
-      "id": "text-embedding-bge-m3",
-      "model_spec": {
-        "pricing": {
-          "input": {
-            "usd": 0.15,
-            "diem": 0.15
-          },
-          "output": {
-            "usd": 0.6,
-            "diem": 0.6
-          }
-        },
-        "embeddingDimensions": 1024,
-        "maxInputTokens": 8192,
-        "name": "BGE-M3",
-        "modelSource": "https://huggingface.co/BAAI/bge-m3",
-        "offline": false,
-        "privacy": "private",
-        "traits": []
-      },
-      "object": "model",
-      "owned_by": "venice.ai",
-      "type": "embedding"
     }
   ],
   "object": "list",
-  "type": "all"
+  "type": "text"
 }
