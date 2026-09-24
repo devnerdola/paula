@@ -299,6 +299,9 @@ func MergeSections(base, over Section) Section {
 }
 
 func mergeNodes(base, over *yaml.Node) *yaml.Node {
+	// An alias is the mapping it names, so a block shared by an anchor merges
+	// the way it would written out.
+	base, over = resolved(base), resolved(over)
 	if base.Kind != yaml.MappingNode || over.Kind != yaml.MappingNode {
 		return over
 	}
@@ -319,6 +322,14 @@ func mergeNodes(base, over *yaml.Node) *yaml.Node {
 		}
 	}
 	return &out
+}
+
+// resolved is the node an alias names, and any other node itself.
+func resolved(n *yaml.Node) *yaml.Node {
+	for n.Kind == yaml.AliasNode && n.Alias != nil {
+		n = n.Alias
+	}
+	return n
 }
 
 type entry struct {

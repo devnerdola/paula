@@ -554,3 +554,60 @@ default_models:
 		t.Errorf("b = %+v, want the merged keys with its own id", v)
 	}
 }
+
+// A block a model shares by an anchor inside its section is read over the
+// runner's the way one written out is: the runner's keys the block does not
+// name still stand.
+func TestABlockSharedByAnAnchorIsReadOverTheRunners(t *testing.T) {
+	c := mustLoad(t, `
+persona: paula.yaml
+runners:
+  r:
+    type: openrouter
+    provider:
+      routing:
+        zdr: true
+models:
+  a:
+    runner: r
+    id: x
+    provider:
+      routing: &routing
+        only: [novita]
+  b:
+    runner: r
+    id: y
+    provider:
+      routing: *routing
+default_models:
+  chat: a
+`)
+	var runner, model struct {
+		Provider Section `yaml:"provider"`
+		Type     string  `yaml:"type"`
+		Runner   string  `yaml:"runner"`
+		ID       string  `yaml:"id"`
+	}
+	if err := section(t, c, "r").Decode(&runner); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Model("b").Section.Decode(&model); err != nil {
+		t.Fatal(err)
+	}
+
+	var got struct {
+		Routing struct {
+			Only []string `yaml:"only"`
+			ZDR  bool     `yaml:"zdr"`
+		} `yaml:"routing"`
+	}
+	if err := MergeSections(runner.Provider, model.Provider).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(got.Routing.Only, ",") != "novita" {
+		t.Errorf("only = %v, want the anchored block's", got.Routing.Only)
+	}
+	if !got.Routing.ZDR {
+		t.Error("zdr = false, want the runner's")
+	}
+}
