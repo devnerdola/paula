@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -261,5 +262,35 @@ func TestAFoldThatCannotBeStoredLeavesNothingBehind(t *testing.T) {
 		[]Memory{{Content: "nothing real"}})
 	if err == nil {
 		t.Fatal("a memory of no message was stored")
+	}
+}
+
+// A fold names the memories it read before it asked its model. One she
+// replaced herself meanwhile keeps what replaced it, so forgetting that still
+// takes it away.
+func TestAFoldLeavesAMemoryReplacedMeanwhileWhereItIs(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	first := said(t, s, "my sister Ana lives in Porto")
+	porto := []Memory{{Content: "Ana lives in Porto", Source: first.ID}}
+	if err := s.Fold(ctx, &Summary{UptoMessageID: first.ID, Content: "Ana"}, porto); err != nil {
+		t.Fatal(err)
+	}
+
+	lisbon := &Memory{Content: "Ana lives in Lisbon", Source: first.ID, Replaces: []MemoryID{porto[0].ID}}
+	if err := s.Remember(ctx, lisbon); err != nil {
+		t.Fatal(err)
+	}
+	faro := []Memory{{Content: "Ana lives in Faro", Source: first.ID, Replaces: []MemoryID{porto[0].ID}}}
+	if err := s.Fold(ctx, &Summary{UptoMessageID: first.ID, Content: "Ana"}, faro); err != nil {
+		t.Fatal(err)
+	}
+
+	gone, err := s.Forget(ctx, lisbon.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []MemoryID{porto[0].ID, lisbon.ID}; !slices.Equal(ids(gone), want) {
+		t.Errorf("forgot %v, want %v: the one she replaced herself goes with what replaced it", ids(gone), want)
 	}
 }

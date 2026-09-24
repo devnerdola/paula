@@ -246,12 +246,15 @@ func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) e
 		}
 		m.ID = MemoryID(stored)
 		for _, replaced := range m.Replaces {
-			// A memory takes the place of one older than itself. The fold read
-			// the memories it replaces before it asked its model, and a number
-			// is given again once the row that held it is forgotten, so a step
-			// that took long enough can name what is now its own row.
+			// A memory takes the place of one older than itself that still
+			// stands. The fold read the memories it replaces before it asked
+			// its model: a number is given again once the row that held it is
+			// forgotten, so a step that took long enough can name what is now
+			// its own row, and one she replaced herself meanwhile keeps what
+			// replaced it.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE memories SET replaced_by = ? WHERE id = ? AND id < ?`,
+				`UPDATE memories SET replaced_by = ?
+				  WHERE id = ? AND id < ? AND replaced_by IS NULL`,
 				int64(m.ID), int64(replaced), int64(m.ID)); err != nil {
 				return err
 			}
