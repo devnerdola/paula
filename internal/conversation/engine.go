@@ -291,8 +291,12 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 }
 
 // runEnded is what an entry ends with when the run stopped before the reply
-// did.
-const runEnded = "the run ended before the reply did"
+// did, and workEnded the same of an entry that answers no message: a fold, or
+// a summary written again.
+const (
+	runEnded  = "the run ended before the reply did"
+	workEnded = "the run ended before it was done"
+)
 
 // recover closes the entries a run that stopped left behind, so none of them
 // still reads as running. An entry whose reply was stored ended with that
@@ -307,6 +311,14 @@ func (e *Engine) recover(ctx context.Context) error {
 		entry.Status = store.StatusFailed
 		entry.Error = runEnded
 		entry.EndedAt = e.clock.Now()
+		if entry.UptoMessageID == 0 {
+			entry.Error = workEnded
+			if err := e.store.EndEntry(ctx, &entry); err != nil {
+				return err
+			}
+			e.log.Info("entry ended by a run that stopped", "entry", entry.ID, "status", entry.Status)
+			continue
+		}
 
 		reply, err := e.store.ReplyOfEntry(ctx, entry.ID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {

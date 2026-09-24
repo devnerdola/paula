@@ -700,6 +700,27 @@ func TestAReplyStoredByARunThatEndedIsNotWrittenAgain(t *testing.T) {
 	}
 }
 
+// A fold a killed run left running answers no message, so the next run ends it
+// as work that was not done rather than as a reply that was not written.
+func TestAFoldLeftByARunThatEndedIsNotAReply(t *testing.T) {
+	ctx := context.Background()
+	st := newStore(t)
+	c := newClock()
+	entry := &store.Entry{StartedAt: c.Now()}
+	if err := st.StartEntry(ctx, entry); err != nil {
+		t.Fatal(err)
+	}
+
+	open(t, st, c, nil)
+	ended, err := st.Entry(ctx, entry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.Status != store.StatusFailed || ended.Error != workEnded {
+		t.Errorf("entry = %+v, want it failed as work the run ended before", ended)
+	}
+}
+
 // The run ended before the entry could be closed. It holds the part of a reply
 // that a stop kept, so it ended stopped rather than as one that finished.
 func TestAReplyStoppedByARunThatEndedReadsAsStopped(t *testing.T) {
