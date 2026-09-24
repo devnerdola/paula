@@ -81,21 +81,6 @@ func models(g *globals, available bool) error {
 	fmt.Fprintln(w)
 	table(w, []string{"ROLE", "MODEL", "CHOICE", "TOKENS", "STATUS"}, func(row func(...string)) {
 		for _, st := range report.Roles {
-			// A role serving is not done without is listed whether or not a
-			// model is named for it, so a file that cannot serve says so here
-			// rather than at the first serve.
-			if st.Missing {
-				// A conversation given a model of its own for the role is
-				// served by it, so the file naming none is nothing to answer
-				// for.
-				if set.Model(saved[st.Role]) != nil {
-					row(string(st.Role), "-", choice(saved, st.Role), "-", "the conversation chose one")
-					continue
-				}
-				problems = append(problems, fmt.Errorf("default_models.%s: no model is set", st.Role))
-				row(string(st.Role), "-", choice(saved, st.Role), "-", "no model is set")
-				continue
-			}
 			// A runner that never answered is not asked again for the prompt
 			// its model is written within.
 			prompt := "-"
@@ -153,9 +138,6 @@ func capabilities(m *api.Model) string {
 	}
 	if m.Tools {
 		out = append(out, "tools")
-	}
-	if m.Embeddings {
-		out = append(out, "embeddings")
 	}
 	if m.Reasoning {
 		// Reasoning a model cannot be asked to leave off is one entry of the

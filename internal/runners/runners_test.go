@@ -30,10 +30,6 @@ func openrouterCatalogue(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v1/models":
 			w.Write(read("models.json"))
-		case "/v1/embeddings/models":
-			// The models that embed are listed apart from the ones that write,
-			// and a catalogue is both.
-			w.Write(read("embedding_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (openrouter/testdata/SOURCES.md). Health reads
@@ -397,37 +393,6 @@ func TestARoleIsNotAskedWhenItsModelIsNotServed(t *testing.T) {
 	}
 	if r.Models[0].Err == nil {
 		t.Error("the model row says nothing")
-	}
-}
-
-// A role serving is not done without is listed whether or not the file names a
-// model for it, so a setup that cannot serve says so wherever it is shown
-// rather than at the first serve.
-func TestARoleWithNoModelIsStillListed(t *testing.T) {
-	ts := openrouterCatalogue(t)
-	cfg := load(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+
-		"/v1\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\ndefault_models:\n  chat: talk\n")
-	s, err := Configure(cfg, Host{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	r := s.Report(context.Background())
-	embed := roleRow(t, r, config.RoleEmbed)
-	if !embed.Missing || embed.Model != nil {
-		t.Errorf("the embed role = %+v, want it named with no model", embed)
-	}
-	// Seeing a picture is a choice, so a role nothing is named for is not one
-	// to answer for.
-	for _, st := range r.Roles {
-		if st.Role == config.RoleVision {
-			t.Errorf("the vision role is listed as %+v, want it left out", st)
-		}
-	}
-	// What serving would refuse is the run's to say, since a conversation may
-	// have a model of its own saved: the role carries no error of its own.
-	if embed.Err != nil {
-		t.Errorf("the role carries %v, want what reads the conversation to say it", embed.Err)
 	}
 }
 

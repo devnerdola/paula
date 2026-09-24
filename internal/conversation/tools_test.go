@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -576,46 +575,6 @@ func TestARoundThatFailsAfterAToolKeepsTheReply(t *testing.T) {
 	}
 }
 
-// searcher is a tool that searches the memories through the conversation.
-type searcher struct{}
-
-func (searcher) Definition() toolsapi.Definition {
-	return toolsapi.Definition{Name: "search_memories", Parameters: json.RawMessage(`{"type":"object"}`)}
-}
-
-func (searcher) Note(json.RawMessage) string { return "searching" }
-
-func (searcher) Call(ctx context.Context, env toolsapi.Env, _ json.RawMessage) (string, error) {
-	found, err := env.Memories(ctx, "Ana", 3)
-	return fmt.Sprint(len(found)), err
-}
-
-// The request that turns what a reply looks for into a vector is one of that
-// reply's turn, so it is kept under its entry beside the rounds, in the order
-// it was made.
-func TestASearchInAReplyIsARequestOfItsTurn(t *testing.T) {
-	f := &fakeRunner{model: chatModel(), chat: answering(
-		round{calls: []api.ToolCall{{ID: "call_1", Name: "search_memories", Arguments: `{}`}}},
-		round{text: "nothing about Ana yet"},
-	)}
-	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), searcher{})
-	r.say(t, "what do you know about Ana?")
-
-	reply, _ := stored(t, r)
-	requests, err := r.store.Requests(context.Background(), reply.EntryID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var purposes []string
-	for _, req := range requests {
-		purposes = append(purposes, req.Purpose)
-	}
-	want := []string{store.PurposeReply, store.PurposeMemorySearch, store.PurposeReply}
-	if !slices.Equal(purposes, want) {
-		t.Errorf("the entry holds %v, want %v", purposes, want)
-	}
-}
-
 // dater is a tool that answers with a day, as the conversation writes it.
 type dater struct{ day time.Time }
 
@@ -710,8 +669,7 @@ func (keeper) Call(ctx context.Context, env toolsapi.Env, args json.RawMessage) 
 }
 
 // A memory she keeps in the middle of a reply is said in the newest message the
-// reply answers, even when a burst of them came before it, and it is embedded
-// once the reply is done, like the ones a fold writes. One she keeps later
+// reply answers, even when a burst of them came before it. One she keeps later
 // takes the place of it when she says so.
 func TestAMemoryKeptInAReplyIsSaidInTheMessageItAnswers(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: answering(
@@ -748,12 +706,6 @@ func TestAMemoryKeptInAReplyIsSaidInTheMessageItAnswers(t *testing.T) {
 	if m.Content != "Caio's sister Ana lives in Lisbon." || m.Source != newest.ID || !m.SaidAt.Equal(newest.CreatedAt) {
 		t.Errorf("the memory is %+v, want it said in message %d at %v", m, newest.ID, newest.CreatedAt)
 	}
-
-	_, by := embedding(t, r)
-	waitFor(t, "the memory to be embedded", func() bool {
-		waiting, err := r.store.MemoriesToEmbed(ctx, by, 0, 10)
-		return err == nil && len(waiting) == 0
-	})
 
 	r.say(t, "actually she moved to Porto")
 	memories, err = r.store.Memories(ctx)

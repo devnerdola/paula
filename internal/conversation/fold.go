@@ -53,15 +53,6 @@ const (
 	foldMost = 10 * time.Minute
 )
 
-// worked is one piece of the work behind a reply reporting back to the loop.
-// Keeping the prompt inside the context and embedding the memories are told
-// apart: they are asked of different models, and a host that is away for one
-// has nothing to say about the other.
-type worked struct {
-	embedding bool
-	err       error
-}
-
 // fold folds the oldest of the conversation away, a step at a time, until what
 // is left fits the share of the context the messages have. It runs beside the
 // loop, so a reply is never held up by one.
@@ -130,11 +121,10 @@ func (e *Engine) compact(ctx context.Context) error {
 }
 
 // inEntry runs one piece of the work behind a reply in an entry of its own: a
-// fold, a summary written again, or a batch of memories turned into vectors.
-// None of them answers a message, so the entry names none and what the
-// conversation has been answered up to is untouched by it. What the work
-// learned about itself outlives the context it was cut off in, so the entry is
-// closed whichever way it went.
+// fold, or a summary written again. Neither of them answers a message, so the
+// entry names none and what the conversation has been answered up to is
+// untouched by it. What the work learned about itself outlives the context it
+// was cut off in, so the entry is closed whichever way it went.
 func (e *Engine) inEntry(ctx context.Context, work func(*attempt) error) (*store.Entry, error) {
 	entry := &store.Entry{StartedAt: e.clock.Now()}
 	if err := e.store.StartEntry(ctx, entry); err != nil {

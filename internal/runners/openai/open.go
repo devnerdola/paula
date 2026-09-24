@@ -121,8 +121,8 @@ type Catalogue struct {
 	mu     sync.Mutex
 	models []api.Model
 	// byID is the listing by the id the API knows each model by, since looking
-	// one up is what every reply, caption, fold step and batch of embeddings
-	// does and reading the listing is not.
+	// one up is what every reply, caption and fold step does and reading the
+	// listing is not.
 	byID   map[string]api.Model
 	loaded bool
 }

@@ -5,7 +5,6 @@ id noted below.
 | File | Where it came from |
 |---|---|
 | `models.json` | `GET /models`, five entries |
-| `embedding_models.json` | `GET /embeddings/models`, three of the thirty-three entries; the models that write text are listed apart from these |
 | `endpoints.json` | `GET /models/deepseek/deepseek-v4-pro-0813/endpoints`, three endpoints |
 | `stream_reply.sse` | `POST /chat/completions`, streaming, `reasoning.enabled` |
 | `stream_tool_calls.sse` | `POST /chat/completions` with `deepseek/deepseek-v4-flash-0731`, streaming, `reasoning.enabled`, one tool offered; two calls came back |

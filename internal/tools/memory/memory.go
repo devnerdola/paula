@@ -48,12 +48,15 @@ type search struct {
 }
 
 func (t search) Definition() api.Definition {
+	// Memories are written in the card's language, and a word in another one
+	// finds none of them.
+	query, _ := json.Marshal("the words to look for, in " + t.h.Language)
 	return api.Definition{
 		Name: "search_memories",
 		Description: "Search what you remember of " + t.h.Names.User +
-			" and of yourself, by what it means. Each memory comes with its number.",
+			" and of yourself, by the words a memory holds. Each memory comes with its number.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"query":{"type":"string","description":"what to look for"}},` +
+			`"query":{"type":"string","description":` + string(query) + `}},` +
 			`"required":["query"]}`),
 	}
 }

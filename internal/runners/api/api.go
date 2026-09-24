@@ -34,14 +34,11 @@ func Gone(err error) bool {
 
 // Model is what a catalogue says about a model.
 type Model struct {
-	ID      string
-	Context int
-	Chat    bool
-	Vision  bool
-	Tools   bool
-	// Embeddings says the model turns text into a vector rather than into more
-	// text, which is all it does: a model that embeds writes nothing.
-	Embeddings        bool
+	ID                string
+	Context           int
+	Chat              bool
+	Vision            bool
+	Tools             bool
 	Reasoning         bool
 	Mandatory         bool
 	Efforts           []string
@@ -51,10 +48,9 @@ type Model struct {
 
 // Needs is what a model has to be able to do.
 type Needs struct {
-	Chat       bool
-	Vision     bool
-	Tools      bool
-	Embeddings bool
+	Chat   bool
+	Vision bool
+	Tools  bool
 	// Context is the prompt the model has to hold. Zero takes whatever it
 	// serves.
 	Context int
@@ -73,11 +69,10 @@ type Checked struct {
 // With returns what either set of needs asks for.
 func (n Needs) With(o Needs) Needs {
 	return Needs{
-		Chat:       n.Chat || o.Chat,
-		Vision:     n.Vision || o.Vision,
-		Tools:      n.Tools || o.Tools,
-		Embeddings: n.Embeddings || o.Embeddings,
-		Context:    max(n.Context, o.Context),
+		Chat:    n.Chat || o.Chat,
+		Vision:  n.Vision || o.Vision,
+		Tools:   n.Tools || o.Tools,
+		Context: max(n.Context, o.Context),
 	}
 }
 
@@ -201,27 +196,6 @@ type Result struct {
 	ToolCalls []ToolCall
 }
 
-// EmbedRequest asks a model to turn text into vectors, one for each string it
-// is given. Several go in one request, since an embedding is short and the
-// wait is the same whether one or a hundred are asked for.
-type EmbedRequest struct {
-	Model string
-	Input []string
-	// Settings are the model's, as a chat request carries them. What they say
-	// about where a request may be routed governs the memories too: they are
-	// the conversation, in the words a fold left it in.
-	Settings Settings
-	// Recorder keeps what was sent and what came back, as a chat request does.
-	Recorder Recorder
-}
-
-// EmbedResult is a vector for each string that was sent, in the order they
-// were sent in.
-type EmbedResult struct {
-	Vectors [][]float32
-	Usage   Usage
-}
-
 // Missing reports what is asked of the model that it cannot do.
 func (m *Model) Missing(n Needs) []error {
 	var errs []error
@@ -238,9 +212,6 @@ func (m *Model) Missing(n Needs) []error {
 	}
 	if n.Tools {
 		want(m.Tools, "tools")
-	}
-	if n.Embeddings {
-		want(m.Embeddings, "embeddings")
 	}
 	return errs
 }

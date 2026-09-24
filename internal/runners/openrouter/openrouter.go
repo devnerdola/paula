@@ -87,10 +87,6 @@ func (r *Runner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chun
 	return r.client.Chat(ctx, req, fn)
 }
 
-func (r *Runner) Embed(ctx context.Context, req api.EmbedRequest) (*api.EmbedResult, error) {
-	return r.client.Embed(ctx, req)
-}
-
 // Models is everything OpenRouter serves.
 func (r *Runner) Models(ctx context.Context) ([]api.Model, error) {
 	return r.serves.Models(ctx)
@@ -133,32 +129,14 @@ type listing struct {
 	} `json:"data"`
 }
 
-// read is the listing as the models Paula speaks of. The models that embed are
-// listed apart from the ones that write, so both listings are read and what
-// comes back is every model she may be configured with. Either of them failing
-// is the catalogue failing: an endpoint of an API that is down is the API being
-// down, and half a listing would read as models it does not serve, and be held
-// to for the rest of the run.
+// read is the listing as the models Paula speaks of.
 func (r *Runner) read(ctx context.Context) ([]api.Model, error) {
 	var chat listing
 	if err := r.client.Get(ctx, "/models", &chat); err != nil {
 		return nil, err
 	}
-	var embeds listing
-	if err := r.client.Get(ctx, "/embeddings/models", &embeds); err != nil {
-		return nil, err
-	}
 
-	out := make([]api.Model, 0, len(chat.Data)+len(embeds.Data))
-	for _, m := range embeds.Data {
-		// A model that embeds writes nothing, so what it embeds with is the
-		// whole of what the catalogue says about it.
-		out = append(out, api.Model{
-			ID:         m.ID,
-			Context:    contextOf(m.ContextLength),
-			Embeddings: slices.Contains(m.Architecture.OutputModalities, "embeddings"),
-		})
-	}
+	out := make([]api.Model, 0, len(chat.Data))
 	for _, m := range chat.Data {
 		model := api.Model{
 			ID:                m.ID,

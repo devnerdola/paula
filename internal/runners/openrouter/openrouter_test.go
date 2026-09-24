@@ -31,8 +31,7 @@ func read(t *testing.T, name string) []byte {
 	return b
 }
 
-// catalogue answers the listings from the captured ones: the models that
-// write, and the ones that embed, which the API lists apart from them.
+// catalogue answers the two listings from the captured ones.
 func catalogue(t *testing.T) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +39,6 @@ func catalogue(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v1/models":
 			w.Write(read(t, "models.json"))
-		case "/v1/embeddings/models":
-			w.Write(read(t, "embedding_models.json"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -130,72 +127,21 @@ func TestCatalogue(t *testing.T) {
 		t.Errorf("%s = %+v, want reasoning with no efforts", m.ID, m)
 	}
 
-	// A model that embeds, which the API lists apart from the ones that write.
-	// It writes nothing, and the catalogue says so.
-	m = model(t, r, "openai/text-embedding-3-small")
-	if !m.Embeddings || m.Chat || m.Vision || m.Tools || m.Reasoning {
-		t.Errorf("%s = %+v, want a model that only embeds", m.ID, m)
-	}
-	if m.Context != 8192 {
-		t.Errorf("%s has context %d, want the listing's", m.ID, m.Context)
-	}
-
 	models, err := r.Models(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The catalogue is both listings: the models she can talk to, and the ones
-	// she can embed with.
-	if len(models) != 8 {
-		t.Errorf("models = %d, want the five that write and the three that embed", len(models))
-	}
-}
-
-// Half a listing is not a catalogue: the models that embed are asked for apart
-// from the ones that write, and a run that took what came back would hold every
-// model of the listing it missed to be one the API does not serve.
-func TestAListingOfTheModelsThatEmbedThatCannotBeRead(t *testing.T) {
-	var asked int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path != "/v1/embeddings/models" {
-			w.Write(read(t, "models.json"))
-			return
-		}
-		asked++
-		if asked == 1 {
-			http.Error(w, `{"error":{"message":"upstream is away"}}`, http.StatusBadGateway)
-			return
-		}
-		w.Write(read(t, "embedding_models.json"))
-	}))
-	t.Cleanup(ts.Close)
-
-	r := runner(t, ts.URL, "retries: 0")
-	ctx := context.Background()
-	if _, err := r.Models(ctx); err == nil {
-		t.Fatal("the models that write were taken as the whole catalogue")
-	}
-	// Nothing of a read that failed is held onto, so the next one asks again
-	// and the catalogue is both listings.
-	models, err := r.Models(ctx)
-	if err != nil {
-		t.Fatalf("the catalogue was never read again: %v", err)
-	}
-	if len(models) != 8 {
-		t.Errorf("models = %d, want the five that write and the three that embed", len(models))
+	// The listing of the models she can talk to is the whole catalogue.
+	if len(models) != 5 {
+		t.Errorf("models = %d, want the five the listing holds", len(models))
 	}
 }
 
 func TestCatalogueIsReadOnce(t *testing.T) {
 	var reads int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/v1/embeddings/models" {
-			w.Write(read(t, "embedding_models.json"))
-			return
-		}
 		reads++
+		w.Header().Set("Content-Type", "application/json")
 		w.Write(read(t, "models.json"))
 	}))
 	t.Cleanup(ts.Close)
@@ -220,14 +166,10 @@ func TestEveryRunReadsTheListing(t *testing.T) {
 		reads int
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/v1/embeddings/models" {
-			w.Write(read(t, "embedding_models.json"))
-			return
-		}
 		mu.Lock()
 		reads++
 		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
 		w.Write(read(t, "models.json"))
 	}))
 	t.Cleanup(ts.Close)
@@ -438,8 +380,6 @@ func TestEndpointsCheck(t *testing.T) {
 		switch {
 		case r.URL.Path == "/v1/models":
 			w.Write(read(t, "models.json"))
-		case r.URL.Path == "/v1/embeddings/models":
-			w.Write(read(t, "embedding_models.json"))
 		case strings.HasSuffix(r.URL.Path, "/endpoints"):
 			w.Write(read(t, "endpoints.json"))
 		default:
@@ -654,16 +594,12 @@ func TestOpenRejectsUnknownKeys(t *testing.T) {
 func TestACatalogueThatFailedIsAskedAgain(t *testing.T) {
 	var asked int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/v1/embeddings/models" {
-			w.Write(read(t, "embedding_models.json"))
-			return
-		}
 		asked++
 		if asked == 1 {
 			http.Error(w, `{"error":{"message":"upstream is away"}}`, http.StatusBadGateway)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		w.Write(read(t, "models.json"))
 	}))
 	t.Cleanup(ts.Close)
@@ -774,8 +710,6 @@ func TestTheCatalogueIsReadOnceUnderManyReaders(t *testing.T) {
 		case "/v1/models":
 			reads.Add(1)
 			w.Write(read(t, "models.json"))
-		case "/v1/embeddings/models":
-			w.Write(read(t, "embedding_models.json"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -1038,60 +972,6 @@ func TestTheLastMessageThatStandsIsMarkedForTheCache(t *testing.T) {
 	}
 }
 
-// The memories are the conversation in the words a fold left it in, so where a
-// request may be routed, and what a host may keep of it, holds for them as it
-// does for a reply. What is about writing one does not.
-func TestEmbeddingCarriesTheRoutingAndNothingAboutWriting(t *testing.T) {
-	var body []byte
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ = io.ReadAll(r.Body)
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"object":"list","data":[{"index":0,"object":"embedding",`+
-			`"embedding":[1,0]}],"usage":{"prompt_tokens":4}}`)
-	}))
-	t.Cleanup(ts.Close)
-
-	r := runner(t, ts.URL, `
-provider:
-  sampling:
-    top_a: 0.2
-  service_tier: flex
-  routing:
-    only: [ionstream]
-    zdr: true
-    data_collection: deny
-`)
-	s := r.Settings()
-	s.Reasoning = api.ReasoningSettings{Mode: api.ReasoningOn, Effort: "high"}
-	_, err := r.Embed(context.Background(), api.EmbedRequest{
-		Model: "some/vectors", Input: []string{"Caio's sister lives in Lisbon."}, Settings: s,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var sent struct {
-		TopA      float64 `json:"top_a"`
-		Tier      string  `json:"service_tier"`
-		Reasoning any     `json:"reasoning"`
-		Provider  struct {
-			Only           []string `json:"only"`
-			ZDR            bool     `json:"zdr"`
-			DataCollection string   `json:"data_collection"`
-		} `json:"provider"`
-	}
-	if err := json.Unmarshal(body, &sent); err != nil {
-		t.Fatalf("the body was not read back: %v (%s)", err, body)
-	}
-	if !slices.Equal(sent.Provider.Only, []string{"ionstream"}) || !sent.Provider.ZDR ||
-		sent.Provider.DataCollection != "deny" {
-		t.Errorf("provider = %+v, want the routing the file sets", sent.Provider)
-	}
-	if sent.TopA != 0 || sent.Tier != "" || sent.Reasoning != nil {
-		t.Errorf("the request carries %+v, want nothing about writing a reply", sent)
-	}
-}
-
 // Nothing else means no effort and no summary.
 func TestReasoningOffCarriesNothingElse(t *testing.T) {
 	var body []byte
@@ -1155,10 +1035,6 @@ func TestRetryAfterAsADateAndAsZero(t *testing.T) {
 func TestAListingThatSaysLittle(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/v1/embeddings/models" {
-			io.WriteString(w, `{"data":[]}`)
-			return
-		}
 		io.WriteString(w, `{"data":[{"id":"quiet/model","architecture":`+
 			`{"input_modalities":["text"],"output_modalities":["text"]}}]}`)
 	}))

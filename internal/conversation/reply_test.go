@@ -28,10 +28,8 @@ type fakeRunner struct {
 	model    api.Model
 	requests []api.ChatRequest
 	chat     func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error)
-	// models answers the catalogue when a test wants one that cannot be read,
-	// and embed the vectors when a test is about what they come to.
+	// models answers the catalogue when a test wants one that cannot be read.
 	models func() ([]api.Model, error)
-	embed  func(api.EmbedRequest) (*api.EmbedResult, error)
 }
 
 func (f *fakeRunner) Name() string                 { return "fake" }
@@ -63,44 +61,6 @@ func (f *fakeRunner) Check(context.Context, api.Checked) []error {
 }
 
 func (f *fakeRunner) Settings() api.Settings { return api.Settings{} }
-
-// Embed answers with a vector for each string, and records the request the
-// way a runner does, so what embedded what is in the turn log.
-func (f *fakeRunner) Embed(ctx context.Context, req api.EmbedRequest) (*api.EmbedResult, error) {
-	f.mu.Lock()
-	embed := f.embed
-	f.mu.Unlock()
-
-	rec := api.Recording(req.Recorder)
-	body, err := json.Marshal(map[string]any{"model": req.Model, "input": req.Input})
-	if err != nil {
-		return nil, err
-	}
-	record := &api.Record{
-		Runner: f.Name(), Model: req.Model,
-		Method: "POST", URL: f.URL(), RequestBody: body, StartedAt: time.Now(),
-	}
-	if err := rec.StartRequest(ctx, record); err != nil {
-		return nil, err
-	}
-
-	out := &api.EmbedResult{Vectors: make([][]float32, len(req.Input))}
-	for i := range req.Input {
-		out.Vectors[i] = []float32{1, 0, 0}
-	}
-	if embed != nil {
-		out, err = embed(req)
-	}
-	record.EndedAt = time.Now()
-	record.Status = 200
-	if err != nil {
-		record.Error = err.Error()
-	}
-	if rerr := rec.EndRequest(ctx, record); rerr != nil && err == nil {
-		return nil, rerr
-	}
-	return out, err
-}
 
 func (f *fakeRunner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
 	f.mu.Lock()
@@ -189,26 +149,13 @@ func says(text string) func(context.Context, api.ChatRequest, func(api.Chunk) er
 	}
 }
 
-// setup is a conversation's models: one that chats, and one that embeds, the
-// way a run has both since serve asks for them before it opens.
 func setup(f *fakeRunner) *runners.Setup {
 	m := &runners.Configured{Name: "chat", ID: f.model.ID, Runner: f}
-	v := &fakeRunner{model: embedModel()}
-	vectors := &runners.Configured{Name: "vectors", ID: v.model.ID, Runner: v}
 	return &runners.Setup{
-		Runners: []runners.Runner{f, v},
-		Models:  []*runners.Configured{m, vectors},
-		Defaults: map[config.Role]*runners.Configured{
-			config.RoleChat:  m,
-			config.RoleEmbed: vectors,
-		},
+		Runners:  []runners.Runner{f},
+		Models:   []*runners.Configured{m},
+		Defaults: map[config.Role]*runners.Configured{config.RoleChat: m},
 	}
-}
-
-// embedModel is a model that embeds and writes nothing, as a catalogue says of
-// one.
-func embedModel() api.Model {
-	return api.Model{ID: "some/vectors", Context: 8192, Embeddings: true}
 }
 
 func fullCard() *persona.Card {

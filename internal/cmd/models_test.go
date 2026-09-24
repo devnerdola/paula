@@ -48,16 +48,6 @@ func openrouterCatalogueWhile(t *testing.T, listing *atomic.Bool) *httptest.Serv
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(read("models.json"))
-		case "/v1/embeddings/models":
-			// The models that embed are listed apart from the ones that write,
-			// and a catalogue is both.
-			if !listing.Load() {
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(`{"error":{"message":"listing is down","code":500}}`))
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(read("embedding_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (runners/openrouter/testdata/SOURCES.md). Health
@@ -120,22 +110,9 @@ default_models:
   chat: talk
   vision: look
 `)
-	// The file names nothing to embed with, which is a setup serving cannot be
-	// done under: it is said here rather than at the first serve.
 	code, out, errOut := exec(t, "-config", path, "models")
-	if code != 1 {
+	if code != 0 {
 		t.Fatalf("code = %d, stdout %s, stderr %s", code, out, errOut)
-	}
-	if !strings.Contains(errOut, "default_models.embed: no model is set") {
-		t.Errorf("stderr = %q, want the role nothing is named for", errOut)
-	}
-	if row := line(t, out, "embed "); !strings.Contains(row, "no model is set") {
-		t.Errorf("the embed role = %s, want the row to say it has none", row)
-	}
-	// Seeing a picture is a choice, so a role with no model is only one to
-	// answer for when serving takes one.
-	if got := field(t, line(t, out, "embed "), 1); got != "-" {
-		t.Errorf("the embed role names the model %q", got)
 	}
 
 	for _, header := range [][]string{
@@ -240,12 +217,8 @@ models:
   talk:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
-  vectors:
-    runner: openrouter
-    id: openai/text-embedding-3-small
 default_models:
   chat: talk
-  embed: vectors
 `)
 	if code, out, errOut := exec(t, "-config", path, "models"); code != 0 {
 		t.Fatalf("code = %d, stdout %s, stderr %s", code, out, errOut)
@@ -291,9 +264,7 @@ func TestModelsAvailable(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
 	ts := openrouterCatalogue(t)
 	path := configFile(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+
-		"/v1\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\n"+
-		"  vectors:\n    runner: openrouter\n    id: openai/text-embedding-3-small\n"+
-		"default_models:\n  chat: talk\n  embed: vectors\n")
+		"/v1\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\ndefault_models:\n  chat: talk\n")
 
 	_, plain, _ := exec(t, "-config", path, "models")
 	code, out, _ := exec(t, "-config", path, "models", "-available")
@@ -365,12 +336,8 @@ models:
   other:
     runner: openrouter
     id: ~deepseek/deepseek-flash-latest
-  vectors:
-    runner: openrouter
-    id: openai/text-embedding-3-small
 default_models:
   chat: talk
-  embed: vectors
 `)
 
 	// With no database, no choice is shown and none is invented.
@@ -389,49 +356,6 @@ default_models:
 
 	if got := field(t, line(t, output(t, path), "chat "), 2); got != "other" {
 		t.Errorf("the chat role shows the choice %q, want the one that was saved", got)
-	}
-}
-
-// A conversation given a model of its own for a role is served by it, so the
-// file naming none for that role is nothing the command answers for.
-func TestModelsTakesTheChoiceForARoleTheFileNamesNoModelFor(t *testing.T) {
-	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
-	ts := openrouterCatalogue(t)
-	dir := t.TempDir()
-	data := filepath.Join(dir, "data")
-	path := configFile(t, `
-persona: `+card(t, "ada.yaml")+`
-data_dir: `+data+`
-runners:
-  openrouter:
-    type: openrouter
-    url: `+ts.URL+`/v1
-models:
-  talk:
-    runner: openrouter
-    id: deepseek/deepseek-v4-pro-0813
-  vectors:
-    runner: openrouter
-    id: openai/text-embedding-3-small
-default_models:
-  chat: talk
-`)
-
-	s, err := store.Open(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Set(context.Background(), store.KeyModel("embed"), "vectors"); err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-
-	code, out, errOut := exec(t, "-config", path, "models")
-	if code != 0 {
-		t.Fatalf("code = %d, stdout %s, stderr %s", code, out, errOut)
-	}
-	if got := field(t, line(t, out, "embed "), 2); got != "vectors" {
-		t.Errorf("the embed role shows the choice %q, want the one that was saved", got)
 	}
 }
 
@@ -458,12 +382,8 @@ models:
   talk:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
-  vectors:
-    runner: openrouter
-    id: openai/text-embedding-3-small
 default_models:
   chat: talk
-  embed: vectors
 `)
 
 	code, out, errOut := exec(t, "-config", path, "models")

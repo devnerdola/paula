@@ -104,16 +104,12 @@ type env struct {
 
 func (v env) Date(t time.Time) string { return dateText(v.e.clock.Now().Location(), t) }
 
-// Memories searches the memories as Engine.Memories does, and keeps the
-// request that embeds the query under the reply that asked, as a request of
-// that turn.
 func (v env) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
-	return v.e.memories(ctx, query, limit, v.e.recorder(v.a, store.PurposeMemorySearch))
+	return v.e.Memories(ctx, query, limit)
 }
 
 // Remember keeps a memory as said in the newest message the reply answers,
-// which is what she was told it in. It is embedded with the rest once the
-// reply is done.
+// which is what she was told it in.
 func (v env) Remember(ctx context.Context, content string, replaces []store.MemoryID) (*store.Memory, error) {
 	m := &store.Memory{Content: content, Source: v.a.entry.UptoMessageID, Replaces: replaces}
 	if err := v.e.store.Remember(ctx, m); err != nil {

@@ -287,11 +287,8 @@ func writePrompt(w io.Writer, r store.Request) {
 		fmt.Fprintln(w, pruned)
 		return
 	}
-	// What an embedding was asked to turn into vectors is not a prompt, and is
-	// shown as it was sent. What it is for says so; the shape of the body only
-	// says whether it could be read.
 	p, ok := api.ReadPrompt(r.RequestBody)
-	if !ok || r.Purpose == store.PurposeEmbedding {
+	if !ok {
 		if len(r.RequestBody) > 0 {
 			fmt.Fprintf(w, "%s\n", r.RequestBody)
 		}

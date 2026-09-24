@@ -197,6 +197,21 @@ func TestAToolIsDescribedByTheCard(t *testing.T) {
 			t.Errorf("%s is described as %q, without who it is about", name, d)
 		}
 	}
+	// A search looks for words, and the memories hold them in that language.
+	var params struct {
+		Properties struct {
+			Query struct {
+				Description string `json:"description"`
+			} `json:"query"`
+		} `json:"properties"`
+	}
+	raw := tool(t, "search_memories").Definition().Parameters
+	if err := json.Unmarshal(raw, &params); err != nil {
+		t.Fatalf("the parameters are %s: %v", raw, err)
+	}
+	if !strings.Contains(params.Properties.Query.Description, "Portuguese") {
+		t.Errorf("the query is described as %q, without the language", params.Properties.Query.Description)
+	}
 }
 
 // section is the memory section of a configuration file, written as given.

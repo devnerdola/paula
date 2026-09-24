@@ -171,25 +171,13 @@ type Engine struct {
 	// it, which never changes again. Every prompt carries the pictures of the
 	// messages it holds, and a fold weighs the same ones a second time.
 	captions sync.Map
-	// widths are how wide each model's vectors came back, which only an answer
-	// says: the query of a search is an answer as much as a batch is. A model
-	// answering at another width than the memories were written at is another
-	// model as far as a vector goes, and what it wrote before is waiting to be
-	// written again.
-	widths sync.Map
-	// refused are the memories the host would not turn into vectors, under the
-	// model it was asked of, which the run stops asking about: what it says of
-	// them today it says again, and the memories behind them would wait on the
-	// answer. A model given the role since is another question, and the next
-	// run asks the whole of it again.
-	refused sync.Map
 
 	posts     chan postRequest
 	stops     chan stopRequest
 	waits     chan waitRequest
 	standings chan standingRequest
 	done      chan doneRequest
-	worked    chan worked
+	worked    chan error
 
 	closing sync.Once
 	closed  chan struct{}
@@ -281,7 +269,7 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		waits:     make(chan waitRequest),
 		standings: make(chan standingRequest),
 		done:      make(chan doneRequest),
-		worked:    make(chan worked),
+		worked:    make(chan error),
 		closed:    make(chan struct{}),
 		ended:     make(chan struct{}),
 	}
@@ -462,13 +450,9 @@ type loop struct {
 	pending  bool
 	waiters  []chan Seq
 
-	// keeping is the work that holds the prompt to the context, and embedding
-	// the work that turns what a fold wrote into vectors. They are asked of
-	// different models, so each runs beside the loop on its own and each waits
-	// its own wait after a failure of its own: a host away for one says nothing
-	// about the other, and one that is slow holds up only itself.
-	keeping   work
-	embedding work
+	// keeping is the work that holds the prompt to the context. It runs beside
+	// the loop, and waits after a failure before it is tried again.
+	keeping work
 }
 
 // work is one piece of background work: whether it is out, how to cut it short,
@@ -516,13 +500,9 @@ func (l *loop) run() {
 				l.finish(ctx, req)
 			}
 			// Work behind a reply is cut short by the run ending, and what it
-			// had written stands: the entry each piece left says how far it got.
-			for _, w := range []*work{&l.keeping, &l.embedding} {
-				if w.out {
-					w.cancel()
-				}
-			}
-			for l.keeping.out || l.embedding.out {
+			// had written stands: the entry it left says how far it got.
+			if l.keeping.out {
+				l.keeping.cancel()
 				l.take(<-e.worked)
 			}
 			l.pending = false
@@ -555,27 +535,18 @@ func (l *loop) run() {
 		case req := <-e.done:
 			l.finish(ctx, req)
 
-		case r := <-e.worked:
-			l.take(r)
-			if !r.embedding && l.embedding.due(e.clock.Now()) {
-				// What a fold wrote has no vector until this runs. It is
-				// looked at as soon as the fold is done rather than left to
-				// the next reply, which may be a long time coming.
-				l.embed(ctx)
-			}
+		case err := <-e.worked:
+			l.take(err)
 		}
 	}
 }
 
-// take marks a piece of work as no longer out. What it failed at sets how long
-// the next try of that piece waits, and says nothing about the other.
-func (l *loop) take(r worked) {
-	w, what := &l.keeping, "keeping the conversation inside the context"
-	if r.embedding {
-		w, what = &l.embedding, "embedding the memories"
-	}
+// take marks the work as no longer out. What it failed at sets how long the
+// next try waits.
+func (l *loop) take(err error) {
+	w := &l.keeping
 	w.out, w.cancel = false, nil
-	w.wait, w.after = l.waitAfter(w.wait, r.err, what)
+	w.wait, w.after = l.waitAfter(w.wait, err, "keeping the conversation inside the context")
 }
 
 // waitAfter is how long the next try of one piece of work waits, and the time
@@ -589,25 +560,14 @@ func (l *loop) waitAfter(was time.Duration, err error, what string) (time.Durati
 	return wait, l.e.clock.Now().Add(wait)
 }
 
-// behind starts the work that runs behind a reply. Each piece runs beside the
-// loop on its own, so the conversation answers while they work and neither
-// waits for the other.
+// behind starts the work that runs behind a reply. It runs beside the loop, so
+// the conversation answers while it works.
 func (l *loop) behind(ctx context.Context, a *attempt) {
-	now := l.e.clock.Now()
 	// Keeping the prompt inside the context is due when the prompt that just
 	// went out says so: the messages took more than their share, or the summary
 	// took more than its room.
-	if (a.foldDue || a.compactDue) && l.keeping.due(now) {
+	if (a.foldDue || a.compactDue) && l.keeping.due(l.e.clock.Now()) {
 		l.keep(ctx, a.foldDue)
-	}
-	// Embedding is due whenever it is not already running: what is waiting for
-	// a vector is a question for the store, which answers it in one indexed
-	// query, rather than something the loop keeps track of. A fold of this run
-	// has just written memories, a run before this one may have left some, and
-	// a model given the role since leaves every one of them without a vector of
-	// the model serving now.
-	if l.embedding.due(now) {
-		l.embed(ctx)
 	}
 }
 
@@ -629,18 +589,7 @@ func (l *loop) keep(ctx context.Context, fold bool) {
 		if err == nil {
 			err = e.compact(ctx)
 		}
-		e.worked <- worked{err: err}
-	}()
-}
-
-// embed starts the work that turns the memories without a vector into vectors.
-func (l *loop) embed(ctx context.Context) {
-	e := l.e
-	ctx = l.embedding.start(ctx)
-	cancel := l.embedding.cancel
-	go func() {
-		defer cancel()
-		e.worked <- worked{embedding: true, err: e.embed(ctx)}
+		e.worked <- err
 	}()
 }
 

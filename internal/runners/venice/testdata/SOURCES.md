@@ -4,7 +4,6 @@ whole entries and drops the rest; no field is changed.
 | File | Where it came from |
 |---|---|
 | `models.json` | `GET /models?type=all`, five entries |
-| `embedding.json` | `POST /embeddings` with `text-embedding-bge-m3` and two strings, whole |
 | `stream_reply.sse` | `POST /chat/completions`, streaming, `reasoning.enabled` |
 | `stream_tool_calls.sse` | `POST /chat/completions` with `deepseek-v4-flash-0731`, streaming, `reasoning.enabled`, one tool offered; two calls came back |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 404 |

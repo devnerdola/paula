@@ -24,10 +24,6 @@ const (
 // defaultIdleTimeout is how long a request may go without a byte.
 const defaultIdleTimeout = config.Duration(2 * time.Minute)
 
-// embedding is the type the catalogue gives a model that turns text into a
-// vector rather than into more text.
-const embedding = "embedding"
-
 type Runner struct {
 	name     string
 	client   *openai.Client
@@ -95,10 +91,6 @@ func (r *Runner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chun
 	return r.client.Chat(ctx, req, fn)
 }
 
-func (r *Runner) Embed(ctx context.Context, req api.EmbedRequest) (*api.EmbedResult, error) {
-	return r.client.Embed(ctx, req)
-}
-
 // Models is everything Venice serves Paula.
 func (r *Runner) Models(ctx context.Context) ([]api.Model, error) {
 	return r.serves.Models(ctx)
@@ -122,8 +114,6 @@ type listing struct {
 		Type      string `json:"type"`
 		ModelSpec struct {
 			AvailableContextTokens int `json:"availableContextTokens"`
-			MaxInputTokens         int `json:"maxInputTokens"`
-			EmbeddingDimensions    int `json:"embeddingDimensions"`
 			Capabilities           struct {
 				SupportsVision          bool     `json:"supportsVision"`
 				SupportsFunctionCalling bool     `json:"supportsFunctionCalling"`
@@ -145,19 +135,9 @@ func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 
 	var out []api.Model
 	for _, m := range list.Data {
-		// The models that write text, and the ones that embed it. Nothing
-		// Paula does asks anything of the rest.
-		if m.Type != "text" && m.Type != embedding {
-			continue
-		}
-		if m.Type == embedding {
-			// A model that embeds writes nothing, so it is the whole of what
-			// the catalogue says about it.
-			out = append(out, api.Model{
-				ID:         m.ID,
-				Context:    m.ModelSpec.MaxInputTokens,
-				Embeddings: true,
-			})
+		// Only the models that write text: nothing Paula does asks anything of
+		// the rest.
+		if m.Type != "text" {
 			continue
 		}
 		c := m.ModelSpec.Capabilities

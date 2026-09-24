@@ -11,8 +11,7 @@ import (
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/conversation"
-	"nerdola.dev/x/paula/internal/runners"
-	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/persona"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -85,10 +84,9 @@ func memorySearchCommand() *command {
 				if err != nil {
 					return err
 				}
-				// Memories are searched by what they mean, so the words to
-				// look for are turned into a vector by the model that turned
-				// the memories into theirs.
-				set, err := runners.Configure(cfg, runners.Host{Log: g.logger(), Secrets: g.secrets})
+				// The card names the two of them, which every memory names
+				// and a search looks past.
+				card, err := persona.Load(cfg.Persona)
 				if err != nil {
 					return err
 				}
@@ -98,38 +96,10 @@ func memorySearchCommand() *command {
 				}
 				defer s.Close()
 
-				ctx := context.Background()
-				// The role is served by the model the conversation was given
-				// for it, which is the one that embedded the memories: a vector
-				// of another model measures nothing against them.
-				m, err := conversation.RoleModel(ctx, s, set, config.RoleEmbed)
+				found, err := conversation.SearchMemories(context.Background(), s, card,
+					strings.Join(args, " "), *n)
 				if err != nil {
 					return err
-				}
-				if m == nil {
-					return fmt.Errorf("%s: default_models.embed: no model is set", cfg.Path)
-				}
-				out, err := m.Runner.Embed(ctx, api.EmbedRequest{
-					Model:    m.ID,
-					Input:    []string{strings.Join(args, " ")},
-					Settings: m.Settings,
-				})
-				if err != nil {
-					return err
-				}
-				if len(out.Vectors) != 1 {
-					return fmt.Errorf("the query was embedded as %d vectors", len(out.Vectors))
-				}
-				by := store.Embedded{Runner: m.Runner.Name(), Model: m.ID}
-				found, elsewhere, err := s.NearestMemories(ctx, by, out.Vectors[0], *n)
-				if err != nil {
-					return err
-				}
-				if elsewhere > 0 {
-					// The model answers at another width than it did when
-					// those were written, so they are another model's as far
-					// as a vector goes. A serve writes them again.
-					fmt.Fprintf(g.stderr, "%d memories are embedded at another width and are not searched\n", elsewhere)
 				}
 				return listMemories(g.stdout, found)
 			}

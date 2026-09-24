@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -92,10 +93,34 @@ func (s *Store) LatestMemories(ctx context.Context, limit int) ([]Memory, error)
 	return scanMemories(rows)
 }
 
+// SearchMemories are the memories that still stand and hold any of the words,
+// the ones the words say most about first, at most limit of them. A word finds
+// its other forms, as "sisters" finds a memory of a sister, and a word most
+// memories hold says little of which one is meant.
+func (s *Store) SearchMemories(ctx context.Context, words []string, limit int) ([]Memory, error) {
+	if len(words) == 0 {
+		return nil, nil
+	}
+	// Each word is looked for as a word, whatever it spells: AND or NOT in a
+	// query are what was asked about, not how.
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		quoted[i] = `"` + strings.ReplaceAll(w, `"`, `""`) + `"`
+	}
+	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
+		  JOIN memory_words ON memory_words.rowid = memories.id
+		 WHERE memory_words MATCH ? AND replaced_by IS NULL
+		 ORDER BY bm25(memory_words) LIMIT ?`, strings.Join(quoted, " OR "), limit)
+	if err != nil {
+		return nil, err
+	}
+	return scanMemories(rows)
+}
+
 // Forget deletes a memory and the ones it took the place of, which stand for
-// nothing once what replaced them is gone, and the vectors of all of them with
-// it. The summary and the messages stay: forgetting is about what she carries,
-// not about what was said. It returns what went, oldest first.
+// nothing once what replaced them is gone. The summary and the messages stay:
+// forgetting is about what she carries, not about what was said. It returns
+// what went, oldest first.
 func (s *Store) Forget(ctx context.Context, id MemoryID) ([]Memory, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -260,13 +285,11 @@ func scanMemories(rows *sql.Rows) ([]Memory, error) {
 	return out, rows.Err()
 }
 
-// scanMemory reads a memory, and after it whatever else the query asked for.
-func scanMemory(row scanner, extra ...any) (*Memory, error) {
+func scanMemory(row scanner) (*Memory, error) {
 	var out Memory
 	var source, replaced sql.NullInt64
 	var said int64
-	into := append([]any{&out.ID, &out.Content, &source, &replaced, &said}, extra...)
-	if err := row.Scan(into...); err != nil {
+	if err := row.Scan(&out.ID, &out.Content, &source, &replaced, &said); err != nil {
 		return nil, err
 	}
 	out.Source = MessageID(id(source))

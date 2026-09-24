@@ -47,14 +47,6 @@ func (s *saying) Model(_ context.Context, id string) (*runnersapi.Model, error) 
 func (s *saying) Check(context.Context, runnersapi.Checked) []error { return nil }
 func (s *saying) Settings() runnersapi.Settings                     { return runnersapi.Settings{} }
 
-func (s *saying) Embed(_ context.Context, req runnersapi.EmbedRequest) (*runnersapi.EmbedResult, error) {
-	out := &runnersapi.EmbedResult{Vectors: make([][]float32, len(req.Input))}
-	for i := range req.Input {
-		out.Vectors[i] = []float32{1, 0, 0}
-	}
-	return out, nil
-}
-
 func (s *saying) Chat(ctx context.Context, _ runnersapi.ChatRequest, fn func(runnersapi.Chunk) error) (*runnersapi.Result, error) {
 	s.mu.Lock()
 	hold, begun, text := s.hold, s.begun, s.text

@@ -78,21 +78,6 @@ func serve(g *globals) error {
 	}
 	defer s.Close()
 
-	// Memories are searched by what they mean, which takes a model that turns
-	// text into a vector. The conversation is what searches them, so it is what
-	// asks for one: every other command reads a conversation without searching
-	// it, and runs on a file that names none.
-	//
-	// It is asked of the conversation rather than of the file, since a model it
-	// was given serves the role wherever the file's default stands.
-	embeds, err := conversation.RoleModel(g.ctx, s, set, config.RoleEmbed)
-	if err != nil {
-		return err
-	}
-	if embeds == nil {
-		return fmt.Errorf("%s: default_models.embed: no model is set", cfg.Path)
-	}
-
 	// One context covers the conversation and every frontend, so they end
 	// together.
 	ctx, stop := signal.NotifyContext(g.ctx, os.Interrupt, syscall.SIGTERM)

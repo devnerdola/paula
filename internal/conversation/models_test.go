@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
 )
 
@@ -94,40 +95,45 @@ func TestAModelChosenForARoleIsKept(t *testing.T) {
 	}
 }
 
-// What serves a role is one question, asked the same way by the run that
-// answers, by the command that searches the memories, and by the check that
-// holds a run to what it needs. A model the conversation was given serves the
-// role wherever the file's default stands, and where the file names none.
+// A model the conversation was given serves the role wherever the file's
+// default stands, and where the file names none.
 func TestWhatServesARoleIsWhatTheConversationWasGiven(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hey you")}
-	set := sized(f, 2000)
-	other := alsoEmbeds(set, "others", "some/others")
+	set := withVision(f, &fakeRunner{model: visionModel()})
+	// Another model that sees, which the role can be given.
+	also := &fakeRunner{model: api.Model{ID: "some/others", Context: 100000, Chat: true, Vision: true}}
+	other := &runners.Configured{Name: "others", ID: also.model.ID, Runner: also}
+	set.Runners = append(set.Runners, also)
+	set.Models = append(set.Models, other)
 	r := openReplyWith(t, f, set)
 	ctx := context.Background()
 
-	m, err := RoleModel(ctx, r.store, set, config.RoleEmbed)
+	m, err := RoleModel(ctx, r.store, set, config.RoleVision)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m == nil || m.Name != set.Defaults[config.RoleEmbed].Name {
-		t.Fatalf("embed is served by %+v, want the file's default", m)
+	if m == nil || m.Name != set.Defaults[config.RoleVision].Name {
+		t.Fatalf("vision is served by %+v, want the file's default", m)
 	}
 
-	if err := r.SetModel(ctx, config.RoleEmbed, other.Name); err != nil {
+	if err := r.SetModel(ctx, config.RoleVision, other.Name); err != nil {
 		t.Fatal(err)
 	}
-	if m, err := RoleModel(ctx, r.store, set, config.RoleEmbed); err != nil || m == nil || m.Name != other.Name {
-		t.Fatalf("embed is served by %+v, %v, want the model it was given", m, err)
+	if m, err := RoleModel(ctx, r.store, set, config.RoleVision); err != nil || m == nil || m.Name != other.Name {
+		t.Fatalf("vision is served by %+v, %v, want the model it was given", m, err)
 	}
 
 	// The file naming no default for the role leaves what it was given, which
 	// is what serves it.
-	delete(set.Defaults, config.RoleEmbed)
-	if m, err := RoleModel(ctx, r.store, set, config.RoleEmbed); err != nil || m == nil || m.Name != other.Name {
-		t.Fatalf("embed is served by %+v, %v, want the model it was given", m, err)
+	delete(set.Defaults, config.RoleVision)
+	if m, err := RoleModel(ctx, r.store, set, config.RoleVision); err != nil || m == nil || m.Name != other.Name {
+		t.Fatalf("vision is served by %+v, %v, want the model it was given", m, err)
 	}
 	// A role nothing serves is answered as nothing, for whoever asked to say
 	// what it means.
+	if err := r.ResetModels(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if m, err := RoleModel(ctx, r.store, set, config.RoleVision); err != nil || m != nil {
 		t.Errorf("vision is served by %+v, %v, want nothing", m, err)
 	}

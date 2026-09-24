@@ -30,11 +30,6 @@ type Runner interface {
 
 	// Chat sends a request and passes every chunk of the answer to fn.
 	Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error)
-
-	// Embed turns text into vectors. A runner whose models none of them embed
-	// is never asked: what may serve the role is held against the catalogue
-	// before a run starts.
-	Embed(ctx context.Context, req api.EmbedRequest) (*api.EmbedResult, error)
 }
 
 // Host is what the program around a runner gives it.

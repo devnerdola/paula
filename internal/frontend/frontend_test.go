@@ -1000,7 +1000,7 @@ func TestWhatCanBePickedOfTheModelsMenu(t *testing.T) {
 	tk := newTalk()
 	tk.models = conversation.Models{Roles: []conversation.RoleModels{
 		{Role: config.RoleChat, Current: "fast", Default: "fast", Options: []string{"fast", "pro"}},
-		{Role: config.RoleEmbed, Current: "vectors", Default: "vectors", Options: []string{"vectors"}},
+		{Role: config.RoleVision, Current: "eyes", Default: "eyes", Options: []string{"eyes"}},
 	}}
 	run(t, s, tk)
 

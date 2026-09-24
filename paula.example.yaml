@@ -29,14 +29,9 @@ models:
     runner: venice
     id: deepseek-v4-1-flash
 
-  vectors:
-    runner: venice
-    id: text-embedding-bge-m3
-
 default_models:
   chat: pro
   vision: flash
-  embed: vectors
 
 frontends:
   repl:

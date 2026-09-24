@@ -30,21 +30,15 @@ models:
   pro:
     runner: openrouter
     id: deepseek/deepseek-v4-pro-0813
-  vectors:
-    runner: openrouter
-    id: openai/text-embedding-3-small
 
 default_models:
   chat: pro
-  embed: vectors
 
 frontends:
   repl:
 ```
 
-Two models is the smallest she runs on: one writes her replies, and one turns
-what she remembers into vectors, so she can find a memory by what it means. A
-model that embeds writes nothing, so it is always a second model.
+One model is the smallest she runs on: the one that writes her replies.
 
 `paula.example.yaml` is a fuller one, with two runners and a model for each.
 
@@ -119,8 +113,8 @@ thrown away; the next `serve` answers the message you were waiting on.
 ## Looking at what happened
 
 `paula turns` lists what she did, newest first, with the tokens and the cost of
-each: a reply, a fold of the oldest of the conversation, a summary written
-again, or memories turned into vectors.
+each: a reply, a fold of the oldest of the conversation, or a summary written
+again.
 
 ```
 ./paula turns
@@ -142,20 +136,17 @@ answered, which is what you want when an API behaves strangely.
 ```
 ./paula memory list                    # the newest, with the number each is forgotten by
 ./paula memory list -n 50              # as many as you ask for
-./paula memory search where does Ana live   # the ones a question is about
-./paula memory search -n 3 Ana         # the closest few of them
+./paula memory search where does Ana live   # the ones that hold its words
+./paula memory search -n 3 Ana         # the few it says most about
 ./paula memory forget 7                # takes it away, and the ones it replaced
 ```
 
-Searching asks the `embed` model what the words mean, so it needs one in the
-file; listing and forgetting ask nothing of a model. Forgetting is about what
+None of them asks anything of a model. A search finds memories by their words,
+as hers does, which How she works describes. Forgetting is about what
 she carries: the messages a memory was read from, and the summary, stay where
 they are.
 
-`paula models` prints what each runner says about the models you configured. A
-role serving takes a model for is listed whether or not your file names one, so
-a setup `serve` would refuse says so here first — and a role you gave a model
-to with `/model` is served by it, whatever the file leaves out.
+`paula models` prints what each runner says about the models you configured.
 `paula models -available` lists everything the runners offer, which is how you
 find the id of a model to configure. Both read every runner's listing from its
 API. Nothing of a listing is kept between runs: both APIs answer it `no-store`.
@@ -182,7 +173,7 @@ share settings.
 | `data_dir` | `data`, beside the file | the database and the images, created with mode 0700 |
 | `runners` | — | the APIs she talks through; at least one |
 | `models` | — | the models she may use, in the order you write them |
-| `default_models` | — | the model for each role; `chat` and `embed` are required |
+| `default_models` | — | the model for each role; `chat` is required |
 | `engine` | see below | how she replies |
 | `frontends` | none | how you reach her |
 | `tools` | none | what she can do in the middle of a reply |
@@ -218,8 +209,7 @@ A request whose connection drops before any status arrives is reported, not
 sent again: nothing says the host did not take it.
 
 **OpenRouter** serves `https://openrouter.ai/api/v1`. Paula reads its catalogue
-from `GET /models` and `GET /embeddings/models`, which are listed apart, and
-checks the key with `GET /key`. She sends `408`, `429`,
+from `GET /models` and checks the key with `GET /key`. She sends `408`, `429`,
 `502` and `503` again after the wait `Retry-After` asks for, at most `retries`
 times, and gives up on a wait longer than two minutes.
 
@@ -339,18 +329,9 @@ block of its runner, and are listed with each runner above.
 |---|---|---|
 | `chat` | chats and accepts tools | yes |
 | `vision` | sees images | no |
-| `embed` | turns text into a vector | to serve, and to search |
 
 Without a `vision` model, pictures reach the chat model only if that model can
 see them itself.
-
-An `embed` model is what memories are searched by. A model that embeds writes
-nothing, so it is a model of its own: OpenRouter lists them apart from the rest
-and Paula reads both listings, and Venice marks them in the one it serves.
-`paula serve` asks for one before it starts, since the conversation embeds every
-memory she has; so does `paula memory search`, which asks it what the words
-you are looking for mean. Every other command reads the memories without
-searching them, and runs on a file that names none.
 
 A reply is offered the tools the file names, so the chat role asks for a model
 that takes them.
@@ -366,7 +347,7 @@ that takes them.
 | `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
 | `image_messages` | `2` | how many of the latest messages that carry a picture send it as a picture |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
-| `log_keep` | `500` | how many entries keep the bodies of their requests; a fold and a batch of embeddings are entries of their own |
+| `log_keep` | `500` | how many entries keep the bodies of their requests; a fold is an entry of its own |
 | `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; the round after them is asked for an answer with no call in it |
 
 ### Frontends
@@ -459,7 +440,7 @@ as `searching memories for Ana`.
 
 | Tool | What she does with it |
 |---|---|
-| `search_memories` | looks for memories by what they mean, past the newest ones her prompt carries; each comes with its number |
+| `search_memories` | looks for memories by the words they hold, in the card's language, past the newest ones her prompt carries; each comes with its number |
 | `remember` | keeps a lasting fact about you or about her as soon as it is said, rather than when a fold reaches it, in place of the memories she found it updates |
 | `forget_memory` | takes a memory away by its number, and the ones it replaced, when you ask her to |
 
@@ -473,9 +454,9 @@ tools:
     results: 10
 ```
 
-A memory she keeps is dated by the message she was answering, and is turned
-into a vector with the rest once the reply is done. The memories it replaces
-must still stand: a number that names none keeps nothing, and she is told so.
+A memory she keeps is dated by the message she was answering, and a search
+finds it at once. The memories it replaces must still stand: a number that
+names none keeps nothing, and she is told so.
 
 ## The character card
 
@@ -571,27 +552,17 @@ card's size and the share it filled. It still runs — the prompt holds itself
 to the context by leaving the oldest exchanges out — but raise `system_ratio`,
 give the model a larger `context`, or write a shorter card.
 
-**Memories are found by what they mean.** The `embed` model turns each of them
-into a vector, a hundred at a time, in a piece of background work of its own —
-so a question finds the memory it is about without sharing a word with it. A
-vector is kept under the model that made it, and its width is part of that:
-change the model, or use one that answers at another width than it used to, and
-they are made again rather than measured against a space they were never in.
-Until they have been, they are left out of a search, which says how many. How
-wide a model answers is something only an answer says, so a search is what
-tells a run the width has moved — and what she remembers is written again
-behind it.
+**Memories are found by their words.** SQLite keeps an index of the words each
+memory holds, and a search returns the ones that hold any word of the question,
+those the words say most about first: a word few memories hold says more than
+one most of them do. A word finds its other forms, so "sisters" finds a memory
+about a sister, but not another word for the same thing: "bike" does not find
+"bicycle". A question about nothing she remembers finds nothing.
 
-A hundred at a time is how many are asked for, not what has to go together. A
-host that will not take one of them — too long, or something it filters — is
-asked in halves until that memory is alone, and that one is left aside for the
-run rather than left in front of every memory behind it. The next run asks
-again.
-
-The two run beside each other, each waiting its own wait after a failure of its
-own. A host that is away for the model that embeds, or merely slow with a long
-backlog, does not hold up the fold, which is what keeps the prompt inside the
-context; and a fold that fails does not stop the memories from being embedded.
+Every memory names who it is about, you or her, so a name finds all of them. A
+search looks past the two names, and past the single letters an apostrophe
+leaves of a word, as the s of "Caio's". A question of nothing but names is
+answered with why it finds nothing.
 
 **What still does not fit is left out.** Past the context, the oldest exchanges
 of the prompt are dropped — the messages you sent since her previous reply, and
@@ -648,13 +619,11 @@ or that opens later, reads the conversation from the database instead, and
 shows only what it has not shown.
 
 **Every turn is recorded.** Each reply is an entry, and an entry holds the
-requests it made: the reply itself, a look at any picture she was sent, and
-the question behind a search of her memories, turned into a vector.
+requests it made: the reply itself, and a look at any picture she was sent.
 Each request keeps its headers, bodies, timings, tokens and cost, and shows a
-dash for a cost the host did not report. What a request turned into vectors is
-kept, and the vectors themselves are not: they are megabytes of numbers, and
-the conversation holds them already. Bodies older than the latest `log_keep`
-entries are dropped, and the rest stays. `paula turns` is the window into it.
+dash for a cost the host did not report. Bodies older than the latest
+`log_keep` entries are dropped, and the rest stays. `paula turns` is the window
+into it.
 
 ## Your data
 
@@ -678,11 +647,8 @@ only reads says to run `serve` first, rather than read a schema it does not
 know. Only one `serve` may use a directory at a time.
 
 Nothing leaves the machine except the requests to the model API. Those carry
-the prompt, the pictures and the settings, and — to the model that embeds — her
-memories, which are the conversation in the words they were written in.
-On OpenRouter the `routing` settings of the runner go with them, so where a
-reply may be routed and what a host may keep of it holds for the memories too.
-Venice takes no such settings on that endpoint.
+the prompt, the pictures and the settings. A search of her memories runs in the
+database and sends nothing.
 
 ## Development
 
