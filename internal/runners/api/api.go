@@ -34,8 +34,11 @@ func Gone(err error) bool {
 
 // Model is what a catalogue says about a model.
 type Model struct {
-	ID                string
-	Context           int
+	ID      string
+	Context int
+	// Output is the most a model writes in one answer, 0 when the catalogue
+	// does not say.
+	Output            int
 	Chat              bool
 	Vision            bool
 	Tools             bool
@@ -144,7 +147,7 @@ type ToolCall struct {
 const ToolChoiceNone = "none"
 
 // Notes is how what she is told beside the conversation reaches a model: the
-// time before each message she was sent, and what she remembers.
+// time before each message she was sent.
 type Notes struct {
 	// Role is the role they are told in.
 	Role string
@@ -202,6 +205,10 @@ type Usage struct {
 	ReasoningTokens  int
 	Cost             float64
 }
+
+// FinishLength is the finish reason of an answer cut off at the most the model
+// writes in one answer, or at the max_tokens the request held it to.
+const FinishLength = "length"
 
 type Result struct {
 	Provider     string

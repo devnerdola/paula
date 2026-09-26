@@ -155,7 +155,7 @@ func listMemories(w io.Writer, memories []store.Memory) error {
 	table(w, []string{"ID", "SAID", "MEMORY"}, func(row func(...string)) {
 		for _, m := range memories {
 			// A memory is one line of a table, so what it holds is written as
-			// one: a fold that wrote a line of its own inside one would break
+			// one: a model that wrote a line of its own inside one would break
 			// the row it is part of.
 			said := strings.Join(strings.Fields(m.Content), " ")
 			row(strconv.FormatInt(int64(m.ID), 10), m.SaidAt.Format(time.DateOnly), said)

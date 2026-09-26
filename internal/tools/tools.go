@@ -10,6 +10,7 @@ import (
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/tools/api"
+	"nerdola.dev/x/paula/internal/tools/images"
 	"nerdola.dev/x/paula/internal/tools/memory"
 )
 
@@ -27,6 +28,7 @@ type Factory func(s config.Section, h Host) ([]Tool, error)
 // kinds is the table of tool kinds: the only place naming an implementation, so
 // nothing else has to know one exists.
 var kinds = map[string]Factory{
+	images.Kind: images.Open,
 	memory.Kind: memory.Open,
 }
 

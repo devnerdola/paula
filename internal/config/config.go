@@ -99,16 +99,13 @@ func (d DefaultModels) Get(r Role) string {
 type Engine struct {
 	Debounce      Duration `yaml:"debounce"`
 	PrefillCancel bool     `yaml:"prefill_cancel"`
-	// SystemRatio is the share of the context the system message may take, and
-	// MemoryRatio the share of what is left of it, once the card is written,
-	// that memories may take; the summary takes the rest. HistoryKeep is the
-	// share of the messages' part of the context a fold leaves behind.
-	SystemRatio   float64 `yaml:"system_ratio"`
-	MemoryRatio   float64 `yaml:"memory_ratio"`
-	HistoryKeep   float64 `yaml:"history_keep"`
-	ImageMessages int     `yaml:"image_messages"`
-	ImageMaxPx    int     `yaml:"image_max_px"`
-	LogKeep       int     `yaml:"log_keep"`
+	// SummaryRatio and HistoryRatio are the parts of what the context leaves
+	// once the persona and the tools are written that the summary and the
+	// history are reserved; the rest is the user input's.
+	SummaryRatio float64 `yaml:"summary_ratio"`
+	HistoryRatio float64 `yaml:"history_ratio"`
+	ImageMaxPx   int     `yaml:"image_max_px"`
+	LogKeep      int     `yaml:"log_keep"`
 	// ToolRounds is how many rounds of tool calls a reply may take. The round
 	// after them is asked for an answer with no call in it.
 	ToolRounds int `yaml:"tool_rounds"`
@@ -119,10 +116,8 @@ func DefaultEngine() Engine {
 	return Engine{
 		Debounce:      Duration(2 * time.Second),
 		PrefillCancel: true,
-		SystemRatio:   0.5,
-		MemoryRatio:   0.5,
-		HistoryKeep:   0.5,
-		ImageMessages: 2,
+		SummaryRatio:  0.3,
+		HistoryRatio:  0.6,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
 		ToolRounds:    3,
@@ -355,19 +350,19 @@ func checkEngine(p *Problems, e Engine) {
 	if e.Debounce < 0 {
 		p.Addf("engine.debounce: %s is below zero", e.Debounce)
 	}
-	// A share of nothing leaves a prompt no room, and a share of everything
-	// leaves the other side of the split none.
-	if e.SystemRatio <= 0 || e.SystemRatio >= 1 {
-		p.Addf("engine.system_ratio: %v is not above 0 and below 1", e.SystemRatio)
+	if e.SummaryRatio <= 0 {
+		p.Addf("engine.summary_ratio: %v is not above 0", e.SummaryRatio)
 	}
-	if e.MemoryRatio <= 0 || e.MemoryRatio > 1 {
-		p.Addf("engine.memory_ratio: %v is not above 0 and at most 1", e.MemoryRatio)
+	if e.HistoryRatio <= 0 {
+		p.Addf("engine.history_ratio: %v is not above 0", e.HistoryRatio)
 	}
-	if e.HistoryKeep <= 0 || e.HistoryKeep >= 1 {
-		p.Addf("engine.history_keep: %v is not above 0 and below 1", e.HistoryKeep)
+	// What the two leave is the user input's, so together they leave some.
+	if e.SummaryRatio+e.HistoryRatio >= 1 {
+		p.Addf("engine.summary_ratio: %v and engine.history_ratio: %v leave nothing for the user input",
+			e.SummaryRatio, e.HistoryRatio)
 	}
-	if e.ImageMessages < 0 {
-		p.Addf("engine.image_messages: %d is below zero", e.ImageMessages)
+	if e.SummaryRatio >= e.HistoryRatio {
+		p.Addf("engine.summary_ratio: %v is not below engine.history_ratio: %v", e.SummaryRatio, e.HistoryRatio)
 	}
 	if e.ImageMaxPx < 0 {
 		p.Addf("engine.image_max_px: %d is below zero", e.ImageMaxPx)

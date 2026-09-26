@@ -2,12 +2,14 @@ package conversation
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"slices"
+	"math"
+	"path/filepath"
 	"strings"
 	"testing"
-	"unicode/utf8"
 
+	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
@@ -32,101 +34,145 @@ func said(req api.ChatRequest, role string) []string {
 	return out
 }
 
-func TestWhatAPromptTakesIsItsCharactersAndItsPictures(t *testing.T) {
+func TestWhatAPromptTakesIsItsWordsAndItsPictures(t *testing.T) {
 	messages := []api.Message{
-		// Four characters written as five bytes, which are four to a model.
-		api.Text(api.RoleSystem, "café"),
+		api.Text(api.RoleSystem, "a café"),
 		{Role: api.RoleUser, Parts: []api.Part{
-			{Type: api.PartText, Text: "abcdefg"},
+			{Type: api.PartText, Text: "one  two\nthree"},
 			{Type: api.PartImage, Data: []byte("a picture")},
 		}},
 	}
 
-	chars, images := measure(messages)
-	if chars != 11 || images != 1 {
-		t.Errorf("measure = %d characters and %d pictures, want 11 and 1", chars, images)
+	words, images := measure(messages)
+	if words != 5 || images != 1 {
+		t.Errorf("measure = %d words and %d pictures, want 5 and 1", words, images)
 	}
-	// Eleven characters at half a token each is 5.5, which costs six, and the
+	// Five words at half a token each is 2.5, which costs three, and the
 	// picture costs what the host bills for one.
-	if got := size(messages, 0.5, 1000); got != 1006 {
-		t.Errorf("size = %d, want 1006", got)
+	if got := size(messages, 0.5, 1000); got != 1003 {
+		t.Errorf("size = %d, want 1003", got)
 	}
 }
 
-func TestWhatACharacterCostsIsReadBackFromTheCount(t *testing.T) {
+// ofWords is a message of n words.
+func ofWords(role string, n int) api.Message { return api.Text(role, manyWords(n)) }
+
+// What a word costs is the most two prompts in a row have come to, so a prompt
+// that comes to less leaves it where it was, and one that comes to more once
+// is an exception until the next comes to more as well.
+func TestWhatAWordCostsIsTheMostTwoPromptsInARowCameTo(t *testing.T) {
 	var r costs
-	// A token every 3.5 characters, until a host says otherwise.
-	if got := r.ratio("chat"); got != 1.0/3.5 {
-		t.Errorf("ratio = %v, want a token every 3.5 characters", got)
+	// Three tokens a word, until a host says otherwise.
+	if got := r.rate("chat"); got != 3 {
+		t.Errorf("rate = %v, want three tokens a word", got)
 	}
 
-	// Twenty characters counted as ten tokens is a token every two.
-	r.correct("chat", 10, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))}, "")
-	if got := r.ratio("chat"); got != 0.5 {
-		t.Errorf("ratio = %v, want 0.5", got)
+	// The first count is what a word costs, less than what nothing counted
+	// said or not: twenty words counted as forty tokens is two a word.
+	r.correct("chat", 40, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	if got := r.rate("chat"); got != 2 {
+		t.Errorf("rate = %v, want 2", got)
 	}
-	if got := r.ratio("eyes"); got != 1.0/3.5 {
-		t.Errorf("another model's ratio = %v, want the one nothing has counted", got)
+	if got := r.rate("eyes"); got != 3 {
+		t.Errorf("another model's rate = %v, want the one nothing has counted", got)
 	}
 
 	// A count of nothing is a host that reported no usage.
-	r.correct("chat", 0, []api.Message{api.Text(api.RoleUser, strings.Repeat("a", 20))}, "")
-	if got := r.ratio("chat"); got != 0.5 {
-		t.Errorf("ratio = %v, want the one that was counted", got)
+	r.correct("chat", 0, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	// A prompt that came to less says nothing a word is sure to cost less for.
+	r.correct("chat", 30, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	if got := r.rate("chat"); got != 2 {
+		t.Errorf("rate = %v, want the most a prompt came to, 2", got)
+	}
+
+	// A prompt that came to far more, once, is an exception: the next came to
+	// two a word again.
+	r.correct("chat", 200, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	r.correct("chat", 40, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	if got := r.rate("chat"); got != 2 {
+		t.Errorf("rate = %v, want 2, the ten a word of one prompt left out", got)
 	}
 
 	// What a reply thought goes back with it, and is text the host counted:
-	// ten characters written and thirty thought, counted as ten tokens, is a
-	// token every four.
-	thought := api.Text(api.RoleAssistant, strings.Repeat("a", 10))
-	thought.Reasoning = &api.Reasoning{Text: strings.Repeat("b", 30)}
-	r.correct("chat", 10, []api.Message{thought}, "")
-	if got := r.ratio("chat"); got != 0.25 {
-		t.Errorf("ratio = %v, want 0.25", got)
+	// ten words written and thirty thought, counted as a hundred tokens, is
+	// 2.5 a word. Two prompts in a row at 2.5 and then 3 a word take the rate
+	// to the lower of the two.
+	thought := ofWords(api.RoleAssistant, 10)
+	thought.Reasoning = &api.Reasoning{Text: strings.TrimSpace(strings.Repeat("thought ", 30))}
+	r.correct("chat", 100, []api.Message{thought}, "")
+	if got := r.rate("chat"); got != 2 {
+		t.Errorf("rate = %v after one prompt at 2.5, want 2 until another comes to more", got)
+	}
+	r.correct("chat", 60, []api.Message{ofWords(api.RoleUser, 20)}, "")
+	if got := r.rate("chat"); got != 2.5 {
+		t.Errorf("rate = %v, want 2.5, the lower of two prompts in a row", got)
 	}
 }
 
-// A host bills a picture by how big it is, and each of them by its own
-// reckoning, so what one costs is read back the way what a character costs is:
-// from the count a prompt carrying one came home with.
-func TestWhatAPictureCostsIsReadBackFromTheCount(t *testing.T) {
+// withPictures is a prompt of so many words and pictures.
+func withPictures(words, pictures int) []api.Message {
+	m := ofWords(api.RoleUser, words)
+	for range pictures {
+		m.Parts = append(m.Parts, api.Part{Type: api.PartImage, Data: []byte("a picture")})
+	}
+	return []api.Message{m}
+}
+
+// A host bills a picture by how big it is, and each host by its own reckoning.
+// A prompt that carries a picture more than the one before it says what one
+// costs: each count is its words and its pictures at what each costs, and two
+// counts give both. What a word costs is then every count less its pictures,
+// over its words, the way it is read off a prompt of words alone: what the
+// words added between two prompts came to is not it.
+func TestWhatAPictureCostsIsReadWhenAPromptCarriesOneMore(t *testing.T) {
 	var r costs
+	// A host that counts the prompt at two tokens a word, and a picture at 800.
+	r.correct("eyes", 2*3000, withPictures(3000, 0), "")
+	r.correct("eyes", 2*3100+800, withPictures(3100, 1), "")
+	if got := r.image("eyes"); got != 800 {
+		t.Errorf("a picture costs %d, want 800", got)
+	}
+	if got := r.rate("eyes"); got != 2 {
+		t.Errorf("rate = %v, want 2", got)
+	}
 	if got := r.image("chat"); got != startImage {
-		t.Errorf("a picture costs %d, want the one nothing has counted", got)
-	}
-
-	withPicture := func(chars, pictures int) []api.Message {
-		parts := []api.Part{{Type: api.PartText, Text: strings.Repeat("a", chars)}}
-		for range pictures {
-			parts = append(parts, api.Part{Type: api.PartImage, Data: []byte("a picture")})
-		}
-		return []api.Message{{Role: api.RoleUser, Parts: parts}}
-	}
-
-	// Twenty characters at a token every 3.5 come to 6, and the rest of the
-	// count is what the picture cost.
-	r.correct("chat", 1000, withPicture(20, 1), "")
-	if got := r.image("chat"); got != 994 {
-		t.Errorf("a picture costs %d, want 994", got)
-	}
-	// The picture is in the count and not in the characters, so it still says
-	// nothing about what one of those costs.
-	if got := r.ratio("chat"); got != 1.0/3.5 {
-		t.Errorf("ratio = %v, want the one nothing has counted", got)
-	}
-	if got := r.image("eyes"); got != startImage {
 		t.Errorf("another model's picture costs %d, want the one nothing has counted", got)
 	}
 
-	// Two of them share what is left of the count.
-	r.correct("chat", 406, withPicture(20, 2), "")
-	if got := r.image("chat"); got != 200 {
-		t.Errorf("a picture costs %d, want 200", got)
+	// The replies added between prompts come to four tokens a word, with what
+	// they thought, and the prompts as a whole to a little over two.
+	r.correct("eyes", 2*3100+800+4*50, withPictures(3150, 1), "")
+	r.correct("eyes", 2*3100+800+4*100, withPictures(3200, 1), "")
+	if got, want := r.rate("eyes"), float64(2*3100+4*50)/3150; got != want {
+		t.Errorf("rate = %v, want %v, the lower of the last two prompts less the picture", got, want)
 	}
-	// A count the characters alone come to has no picture in it to read.
-	r.correct("chat", 6, withPicture(20, 1), "")
-	if got := r.image("chat"); got != 200 {
-		t.Errorf("a picture costs %d, want the one that was counted", got)
+}
+
+// A run whose history holds a picture carries it in every prompt from the
+// first, so no two counts tell a word from a picture yet. Until they do, the
+// pictures count as part of the words, which puts a word high rather than low.
+func TestUntilAPictureIsReadItCountsAsWords(t *testing.T) {
+	var r costs
+	r.correct("eyes", 2*3000+800, withPictures(3000, 1), "")
+	r.correct("eyes", 2*3100+800, withPictures(3100, 1), "")
+	if got, want := r.rate("eyes"), float64(2*3000+800)/3000; got != want {
+		t.Errorf("rate = %v, want %v, the words and the picture over the words", got, want)
+	}
+	if got := r.image("eyes"); got != startImage {
+		t.Errorf("a picture costs %d, want the one nothing has counted", got)
+	}
+}
+
+// A prompt with fewer words than the one before has had its history compacted,
+// and a summary costs more a word than the history it replaced. The two counts
+// say nothing of what a picture costs.
+func TestACompactedPromptSaysNothingOfWhatAPictureCosts(t *testing.T) {
+	var r costs
+	r.correct("eyes", 2*3000, withPictures(3000, 0), "")
+	// 2,000 words at 2.2 tokens each, and a picture at 800.
+	r.correct("eyes", 4400+800, withPictures(2000, 1), "")
+	if got := r.image("eyes"); got != startImage {
+		t.Errorf("a picture costs %d, want the one nothing has counted", got)
 	}
 }
 
@@ -141,116 +187,91 @@ func counting(text string, prompt int) func(context.Context, api.ChatRequest, fu
 	}
 }
 
-func TestTheCountOfAReplysPromptSetsWhatACharacterCosts(t *testing.T) {
+func TestTheCountOfAReplysPromptSetsWhatAWordCosts(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: counting("ok", 4000)}
 	r := openReply(t, f)
 	r.say(t, "hey")
 
-	var chars int
+	var words int
 	for _, m := range f.asked().Messages {
-		chars += utf8.RuneCountInString(text(m))
+		words += len(strings.Fields(text(m)))
 	}
-	if chars == 0 {
+	if words == 0 {
 		t.Fatal("the prompt was sent with no text in it")
 	}
-	if want, got := 4000/float64(chars), r.costs.ratio("chat"); got != want {
-		t.Errorf("ratio = %v, want %v: what the host counted over what she sent", got, want)
+	if want, got := 4000/float64(words), r.costs.rate("chat"); got != want {
+		t.Errorf("rate = %v, want %v: what the host counted over what she sent", got, want)
 	}
 }
 
-func TestAnExchangeEndsWhereItsReplyDoes(t *testing.T) {
-	// A burst is answered once, so both messages belong to the one exchange.
-	// The last messages are the ones being answered now.
-	got := exchanges([]store.Message{
-		{ID: 1, Role: store.RoleUser},
-		{ID: 2, Role: store.RoleUser},
-		{ID: 3, Role: store.RoleAssistant, ReplyTo: 2},
-		{ID: 4, Role: store.RoleUser},
-		{ID: 5, Role: store.RoleAssistant, ReplyTo: 4},
-		{ID: 6, Role: store.RoleUser},
-	})
+// The rounds after a reply's first carry the calls it made and what they
+// answered, which the history never does, so the count of one says nothing of
+// what a word of the history costs, even when two of them in a row come to
+// far more.
+func TestOnlyTheFirstRoundOfAReplySaysWhatAWordCosts(t *testing.T) {
+	rounds := answering(
+		round{calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{calls: []api.ToolCall{lookup("call_2", `{"query":"Lisbon"}`)}},
+		round{text: "Ana lives in Lisbon, you told me"},
+	)
+	counted := func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		res, err := rounds(ctx, req, fn)
+		if res != nil {
+			res.Usage.PromptTokens = 4000
+			if last := req.Messages[len(req.Messages)-1]; last.Role == api.RoleTool {
+				res.Usage.PromptTokens = 1000000
+			}
+		}
+		return res, err
+	}
+	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
+	f := &fakeRunner{model: chatModel(), chat: counted}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "where does Ana live?")
 
-	var ids [][]store.MessageID
-	for _, group := range got {
-		var in []store.MessageID
-		for _, m := range group {
-			in = append(in, m.ID)
-		}
-		ids = append(ids, in)
+	requests := f.all()
+	if len(requests) != 3 {
+		t.Fatalf("%d rounds, want the two that asked and the one that answered", len(requests))
 	}
-	want := [][]store.MessageID{{1, 2, 3}, {4, 5}, {6}}
-	if len(ids) != len(want) {
-		t.Fatalf("exchanges = %v, want %v", ids, want)
+	words := len(strings.Fields(r.tools.text))
+	for _, m := range requests[0].Messages {
+		words += len(strings.Fields(text(m)))
 	}
-	for i := range want {
-		if !slices.Equal(ids[i], want[i]) {
-			t.Errorf("exchange %d = %v, want %v", i, ids[i], want[i])
-		}
+	if want, got := 4000/float64(words), r.costs.rate("chat"); got != want {
+		t.Errorf("rate = %v, want %v: what the host counted the first round at", got, want)
 	}
 }
 
-func TestTheOldestOfAConversationPastTheContextIsLeftOut(t *testing.T) {
-	long := strings.Repeat("a long thing to say ", 20)
-	f := &fakeRunner{model: chatModel(), chat: says(long)}
-	r := openReplyWith(t, f, sized(f, 1000))
-	for i := range 12 {
-		r.say(t, fmt.Sprintf("message %d: %s", i, long))
-	}
-
-	req := f.replied()
-	mine := said(req, api.RoleUser)
-	if len(mine) == 0 || len(mine) >= 12 {
-		t.Fatalf("the prompt holds %d of my messages, want some of the twelve", len(mine))
-	}
-	// The newest is what she is answering, and the oldest went.
-	if !strings.HasPrefix(mine[len(mine)-1], "message 11:") {
-		t.Errorf("the last message of the prompt is %.20q, want the newest", mine[len(mine)-1])
-	}
-	for _, said := range mine {
-		if strings.HasPrefix(said, "message 0:") {
-			t.Error("the oldest message is still in the prompt")
-		}
-	}
-	// What is left opens with the card and then an exchange of its own: a
-	// reply is never left without the message it answers.
-	if !strings.HasPrefix(text(req.Messages[0]), "You are Paula") {
-		t.Fatalf("the prompt opens with %.30q, want the card", text(req.Messages[0]))
-	}
-	if req.Messages[1].Role != api.RoleSystem {
-		t.Errorf("the card is followed by a %s message, want the time before a message of mine",
-			req.Messages[1].Role)
-	}
-}
-
-func TestTheExchangeSheIsAnsweringGoesWhateverItTakes(t *testing.T) {
+// The summary and the history are reserved their ratios of what the context
+// leaves once the persona and the tools are written, counted at three tokens a
+// word until a host has counted a prompt of the model.
+func TestTheReservationsAreTheirRatiosOfWhatThePersonaAndToolsLeave(t *testing.T) {
+	ctx := context.Background()
+	look := &fakeTool{name: "search_memories", answer: "found"}
 	f := &fakeRunner{model: chatModel(), chat: says("ok")}
-	r := openReplyWith(t, f, sized(f, 1))
-	r.say(t, "one")
-	r.say(t, "two")
-	r.say(t, "three")
-
-	// A context that holds nothing still holds what she is answering, since
-	// leaving it out would answer nothing.
-	if mine := said(f.replied(), api.RoleUser); len(mine) != 1 || mine[0] != "three" {
-		t.Errorf("the prompt holds %q of my messages, want the one she is answering", mine)
+	r := openReplyOffering(t, f, sized(f, 10000), config.DefaultEngine(), look)
+	m, err := r.roleModel(ctx, config.RoleChat)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
 
-func TestWhatIsLeftOutOfAPromptIsSaid(t *testing.T) {
-	f := &fakeRunner{model: chatModel(), chat: says("ok")}
-	r := openReplyWith(t, f, sized(f, 1))
-	r.say(t, "one")
-	r.say(t, "two")
-
-	// Losing the oldest of a conversation is not something to do quietly, so
-	// it is logged at the level a run shows by default, with how much went.
-	written := r.log.String()
-	if !strings.Contains(written, "level=WARN") ||
-		!strings.Contains(written, "left out of the prompt") {
-		t.Errorf("the log holds %q, want a warning about the prompt", written)
+	rendered, err := fullCard().Render()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(written, "exchanges=1") {
-		t.Errorf("the log holds %q, want the one exchange that went", written)
+	offered, err := json.Marshal([]api.ToolDef{api.ToolDef(look.Definition())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixed := int(math.Ceil(float64(len(strings.Fields(rendered))+len(strings.Fields(string(offered)))) * 3))
+	flexible := float64(10000 - fixed)
+
+	summary, history := r.reservations(m)
+	if want := int(math.Floor(flexible * 0.3)); summary != want {
+		t.Errorf("the summary is reserved %d, want %d", summary, want)
+	}
+	if want := int(math.Floor(flexible * 0.6)); history != want {
+		t.Errorf("the history is reserved %d, want %d", history, want)
 	}
 }
 
@@ -267,5 +288,132 @@ func TestAModelWithNoContextLeavesNothingOut(t *testing.T) {
 	// is nothing to hold the prompt to.
 	if mine := said(f.asked(), api.RoleUser); len(mine) != 5 {
 		t.Errorf("the prompt holds %q, want all five", mine)
+	}
+}
+
+// countedAtThree answers with chat, and has the prompt of every reply counted
+// at three tokens a word, the way a host counts what it was sent.
+func countedAtThree(chat chatFunc) chatFunc {
+	return func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		res, err := chat(ctx, req, fn)
+		if res != nil && purpose(req) == store.PurposeReply {
+			var words int
+			for _, m := range req.Messages {
+				for _, p := range m.Parts {
+					words += len(strings.Fields(p.Text))
+				}
+			}
+			res.Usage.PromptTokens = 3 * words
+		}
+		return res, err
+	}
+}
+
+// talkedAndCounted is a conversation held to 20,000 tokens, of five exchanges
+// of 400 words each, whose prompts a host has counted: a history within its
+// reservation, with room left for a message of about a thousand words.
+func talkedAndCounted(t *testing.T) (*fakeRunner, *replyEngine) {
+	t.Helper()
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(compacting("hm", "they said things"))}
+	r := openReplyWith(t, f, sized(f, 20000))
+	for i := range 5 {
+		r.say(t, fmt.Sprintf("message %d: %s", i, manyWords(400)))
+		settle(t, r)
+	}
+	if _, err := r.store.LatestSummary(context.Background()); err == nil {
+		t.Fatal("the history was compacted, want it within its reservation")
+	}
+	return f, r
+}
+
+// A prompt past the context is one the host refuses. A turn that would send
+// one waits for the history to be compacted to make room for its messages,
+// and goes out with the summary in place of the history.
+func TestATurnPastTheContextWaitsForTheHistoryToMakeRoom(t *testing.T) {
+	f, r := talkedAndCounted(t)
+
+	long := "and this: " + manyWords(5000)
+	r.say(t, long)
+	if seen(r.Engine, ReplyFailed) {
+		t.Error("the turn failed, want it answered once the history made room")
+	}
+	req := f.replied()
+	if got := said(req, api.RoleUser); len(got) != 1 || got[0] != long {
+		t.Errorf("the turn sent %d messages of its own, want only the long one", len(got))
+	}
+	if card := text(req.Messages[0]); !strings.Contains(card, "they said things") {
+		t.Errorf("the turn went out with %q, want the summary in it", card)
+	}
+}
+
+// A turn whose messages are past the context once the history has made room
+// fails, saying why, and sends nothing.
+func TestATurnPastTheContextOnceTheHistoryMadeRoomFails(t *testing.T) {
+	f, r := talkedAndCounted(t)
+	replies := len(f.sentFor(store.PurposeReply))
+
+	r.say(t, "and this: "+manyWords(7000))
+	if n := len(f.sentFor(store.PurposeReply)); n != replies {
+		t.Errorf("%d replies went out past the context, want none", n-replies)
+	}
+	if _, err := r.store.LatestSummary(context.Background()); err != nil {
+		t.Errorf("the history made no room before the turn failed: %v", err)
+	}
+	var failure string
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyFailed {
+			failure = ev.Text
+		}
+	}
+	if !strings.Contains(failure, "context") {
+		t.Errorf("the failure was said as %q, want it to say the prompt is past the context", failure)
+	}
+}
+
+// Until a host has counted a prompt of the model, a word counts high on
+// purpose, so a prompt that count puts past the context goes out all the
+// same: held back, it would never be counted.
+func TestAPromptGoesOutUntilAHostHasCountedOne(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: compacting("hm", "they said things")}
+	r := openReplyWith(t, f, sized(f, 20000))
+
+	r.say(t, "hello: "+manyWords(7000))
+	if n := len(f.sentFor(store.PurposeReply)); n != 1 || seen(r.Engine, ReplyFailed) {
+		t.Errorf("%d replies went out, and one failed: %v, want the one", n, seen(r.Engine, ReplyFailed))
+	}
+}
+
+// A model whose context the card and the tools fill on their own is refused
+// when the conversation opens, named by its key. Nothing has been counted
+// then, so they are measured at a token a word, the least a word comes to: a
+// context that holds them at that count is taken, however much more a host
+// counts them at.
+func TestAModelTheCardFillsIsRefusedWhenTheConversationOpens(t *testing.T) {
+	rendered, err := fullCard().Render()
+	if err != nil {
+		t.Fatal(err)
+	}
+	words := len(strings.Fields(rendered))
+	open := func(tokens int) error {
+		t.Helper()
+		st, err := store.Open(filepath.Join(t.TempDir(), "data"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer st.Close()
+		f := &fakeRunner{model: chatModel(), chat: says("ok")}
+		set := sized(f, tokens)
+		set.Models[0].Path = "models.chat"
+		e, err := Open(context.Background(), Options{Store: st, Runners: set, Persona: fullCard(), Engine: config.DefaultEngine()})
+		if err == nil {
+			e.Close()
+		}
+		return err
+	}
+	if err := open(words); err == nil || !strings.Contains(err.Error(), "models.chat") {
+		t.Errorf("a context of %d tokens for a card of %d words = %v, want it refused under the model's key", words, words, err)
+	}
+	if err := open(2 * words); err != nil {
+		t.Errorf("a context of %d tokens for a card of %d words = %v, want it taken", 2*words, words, err)
 	}
 }

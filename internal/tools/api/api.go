@@ -37,15 +37,26 @@ type Definition struct {
 // asked for it.
 type Env interface {
 	// Date is a day as the conversation writes one to a model, so what a tool
-	// answers reads like the prompt it goes back into.
+	// answers reads like the prompt it goes back into, and Time a moment of one.
 	Date(t time.Time) string
-	// Memories are the memories closest in meaning to a query.
+	Time(t time.Time) string
+	// Memories are the memories that hold the words of a query.
 	Memories(ctx context.Context, query string, limit int) ([]store.Memory, error)
+	// AllMemories are every memory that stands, oldest first.
+	AllMemories(ctx context.Context) ([]store.Memory, error)
 	// Remember keeps a memory, said in the newest message the reply answers,
 	// in place of the memories it replaces.
 	Remember(ctx context.Context, content string, replaces []store.MemoryID) (*store.Memory, error)
 	// Forget takes a memory away, and the ones it replaced with it.
 	Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error)
+	// Images are every picture of the conversation, newest first, and Image
+	// the one of a number.
+	Images(ctx context.Context) ([]store.Image, error)
+	Image(ctx context.Context, id int64) (*store.Image, error)
+	// Show has a picture sent to the model in the call's answer, and reports
+	// whether it will be: a model that sees images is sent it, and any other
+	// is not, since it can read what the picture showed.
+	Show(img store.Image) bool
 }
 
 // Host is what the program around a tool gives it.

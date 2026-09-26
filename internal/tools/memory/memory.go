@@ -1,5 +1,7 @@
-// Package memory is the tools that reach what she remembers: searching it,
-// adding to it, and taking a memory away.
+// Package memory is the tools that reach what she remembers: listing it,
+// searching it, adding to it, and taking a memory away. Memories are never in
+// the prompt, so these tools are the only way she has to them, and what each
+// says of itself is what tells her how they work.
 package memory
 
 import (
@@ -26,7 +28,7 @@ type settings struct {
 	Results int `yaml:"results"`
 }
 
-// Open reads the memory section and builds the three tools.
+// Open reads the memory section and builds the four tools.
 func Open(s config.Section, h api.Host) ([]api.Tool, error) {
 	cfg := settings{Results: defaultResults}
 	if err := s.Decode(&cfg); err != nil {
@@ -39,7 +41,46 @@ func Open(s config.Section, h api.Host) ([]api.Tool, error) {
 	if err := p.Err(); err != nil {
 		return nil, err
 	}
-	return []api.Tool{search{h: h, results: cfg.Results}, remember{h}, forget{h}}, nil
+	return []api.Tool{list{h}, search{h: h, results: cfg.Results}, remember{h}, forget{h}}, nil
+}
+
+// arrangement is what every memory tool tells a model of where its memories
+// are: nowhere in front of it, until it looks them up.
+func arrangement(n api.Names) string {
+	return "Your memories are not in your prompt. What you have in front of you is the summary of your " +
+		"conversation with " + n.User + " so far and its most recent messages word for word; older messages " +
+		"survive only as that summary, which keeps the story and loses the details. A memory is a lasting " +
+		"fact, one sentence, that you kept with remember, and it is in front of you only when you list or " +
+		"search your memories. Each memory has a number, which remember takes to replace it and " +
+		"forget_memory to take it away."
+}
+
+type list struct{ h api.Host }
+
+func (t list) Definition() api.Definition {
+	n := t.h.Names
+	return api.Definition{
+		Name: "list_memories",
+		Description: "List every memory you have kept about " + n.User + " and about yourself, oldest first, " +
+			"each with its number and the day it was said. " + arrangement(n) + " List them when you need to know " +
+			"what you know about " + n.User + ": when the conversation picks up after a while, when something " +
+			"personal comes up that you may have been told before, and before keeping a memory, to see whether " +
+			"it updates one you already have.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
+	}
+}
+
+func (list) Note(json.RawMessage) string { return "listing memories" }
+
+func (list) Call(ctx context.Context, env api.Env, _ json.RawMessage) (string, error) {
+	memories, err := env.AllMemories(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(memories) == 0 {
+		return "no memories yet", nil
+	}
+	return lines(env, memories), nil
 }
 
 type search struct {
@@ -48,13 +89,17 @@ type search struct {
 }
 
 func (t search) Definition() api.Definition {
+	n := t.h.Names
 	// Memories are written in the card's language, and a word in another one
 	// finds none of them.
 	query, _ := json.Marshal("the words to look for, in " + t.h.Language)
 	return api.Definition{
 		Name: "search_memories",
-		Description: "Search what you remember of " + t.h.Names.User +
-			" and of yourself, by the words a memory holds. Each memory comes with its number.",
+		Description: "Search the memories you have kept about " + n.User + " and about yourself by the words " +
+			"they hold, the ones the words say most about first. " + arrangement(n) + " Search them when " +
+			"something comes up that you may have been told before: a name, a place, a date, a plan, what " +
+			n.User + " likes or does. A word finds its other forms, but not other words for the same thing, " +
+			"so look for the words a memory would use, in " + t.h.Language + ".",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"query":{"type":"string","description":` + string(query) + `}},` +
 			`"required":["query"]}`),
@@ -96,12 +141,16 @@ func (t remember) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "remember",
-		// A memory kept here is read beside the ones a fold writes, so it is
-		// asked for in the words a fold is.
-		Description: "Remember a lasting fact about " + n.User + ", or one about yourself. " +
-			"Write it as one sentence in " + t.h.Language + ", in the third person, " +
+		Description: "Keep a lasting fact about " + n.User + ", or one about yourself, as a memory. " +
+			"Memories are the only thing that lasts word for word beyond the recent messages: nothing keeps a " +
+			"memory for you, so a fact you do not keep is left to the summary, which loses the details. Keep " +
+			"what you will want to know later: names and relationships, where and how " + n.User + " lives " +
+			"and works, what " + n.User + " likes and dislikes, dates and plans that matter, and what you said " +
+			"about yourself. Write it as one sentence in " + t.h.Language + ", in the third person, " +
 			"naming who it is about: " + n.User + " or " + n.Character + ". " +
-			"When it updates or contradicts memories you found, give their numbers in replaces.",
+			"When it updates or contradicts memories you have, give their numbers in replaces: they are " +
+			"replaced by this one. Your memories are not in your prompt; list_memories and search_memories " +
+			"are how you see them.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"memory":{"type":"string","description":"the fact, as one sentence"},` +
 			`"replaces":{"type":"array","items":{"type":"integer"},` +
@@ -143,7 +192,8 @@ func (t forget) Definition() api.Definition {
 	return api.Definition{
 		Name: "forget_memory",
 		Description: "Forget a memory by its number, only when " + t.h.Names.User +
-			" asks you to. The memories it replaced go with it.",
+			" asks you to. The memories it replaced go with it. The number is the one list_memories and " +
+			"search_memories give.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"id":{"type":"integer","description":"the number of the memory"}},` +
 			`"required":["id"]}`),

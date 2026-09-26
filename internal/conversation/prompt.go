@@ -3,7 +3,6 @@ package conversation
 import (
 	"context"
 	"errors"
-	"slices"
 	"strings"
 	"time"
 
@@ -35,21 +34,17 @@ func (e *Engine) now() string {
 	return "It is now " + timeText(at.Location(), at) + "."
 }
 
-// prompt builds the messages of a reply: what she is told outside the
-// conversation, then the messages the summary does not cover, with the time
-// before every message she was sent. standing is how many of its first
-// messages the prompt of the next reply sends again as they are, and zero when
-// that is not known.
+// prompt builds the messages of a reply: the persona with the summary, the
+// history with the time before every message she was sent, and then the user
+// input, after the time it is now. standing is how many of its first messages
+// the prompt of the next reply sends again as they are, which is everything
+// before that time, and zero when that is not known.
 func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Message, standing int, _ error) {
 	summary, err := e.summary(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-	memories, err := e.store.Memories(ctx)
-	if err != nil {
-		return nil, 0, err
-	}
-	// What a fold has written is told in the system message, so the messages
+	// What a compaction has written is told with the persona, so the messages
 	// it covers are not carried one by one any more.
 	messages, err := e.store.MessagesAfter(ctx, coveredUpto(summary))
 	if err != nil {
@@ -63,106 +58,22 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 	}
 	kept = ordered(kept)
 
-	ratio := e.costs.ratio(m.Name)
-	limit := m.limit()
-	system, history := e.split(m)
-	card := e.systemMessage(m, summary)
-	told := e.remembering(m, memories, system, ratio)
-	// The summary is told whole, so nothing else notices when it has outgrown
-	// what is left of the system message once the card and the memories are
-	// written. This is where both numbers are known.
-	if room := e.summaryRoom(m, memories, ratio); room > 0 && summary != nil {
-		a.compactDue = size([]api.Message{api.Text(api.RoleSystem, summary.Content)}, ratio, 0) > room
-	}
-	if len(kept) == 0 {
-		return append([]api.Message{card}, told...), 0, nil
-	}
-
-	inline := e.inlineFrom(kept, m)
+	out := []api.Message{e.systemMessage(m, summary)}
 	// What time it is now is told before the message she is answering, which
 	// is the one the attempt is for. The last of what is carried is not always
 	// that one: a reply written while the next message arrived carries the
 	// higher id of the two, and one whose message the summary covers keeps the
 	// place its id gives it.
-	last := a.entry.UptoMessageID
-	// What she remembers is told just before that message, not beside the
-	// card: it changes whenever she keeps or forgets something, and a host
-	// keeps what it read of a prompt only up to the first thing that changed.
-	// Told there, a change costs what follows it, which is the newest of the
-	// conversation, rather than the whole of it. It is counted with the system
-	// message, whose share of the context it is held to.
-	//
-	// A message the summary covers is not carried, and what she remembers then
-	// follows the card, since there is nothing later to tell it before.
-	lead := []api.Message{card}
-	if !slices.ContainsFunc(kept, func(msg store.Message) bool { return msg.ID == last }) {
-		lead, told = append(lead, told...), nil
+	msgs, at := e.render(kept, m.catalogue.Vision, a.entry.UptoMessageID, m.notes(), e.sending(ctx, a))
+	if at >= 0 {
+		standing = len(out) + at
 	}
-	image := e.costs.image(m.Name)
-	// The tools a reply is offered go with every round of it, beside the card.
-	head := size(slices.Concat(lead, []api.Message{api.Text(api.RoleSystem, e.tools.text)}, told), ratio, image)
-	taken := head
-
-	// The newest exchange is built first and the older ones are added while
-	// they fit, so nothing older than the first that does not fit is built: no
-	// picture of one is loaded, and none is sent to be described.
-	groups := exchanges(kept)
-	built := make([][]api.Message, 0, len(groups))
-	answering, tail := -1, 0
-	dropped := 0
-	sending := e.sending(ctx, a)
-	notes := m.notes()
-	for i, group := range slices.Backward(groups) {
-		msgs, at := e.exchange(group, inline, last, told, notes, sending)
-		n := size(msgs, ratio, image)
-		if at >= 0 {
-			n -= size(told, ratio, 0)
-		}
-		// The exchange being answered goes whatever it takes, since leaving it
-		// out would answer nothing.
-		if i == len(groups)-1 || limit <= 0 || taken+n <= limit {
-			if at >= 0 {
-				answering, tail = len(built), at
-			}
-			taken += n
-			built = append(built, msgs)
-			continue
-		}
-		dropped = i + 1
-		break
-	}
-	if dropped > 0 {
-		e.log.Warn("the oldest of the conversation is left out of the prompt",
-			"entry", a.entry.ID, "exchanges", dropped, "context", limit, "tokens", taken)
-	}
-	// What the messages took is what a fold is due on, and this is where it is
-	// known exactly: these are the messages, rendered as the model reads them.
-	// One that left something out says it outright, since what it carried is
-	// held to the context and would sit under the share for ever while the
-	// conversation grew past it — unless the system message is what is over,
-	// and then folding would take messages the prompt could still carry and
-	// make the summary that is over even longer.
-	if history > 0 {
-		a.foldDue = taken-head > history || (dropped > 0 && head <= system)
-	}
-
-	// What she remembers and what time it is now are all that the next reply's
-	// prompt does not send again as this one sends it, and they come just
-	// before the message she is answering.
-	out := lead
-	for i, b := range slices.Backward(built) {
-		if i == answering {
-			standing = len(out) + tail
-		}
-		out = append(out, b...)
-	}
-	return out, standing, nil
+	return append(out, msgs...), standing, nil
 }
 
-// systemMessage is what a reply is told outside the conversation that stands
-// until a fold: the card, and the summary of the messages it no longer carries,
-// left out while there is none, so a run with no fold behind it reads exactly
-// as it did before there were folds.
+// systemMessage is what a reply is told outside the conversation: the card, and
+// the summary of the messages it no longer carries, left out while there is
+// none.
 func (e *Engine) systemMessage(m *model, summary *store.Summary) api.Message {
 	sections := []string{e.card(m)}
 	if summary != nil && summary.Content != "" {
@@ -190,58 +101,17 @@ func (e *Engine) card(m *model) string {
 	if notes.Role == api.RoleSystem {
 		return e.rendered
 	}
-	told := "the one before each of USER's messages saying when it was sent, "
+	user := e.persona.User.Name
+	told := "the one before each of " + user + "'s messages saying when it was sent"
 	if !notes.LastAsSent {
-		told += "the one saying what time it is now, "
+		told += ", and the one saying what time it is now"
 	}
-	told += "and the one listing what you remember"
-	return e.rendered + "\n\n" + e.fill("Some messages come from the app you and USER text through, not from USER: "+
-		told+". They are for you to know, never to answer.", 0)
-}
-
-// remembering is what she remembers, as a message of its own, and nothing
-// while she remembers nothing. What is left of the system message's room once
-// the card is written is divided between the memories and the summary, and
-// nothing bounding the prompt leaves both of them whole.
-func (e *Engine) remembering(m *model, memories []store.Memory, room int, ratio float64) []api.Message {
-	loc := e.clock.Now().Location()
-	told := memories
-	if room > 0 {
-		left := max(0, room-size([]api.Message{api.Text(api.RoleSystem, e.card(m))}, ratio, 0))
-		told = remembered(memories, share(left, e.cfg.MemoryRatio), ratio, loc)
-	}
-	if len(told) == 0 {
-		return nil
-	}
-	lines := []string{"What you remember from your conversations with " +
-		e.persona.User.Name + ", oldest first:"}
-	for _, mem := range told {
-		lines = append(lines, memoryLine(mem, loc))
-	}
-	return []api.Message{api.Text(m.notes().Role, strings.Join(lines, "\n"))}
-}
-
-// memoryLine is one memory as a model reads it, dated by the day it was said
-// rather than the day a fold wrote it down.
-func memoryLine(m store.Memory, loc *time.Location) string {
-	return "- (said on " + dateText(loc, m.SaidAt) + ") " + m.Content
-}
-
-// remembered is the memories a prompt tells: the newest that fit the room
-// memories have, in the order they were said.
-func remembered(all []store.Memory, room int, ratio float64, loc *time.Location) []store.Memory {
-	var taken int
-	for i, a := range slices.Backward(all) {
-		taken += size([]api.Message{api.Text(api.RoleSystem, memoryLine(a, loc))}, ratio, 0)
-		if taken > room {
-			return all[i+1:]
-		}
-	}
-	return all
+	return e.rendered + "\n\nSome messages come from the app you and " + user +
+		" text through, not from " + user + ": " + told + ". They are for you to know, never to answer."
 }
 
 // summary is the summary that counts, and nil while the conversation has never
-// been folded.
+// been compacted.
 func (e *Engine) summary(ctx context.Context) (*store.Summary, error) {
 	out, err := e.store.LatestSummary(ctx)
 	if errors.Is(err, store.ErrNotFound) {
@@ -259,51 +129,46 @@ func coveredUpto(summary *store.Summary) store.MessageID {
 	return summary.UptoMessageID
 }
 
-// exchange is the messages of one exchange as the model reads them. Every
-// message she was sent is told the time before it: when an older one was sent,
-// and what time it is now before the one she is answering, whose last line is
-// then what was said rather than a time. Each of those stands once it is
-// written, so a host that keeps a prompt keeps all of it but the time before
-// the last message. What she remembers, told, goes before that time, and at is
-// where in the exchange the two begin, or -1 when the last message is not in it.
-// The times are told the way notes says, which may tell the last one as when
-// it was sent.
-func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, told []api.Message, notes api.Notes, r reading) (out []api.Message, at int) {
-	out = make([]api.Message, 0, 2*len(group)+len(told))
+// render is the messages as the model reads them. Every message she was sent
+// is told the time before it: when an older one was sent, and what time it is
+// now before the one she is answering, whose last line is then what was said
+// rather than a time. Each of those stands once it is written, so a host that
+// keeps a prompt keeps all of it but the time before the last message. at is
+// where that time is, or -1 when the last message is not among them. The times
+// are told the way notes says, which may tell the last one as when it was
+// sent.
+func (e *Engine) render(messages []store.Message, sees bool, last store.MessageID, notes api.Notes, r reading) (out []api.Message, at int) {
+	out = make([]api.Message, 0, 2*len(messages))
 	at = -1
-	for _, msg := range group {
+	for _, msg := range messages {
 		if msg.Role == store.RoleUser {
 			when := e.sentAt(msg.CreatedAt)
 			if msg.ID == last {
 				at = len(out)
-				out = append(out, told...)
 				if !notes.LastAsSent {
 					when = e.now()
 				}
 			}
 			out = append(out, api.Text(notes.Role, when))
 		}
-		out = append(out, e.message(msg, inline, r))
+		out = append(out, e.message(msg, sees, r))
 	}
 	return out, at
 }
 
-// reading is how the messages of an exchange are built: what a picture that is
-// not sent as one is described as, and whether a picture that is sent as one
-// carries its bytes.
+// reading is how messages are built: what a picture that is not sent as one is
+// described as, and whether a picture that is sent as one carries its bytes.
 //
-// A prompt reads an exchange to send it, so it asks for what it does not know
-// and carries what it sends. A fold reads the same exchanges to weigh them, so
-// it asks nothing and loads nothing: what a picture costs is counted, and
-// pictures are counted whether or not the bytes are there. Both read them the
-// same way, or what the prompt says is over its share is not what the fold
-// takes away.
+// A prompt reads messages to send them, so it asks for what it does not know
+// and carries what it sends. Measuring the history reads the same messages to
+// weigh them, so it asks nothing and loads nothing: what a picture costs is
+// counted, and pictures are counted whether or not the bytes are there.
 type reading struct {
 	describe func(sha256 string) string
 	load     bool
 }
 
-// sending is how a prompt reads an exchange, under the attempt it is for.
+// sending is how a prompt reads messages, under the attempt it is for.
 func (e *Engine) sending(ctx context.Context, a *attempt) reading {
 	return reading{
 		describe: func(sha256 string) string { return e.described(ctx, a, sha256) },
@@ -311,7 +176,7 @@ func (e *Engine) sending(ctx context.Context, a *attempt) reading {
 	}
 }
 
-// weighing is how a fold reads an exchange it is deciding about.
+// weighing is how the history is read to be measured against its reservation.
 func (e *Engine) weighing(ctx context.Context) reading {
 	return reading{
 		describe: func(sha256 string) string { return e.known(ctx, sha256) },
@@ -345,29 +210,9 @@ func ordered(messages []store.Message) []store.Message {
 	return out
 }
 
-// inlineFrom is the oldest message whose images go to the model as images,
-// counting back engine.image_messages of the messages that carry any. Zero sends
-// none, which is what a model without vision is sent.
-func (e *Engine) inlineFrom(messages []store.Message, m *model) store.MessageID {
-	if !m.catalogue.Vision || e.cfg.ImageMessages <= 0 || len(messages) == 0 {
-		return 0
-	}
-	var seen int
-	for _, msg := range slices.Backward(messages) {
-		if msg.Role != store.RoleUser || len(msg.Images()) == 0 {
-			continue
-		}
-		seen++
-		if seen == e.cfg.ImageMessages {
-			return msg.ID
-		}
-	}
-	// Fewer messages carry images than the setting allows, so every one of
-	// them is sent.
-	return messages[0].ID
-}
-
-func (e *Engine) message(msg store.Message, inline store.MessageID, r reading) api.Message {
+// message is one message as a model reads it. A model that sees images is sent
+// every picture as one; any other is sent a line with what the picture showed.
+func (e *Engine) message(msg store.Message, sees bool, r reading) api.Message {
 	if msg.Role == store.RoleAssistant {
 		// A reply goes back with what she thought on the way to it. A model
 		// offered tools reads the thinking of every reply before the one it is
@@ -390,10 +235,9 @@ func (e *Engine) message(msg store.Message, inline store.MessageID, r reading) a
 	var images []api.Part
 	for _, p := range msg.Images() {
 		// Every image is described when it is first seen, whether or not the
-		// model is also shown the image: one that ages out of what is sent as
-		// pictures is carried by the line describing it from then on.
+		// model is shown the image, so any model chosen later can be served it.
 		described := r.describe(p.SHA256)
-		if inline > 0 && msg.ID >= inline {
+		if sees {
 			// What a picture weighs is that it is one, not what its bytes are,
 			// so weighing an exchange counts a picture without reading it.
 			if !r.load {

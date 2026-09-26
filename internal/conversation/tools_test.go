@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -602,6 +604,91 @@ func TestAToolWritesADayAsThePromptDoes(t *testing.T) {
 	_, calls := stored(t, r)
 	if len(calls) != 1 || calls[0].Result != "Sunday, 20 September 2026" {
 		t.Errorf("the calls are %+v, want the day written as Sunday, 20 September 2026", calls)
+	}
+}
+
+// shower is a tool that shows the newest picture of the conversation, and says
+// whether it will be shown.
+type shower struct{}
+
+func (shower) Definition() toolsapi.Definition {
+	return toolsapi.Definition{Name: "get_image", Parameters: json.RawMessage(`{"type":"object"}`)}
+}
+
+func (shower) Note(json.RawMessage) string { return "looking" }
+
+func (shower) Call(ctx context.Context, env toolsapi.Env, _ json.RawMessage) (string, error) {
+	images, err := env.Images(ctx)
+	if err != nil || len(images) == 0 {
+		return "", fmt.Errorf("no picture: %v", err)
+	}
+	if env.Show(images[0]) {
+		return "shown", nil
+	}
+	return "told", nil
+}
+
+// lookingAgain calls get_image when asked for the picture again, and answers
+// everything else.
+func lookingAgain(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role == api.RoleUser && text(last) == "show me the picture again" {
+		return &api.Result{FinishReason: "tool_calls",
+			ToolCalls: []api.ToolCall{{ID: "call_1", Name: "get_image", Arguments: `{}`}}}, nil
+	}
+	return says("there it is")(ctx, req, fn)
+}
+
+// A picture a call shows goes to a model that sees images in the call's answer;
+// a model that does not see is sent the answer's text alone. Nothing of it is
+// sent outside the answer.
+func TestAPictureACallShowsIsInItsAnswer(t *testing.T) {
+	for _, sees := range []bool{true, false} {
+		model := chatModel()
+		model.Vision = sees
+		f := &fakeRunner{model: model, chat: lookingAgain}
+		r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), shower{})
+		sendPhoto(t, r, "look", photo(t))
+		r.say(t, "show me the picture again")
+
+		round := f.replied().Messages
+		i := slices.IndexFunc(round, func(m api.Message) bool { return m.Role == api.RoleTool })
+		if i < 0 {
+			t.Fatalf("sees %v: the round after the call carries no answer", sees)
+		}
+		answer, pictures, after := text(round[i]), len(images(round[i])), round[i+1:]
+		if len(after) != 0 {
+			t.Errorf("sees %v: the answer was followed by %+v, want nothing after it", sees, after)
+		}
+		if sees && (answer != "shown" || pictures != 1) {
+			t.Errorf("a model that sees was answered %q with %d pictures, want the picture in the answer", answer, pictures)
+		}
+		if !sees && (answer != "told" || pictures != 0) {
+			t.Errorf("a model that does not see was answered %q with %d pictures, want the text alone", answer, pictures)
+		}
+	}
+}
+
+// A picture whose file cannot be read is not shown, so a call says what it
+// showed instead of saying the picture is in its answer.
+func TestAPictureWhoseFileIsGoneIsNotShown(t *testing.T) {
+	model := chatModel()
+	model.Vision = true
+	f := &fakeRunner{model: model, chat: lookingAgain}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), shower{})
+	sha := sendPhoto(t, r, "look", photo(t))
+	if err := os.Remove(r.media.Path(sha)); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "show me the picture again")
+
+	round := f.replied().Messages
+	i := slices.IndexFunc(round, func(m api.Message) bool { return m.Role == api.RoleTool })
+	if i < 0 {
+		t.Fatal("the round after the call carries no answer")
+	}
+	if answer, pictures := text(round[i]), len(images(round[i])); answer != "told" || pictures != 0 {
+		t.Errorf("the call was answered %q with %d pictures, want the text alone", answer, pictures)
 	}
 }
 

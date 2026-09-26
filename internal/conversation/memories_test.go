@@ -9,18 +9,21 @@ import (
 	"nerdola.dev/x/paula/internal/store"
 )
 
-// remembering is a chat model that answers a fold with one memory of the
-// oldest message it is shown.
-func remembering(memory string) *fakeRunner {
-	return &fakeRunner{model: chatModel(), chat: folding("hm", memory, "they talked")}
-}
-
 func TestMemoriesWithNoQueryAreTheNewest(t *testing.T) {
-	f := remembering("Caio's sister Ana lives in Lisbon.")
-	r := openReplyWith(t, f, sized(f, 2000))
+	f := &fakeRunner{model: chatModel(), chat: says("hm")}
+	r := openReply(t, f)
 	ctx := context.Background()
 
-	talkPast(t, r)
+	r.say(t, "hey")
+	first, err := r.store.MessagesAfter(ctx, 0)
+	if err != nil || len(first) == 0 {
+		t.Fatalf("messages = %+v, %v", first, err)
+	}
+	for _, content := range []string{"Caio's sister Ana lives in Lisbon.", "Caio cooks on Saturdays."} {
+		if err := r.store.Remember(ctx, &store.Memory{Content: content, Source: first[0].ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	stored, err := r.store.Memories(ctx)
 	if err != nil || len(stored) == 0 {
 		t.Fatalf("memories = %+v, %v", stored, err)

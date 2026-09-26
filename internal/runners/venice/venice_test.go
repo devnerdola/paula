@@ -144,8 +144,8 @@ func TestCatalogue(t *testing.T) {
 	if !m.Chat || !m.Vision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
 		t.Errorf("%s = %+v", m.ID, m)
 	}
-	if m.Context != 1048576 {
-		t.Errorf("%s = %+v, want the context the listing gives", m.ID, m)
+	if m.Context != 1048576 || m.Output != 131072 {
+		t.Errorf("%s = %+v, want the context and the output the listing gives", m.ID, m)
 	}
 	if len(m.Efforts) == 0 {
 		t.Errorf("%s lists no efforts", m.ID)

@@ -46,7 +46,7 @@ func (e *Engine) described(ctx context.Context, a *attempt, sha256 string) strin
 }
 
 // caption is the line a described picture reads as, kept for the prompts and
-// the folds that follow: what a picture shows is written down once.
+// the compactions that follow: what a picture shows is written down once.
 func (e *Engine) caption(sha256, caption string) string {
 	line := "[photo: " + caption + "]"
 	e.captions.Store(sha256, line)

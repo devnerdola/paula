@@ -113,6 +113,7 @@ type listing struct {
 		ID        string `json:"id"`
 		ModelSpec struct {
 			AvailableContextTokens int `json:"availableContextTokens"`
+			MaxCompletionTokens    int `json:"maxCompletionTokens"`
 			Capabilities           struct {
 				SupportsVision          bool     `json:"supportsVision"`
 				SupportsFunctionCalling bool     `json:"supportsFunctionCalling"`
@@ -140,6 +141,7 @@ func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 		model := api.Model{
 			ID:                m.ID,
 			Context:           m.ModelSpec.AvailableContextTokens,
+			Output:            m.ModelSpec.MaxCompletionTokens,
 			Chat:              true,
 			Vision:            c.SupportsVision,
 			Tools:             c.SupportsFunctionCalling,

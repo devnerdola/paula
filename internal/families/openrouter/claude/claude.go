@@ -19,9 +19,9 @@
 // A marker lasts an hour, the longest the prompt caching documentation gives
 // one: texts are often more than five minutes apart. Writing for an hour costs
 // twice the input price, so a request no later one sends again, which is one
-// that knows nothing of what the next sends again as a caption or a fold does,
-// is marked nowhere. So is every request of a model that is not to cache, and
-// Claude then writes nothing.
+// that knows nothing of what the next sends again as a caption or a compaction
+// does, is marked nowhere. So is every request of a model that is not to
+// cache, and Claude then writes nothing.
 package claude
 
 import (

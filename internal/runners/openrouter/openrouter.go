@@ -104,9 +104,9 @@ func (r *Runner) Model(ctx context.Context, id string) (*api.Model, error) {
 	return m, nil
 }
 
-// contextOf is the context a listing gives, and 0 when it gives none, which is
-// how a model whose context the catalogue does not say reads.
-func contextOf(v *int) int {
+// sizeOf is a size a listing gives, a context or the most a model writes, and 0
+// when it gives none, which is how a size the catalogue does not say reads.
+func sizeOf(v *int) int {
 	if v == nil {
 		return 0
 	}
@@ -117,7 +117,10 @@ type listing struct {
 	Data []struct {
 		ID            string `json:"id"`
 		ContextLength *int   `json:"context_length"`
-		Architecture  struct {
+		TopProvider   struct {
+			MaxCompletionTokens *int `json:"max_completion_tokens"`
+		} `json:"top_provider"`
+		Architecture struct {
 			InputModalities  []string `json:"input_modalities"`
 			OutputModalities []string `json:"output_modalities"`
 		} `json:"architecture"`
@@ -140,7 +143,8 @@ func (r *Runner) read(ctx context.Context) ([]api.Model, error) {
 	for _, m := range chat.Data {
 		model := api.Model{
 			ID:                m.ID,
-			Context:           contextOf(m.ContextLength),
+			Context:           sizeOf(m.ContextLength),
+			Output:            sizeOf(m.TopProvider.MaxCompletionTokens),
 			Chat:              slices.Contains(m.Architecture.OutputModalities, "text"),
 			Vision:            slices.Contains(m.Architecture.InputModalities, "image"),
 			Tools:             slices.Contains(m.SupportedParameters, "tools"),
@@ -261,7 +265,7 @@ func (r *Runner) checkEndpoints(ctx context.Context, m api.Checked, prov *provid
 		}
 		// A host serves the model with a context of its own, which may be
 		// below the model's.
-		if held := contextOf(e.ContextLength); m.Needs.Context > 0 && held > 0 && held < m.Needs.Context {
+		if held := sizeOf(e.ContextLength); m.Needs.Context > 0 && held > 0 && held < m.Needs.Context {
 			gaps = append(gaps, fmt.Sprintf("a context of %d, holding %d", m.Needs.Context, held))
 		}
 		if len(gaps) == 0 {

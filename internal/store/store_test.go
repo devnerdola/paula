@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -280,6 +281,74 @@ func TestWhatAPictureShowsIsKeptWithIt(t *testing.T) {
 	}
 	if m.Caption != "a red square" || m.CaptionError != "" {
 		t.Errorf("media = %+v, want the failure cleared", m)
+	}
+}
+
+// The pictures of the conversation are every picture a message carried, newest
+// first, each with its number, its message, when that was sent and what it
+// showed. A picture sent twice is one file under one number, and two pictures.
+func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+
+	images, err := s.Images(ctx)
+	if err != nil || len(images) != 0 {
+		t.Fatalf("images of a conversation with none = %+v, %v", images, err)
+	}
+	if _, err := s.Image(ctx, 1); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an image of a conversation with none = %v, want not found", err)
+	}
+
+	for _, sha := range []string{"sha-a", "sha-b"} {
+		if err := s.AddMedia(ctx, sha); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetCaption(ctx, "sha-a", "a red square"); err != nil {
+		t.Fatal(err)
+	}
+	sent := func(at time.Time, parts ...Part) MessageID {
+		t.Helper()
+		m := &Message{Role: RoleUser, Parts: parts, CreatedAt: at}
+		if err := s.AddMessage(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+		return m.ID
+	}
+	first := sent(now, Part{Type: PartText, Text: "look"}, Part{Type: PartImage, SHA256: "sha-a", MIME: "image/jpeg"})
+	sent(now.Add(time.Minute), Part{Type: PartText, Text: "nothing to see"})
+	again := sent(now.Add(2*time.Minute),
+		Part{Type: PartImage, SHA256: "sha-b", MIME: "image/jpeg"},
+		Part{Type: PartImage, SHA256: "sha-a", MIME: "image/jpeg"})
+
+	images, err = s.Images(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type seen struct {
+		sha     string
+		message MessageID
+		caption string
+	}
+	var got []seen
+	for _, img := range images {
+		got = append(got, seen{img.SHA256, img.MessageID, img.Caption})
+	}
+	want := []seen{{"sha-b", again, ""}, {"sha-a", again, "a red square"}, {"sha-a", first, "a red square"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("images = %+v, want %+v", got, want)
+	}
+	if images[1].ID != images[2].ID || images[0].ID == images[1].ID {
+		t.Errorf("numbers = %d, %d, %d, want one for each file", images[0].ID, images[1].ID, images[2].ID)
+	}
+
+	// A number is the picture as it was first sent.
+	img, err := s.Image(ctx, images[1].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.MessageID != first || !img.SentAt.Equal(now) || img.Caption != "a red square" {
+		t.Errorf("image = %+v, want the one sent first", img)
 	}
 }
 

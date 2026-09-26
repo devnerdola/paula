@@ -51,10 +51,8 @@ func TestDefaults(t *testing.T) {
 	want := Engine{
 		Debounce:      Duration(2 * time.Second),
 		PrefillCancel: true,
-		SystemRatio:   0.5,
-		MemoryRatio:   0.5,
-		HistoryKeep:   0.5,
-		ImageMessages: 2,
+		SummaryRatio:  0.3,
+		HistoryRatio:  0.6,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
 		ToolRounds:    3,
@@ -173,13 +171,16 @@ func TestValidationErrors(t *testing.T) {
 		{"unknown role", strings.Replace(minimal, "  chat: chat\n", "  chat: chat\n  audio: chat\n", 1), "default_models.audio: unknown key"},
 		{"runners is not a mapping", "runners: [a, b]\ndefault_models:\n  chat: a\n", "runners: want a mapping"},
 		{"image max px", minimal + "\nengine:\n  image_max_px: -1\n", "engine.image_max_px: -1 is below zero"},
-		{"image messages", minimal + "\nengine:\n  image_messages: -1\n", "engine.image_messages: -1 is below zero"},
 		// What a picture costs is read back from what a host counted, not set:
 		// a key for it is one the file does not know.
 		{"image tokens", minimal + "\nengine:\n  image_tokens: 1000\n", "engine.image_tokens: unknown key"},
-		{"the whole context to the system message", minimal + "\nengine:\n  system_ratio: 1\n", "engine.system_ratio: 1 is not above 0 and below 1"},
-		{"no room for memories", minimal + "\nengine:\n  memory_ratio: 0\n", "engine.memory_ratio: 0 is not above 0 and at most 1"},
-		{"a fold that keeps everything", minimal + "\nengine:\n  history_keep: 1.5\n", "engine.history_keep: 1.5 is not above 0 and below 1"},
+		{"nothing left for the user input", minimal + "\nengine:\n  summary_ratio: 0.4\n  history_ratio: 0.6\n",
+			"engine.summary_ratio: 0.4 and engine.history_ratio: 0.6 leave nothing for the user input"},
+		{"a summary as large as the history", minimal + "\nengine:\n  summary_ratio: 0.4\n  history_ratio: 0.4\n",
+			"engine.summary_ratio: 0.4 is not below engine.history_ratio: 0.4"},
+		{"no summary", minimal + "\nengine:\n  summary_ratio: 0\n", "engine.summary_ratio: 0 is not above 0"},
+		{"no history", minimal + "\nengine:\n  history_ratio: -0.1\n", "engine.history_ratio: -0.1 is not above 0"},
+		{"system ratio", minimal + "\nengine:\n  system_ratio: 0.5\n", "engine.system_ratio: unknown key"},
 		{"log keep", minimal + "\nengine:\n  log_keep: -1\n", "engine.log_keep: -1 is below zero"},
 		{"no tool rounds", minimal + "\nengine:\n  tool_rounds: 0\n", "engine.tool_rounds: 0 is below one"},
 		{"bad duration", minimal + "\nengine:\n  debounce: soon\n", "engine.debounce: \"soon\" is not a duration"},
@@ -209,12 +210,12 @@ models:
 default_models:
   chat: b
 engine:
-  image_messages: -1
+  image_max_px: -1
 `)
 	if err == nil {
 		t.Fatal("Load succeeded")
 	}
-	for _, want := range []string{"models.a.runner", "models.a.id", "default_models.chat", "engine.image_messages"} {
+	for _, want := range []string{"models.a.runner", "models.a.id", "default_models.chat", "engine.image_max_px"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %q, want %q in it", err, want)
 		}

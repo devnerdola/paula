@@ -20,13 +20,9 @@ const (
 
 // Purposes a request can be sent for.
 const (
-	PurposeReply    = "reply"
-	PurposeCaption  = "caption"
-	PurposeMemories = "memories"
-	PurposeSummary  = "summary"
-	// PurposeCompaction is a summary written again from itself, with no
-	// messages added, because it outgrew the room it has.
-	PurposeCompaction = "compaction"
+	PurposeReply   = "reply"
+	PurposeCaption = "caption"
+	PurposeSummary = "summary"
 )
 
 // EntryID numbers the entries of the turn log.

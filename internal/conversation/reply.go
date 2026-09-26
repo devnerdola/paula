@@ -18,6 +18,10 @@ import (
 // choice and not a failure.
 var errNoModel = errors.New("no model is set")
 
+// errNoRoom says a turn's prompt is past the context while the history can
+// be compacted to make room for it, which the turn waits for.
+var errNoRoom = errors.New("the prompt is past the context, and the history is compacted to make room")
+
 // model is a configured model and what its runner says it can do.
 type model struct {
 	*runners.Configured
@@ -72,6 +76,20 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	messages, standing, err := e.prompt(ctx, a, m)
 	if err != nil {
 		return nil, err
+	}
+	// A prompt past the context is one the host refuses. A history that can
+	// be compacted makes room for the messages to answer, and the turn waits
+	// for that; a prompt still past it fails, saying why.
+	if over := e.excess(m, messages); over > 0 {
+		room, _ := e.reservations(m)
+		_, said, rest, err := e.history(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if room > 0 && coversUpto(said, rest) > 0 {
+			return nil, errNoRoom
+		}
+		return nil, fmt.Errorf("the prompt is about %d tokens past the %d the model's context holds", over, m.limit())
 	}
 
 	// written is the text of every round, as the frontends were sent it: they
@@ -135,9 +153,10 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			return nil
 		})
 
-		// What the host counted this prompt as is what a character costs on
-		// this model, whatever became of the reply.
-		if res != nil {
+		// What the host counted the prompt as is what a word costs on this
+		// model, whatever became of the reply. The rounds after the first
+		// carry calls and what they answered, which the history does not.
+		if res != nil && round == 1 {
 			e.costs.correct(m.Name, res.Usage.PromptTokens, messages, e.tools.text)
 		}
 
@@ -174,7 +193,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			// has its calls written down and left: what it wrote beside them
 			// is its answer.
 			for _, c := range res.ToolCalls {
-				e.call(ctx, a, rec.last, c, false)
+				e.call(ctx, a, rec.last, c, false, nil)
 			}
 			break
 		}
@@ -190,11 +209,12 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		}
 		messages = append(messages, asked(said.String(), res))
 		for _, c := range res.ToolCalls {
-			result := e.call(ctx, a, rec.last, c, true)
+			shown := pictures{sees: m.catalogue.Vision}
+			result := e.call(ctx, a, rec.last, c, true, &shown)
 			messages = append(messages, api.Message{
 				Role:       api.RoleTool,
 				ToolCallID: c.ID,
-				Parts:      []api.Part{{Type: api.PartText, Text: result}},
+				Parts:      e.answered(result, shown),
 			})
 		}
 		// A stop while a tool ran keeps what she had written before it.

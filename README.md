@@ -113,8 +113,7 @@ thrown away; the next `serve` answers the message you were waiting on.
 ## Looking at what happened
 
 `paula turns` lists what she did, newest first, with the tokens and the cost of
-each: a reply, a fold of the oldest of the conversation, or a summary written
-again.
+each: a reply, or a compaction of the history into the summary.
 
 ```
 ./paula turns
@@ -304,7 +303,7 @@ sent. A model none of them serves is sent nothing about caching, and reads her
 notes as system messages.
 
 An extension decides two things. The first is the role of her notes: the time
-before each message you send, and what she remembers. A system message is the
+told before each message you send. A system message is the
 role a model reads for what it is told rather than for what it answers. Some
 hosts move every system message ahead of the conversation, next to the card,
 where the times change the prompt on every reply and nothing of the
@@ -354,8 +353,8 @@ wrote. The other marks the last message the next reply sends again as it is,
 which is where the next reply finds what this one wrote: the time before the
 message she answers reads differently in the next prompt. Nothing else is
 marked. A request that also marked the message she was given before that one
-read nothing new once its cache had expired. A caption or a fold is marked
-nowhere, since no later request sends it again.
+read nothing new once its cache had expired. A caption or a compaction is
+marked nowhere, since no later request sends it again.
 
 A marker lasts an hour, the longest Anthropic keeps one. Texts are often more
 than five minutes apart, which the five-minute marker does not outlast.
@@ -416,12 +415,10 @@ that takes them.
 |---|---|---|
 | `debounce` | `2s` | how long a message waits before she starts writing |
 | `prefill_cancel` | `true` | a new message restarts a reply that has written nothing yet |
-| `system_ratio` | `0.5` | share of the context the system message may take; above 0 and below 1 |
-| `memory_ratio` | `0.5` | share of what is left of the system message, once the card is written, that memories may take; the summary takes the rest; above 0 and at most 1 |
-| `history_keep` | `0.5` | share of the messages' half of the context a fold leaves behind; above 0 and below 1 |
-| `image_messages` | `2` | how many of the latest messages that carry a picture send it as a picture |
+| `summary_ratio` | `0.3` | part of what the context leaves once the card and the tools are written that the summary is written to fill; above 0, and below `history_ratio` |
+| `history_ratio` | `0.6` | part of the same that the history may take before it is compacted into the summary; above 0, and together with `summary_ratio` below 1 |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
-| `log_keep` | `500` | how many entries keep the bodies of their requests; a fold is an entry of its own |
+| `log_keep` | `500` | how many entries keep the bodies of their requests; a compaction is an entry of its own |
 | `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; the round after them is asked for an answer with no call in it |
 
 ### Frontends
@@ -510,12 +507,18 @@ runs, and she writes on with what it answered. Only the kinds listed under
 `tools` are offered. While one runs, the frontend says what she is doing, such
 as `searching memories for Ana`.
 
+Her memories are never in her prompt, and neither are the pictures of messages
+the history no longer carries: the tools are how she reaches them. So each
+tool's description tells her what her prompt holds, what it does not, and
+which tool reaches what, at whatever length that takes.
+
 **`memory`** reaches what she remembers.
 
 | Tool | What she does with it |
 |---|---|
-| `search_memories` | looks for memories by the words they hold, in the card's language, past the newest ones her prompt carries; each comes with its number |
-| `remember` | keeps a lasting fact about you or about her as soon as it is said, rather than when a fold reaches it, in place of the memories she found it updates |
+| `list_memories` | lists every memory she kept, oldest first, each with its number and the day it was said |
+| `search_memories` | looks for memories by the words they hold, in the card's language; each comes with its number |
+| `remember` | keeps a lasting fact about you or about her, in place of the memories it updates, given by their numbers |
 | `forget_memory` | takes a memory away by its number, and the ones it replaced, when you ask her to |
 
 | Key | Default | Meaning |
@@ -530,7 +533,21 @@ tools:
 
 A memory she keeps is dated by the message she was answering, and a search
 finds it at once. The memories it replaces must still stand: a number that
-names none keeps nothing, and she is told so.
+names none keeps nothing, and she is told so. Nothing but these tools makes or
+changes a memory.
+
+**`images`** reaches the pictures you sent. It takes no settings.
+
+| Tool | What she does with it |
+|---|---|
+| `list_images` | lists every picture, newest first: its number, when it was sent, and what it showed |
+| `get_image` | looks at one picture again by its number: a model that sees images is sent the picture in the call's answer, and any other what it showed |
+
+```yaml
+tools:
+  memory:
+  images:
+```
 
 ## The character card
 
@@ -579,12 +596,10 @@ way a stop does: what she had written is kept, the error is said below it, and
 the message counts as answered.
 
 **The prompt is the conversation.** It opens with a system message: the card,
-then the summary of what came before. After it come the messages the summary
-does not cover, in order, each reply after what it answers. What she remembers
-is a system message of its own, just before the time of the message she is
-answering: it changes whenever she keeps or forgets something, and a host that
-cached the prompt still has everything before it when it does. It takes its
-share of the system message's room, as the summary does.
+then the summary of what came before. After it comes the history, the messages
+the summary does not cover, in order, each reply after what it answers, and last
+the time it is now and the message she is answering. Her memories are not in
+it: she reaches them with her tools.
 
 Each reply goes back with what she thought on the way to it, as the API sent
 it: the reasoning text, and on OpenRouter the details it sent beside it, which
@@ -593,38 +608,67 @@ back as one message, the round that wrote it, so the details are that round's;
 what the rounds before it thought went back with their calls. A model offered
 tools reads the thinking of every earlier reply, and one shown replies with no
 thinking learns to skip its own, or to leave it open and write the reply inside
-it. That thinking is part of the prompt, so it is counted against the context
-and folded away with the messages it belongs to.
+it. That thinking is part of the prompt, so it is counted with the history and
+compacted with the messages it belongs to.
 
-**The oldest of it is folded away.** The model's `context`, or the largest its
-catalogue reports, is split between that system message and the messages —
-`system_ratio` says how. When the messages outgrow their half, a fold runs in
-the background: it takes the oldest exchanges, asks the chat model for the
-lasting facts in them and for the summary written again with them added, and
-stores both together. It steps until what is left is `history_keep` of that
-half. Replies carry on while it works, and a fold that fails waits 30 seconds
-before the next try, doubling up to ten minutes.
+**Every part of the prompt has its reservation.** The card and the tools are
+written into every reply. What the model's `context`, or the largest its
+catalogue reports, leaves once they are written is shared by ratio: the summary
+is reserved `summary_ratio` of it, the history `history_ratio`, and the rest is
+the user input's, which is the message she is answering, its pictures, the
+rounds of tool calls, and her answer. With a context of 200,000 tokens, a card
+and tools of 10,000, and the default ratios, that is 57,000 for the summary,
+114,000 for the history and 19,000 for the user input. A model that can be the
+chat model and whose context the card and the tools fill on their own is
+refused when the conversation opens. Nothing has been counted then, so they are
+measured at a token a word, the least a word comes to.
 
-A memory is one sentence about you or about her, dated by the day it was said.
-Memories take `memory_ratio` of what is left of the system message once the
-card is written, newest first; the summary takes the rest. Nothing is thrown
-away: the conversation itself keeps every message, and `paula turns` shows
-every fold and what it asked.
+**The history is compacted when it overflows its reservation.** When a turn
+ends, the messages it answered and her reply join the history. If that takes the
+history past its reservation — its own, not the whole context — the turn itself
+still went out whole, since what took it over was in the user input's
+reservation. Right after it, the whole history, with the summary so far, is
+compressed into a new summary that fills the summary's whole reservation, and
+the next turn starts with an empty history. A reply she was writing when your
+next message arrived is newer than that message, so it is not compacted: it
+stays in the history with it. A compaction writes no memories: nothing but her
+tools does.
 
-**A summary past its room is written again.** Folding adds to it, so it grows.
-When it no longer fits what is left of the system message, she writes it again
-from itself, with nothing added, and it goes on covering the same messages.
-That follows a fold, in the same background work, and runs on its own when the
-messages are not due one. One that comes back no
-shorter is dropped, so the summary it was written from stands, and it waits
-like a failure rather than asking the same thing again.
+A compaction compresses the summary so far together with the history. At the
+default ratios that is three times as much text as the summary may take, so it
+has to shrink to a third. The compaction works that fraction out from the sizes
+and asks for everything at it: a part of 3,000 words is asked back in 1,000.
+Text that is already shorter than the summary may take is asked back at its own
+length, never longer: a history of pictures fills its reservation with what a
+host bills for them, and is written by what they showed.
 
-A card big enough to fill `system_ratio` of the context on its own leaves
-nothing for either: no memory is ever shown and the summary is never written
-again, however long it grows. `serve` says so at startup, at `warn`, with the
-card's size and the share it filled. It still runs — the prompt holds itself
-to the context by leaving the oldest exchanges out — but raise `system_ratio`,
-give the model a larger `context`, or write a shorter card.
+One request cannot always carry all of that and have the new summary written
+back within the context, so the text is cut into parts, in order. There are as
+few parts as fit a request together with what the model writes back, and no
+part asks for more than the model writes in one answer: what its catalogue
+says, or `output.max_tokens` when that is less. A part the model stops writing
+at that limit has lost the end of what it summarises, so the compaction fails.
+The parts are sent at once, so a compaction takes as long as its slowest part,
+and what they wrote, in order, is the new summary. A model does not keep to the
+words it is asked for, and a summary it wrote past its reservation is written
+again on its own. The summary so far is compressed again with each compaction,
+so what is older ends compressed more than what is recent.
+
+A compaction goes on beside the conversation, so once her reply is done you can
+write again while it runs. A message that arrives while the history is being
+compacted waits for it, since its prompt needs the compacted history, and
+`/stop` ends that wait while the compaction goes on. A compaction that fails is
+said the way a failed reply is, with the host's error, and the history stays as
+it was; your next message has it compacted again before its turn. Nothing is
+thrown away: the conversation itself keeps every message, and `paula turns`
+shows every compaction and what it asked.
+
+**A prompt past the context is not sent.** A message longer than the user
+input's reservation can take a prompt past the model's context, and the host
+refuses that. A turn measured past it waits for the history to be compacted to
+make room, and a turn still past it fails, saying so. This holds once a prompt
+of the model has been counted: until then a word counts high on purpose, and a
+prompt held back on that count would never be counted.
 
 **Memories are found by their words.** SQLite keeps an index of the words each
 memory holds, and a search returns the ones that hold any word of the question,
@@ -638,26 +682,37 @@ search looks past the two names, and past the single letters an apostrophe
 leaves of a word, as the s of "Caio's". A question of nothing but names is
 answered with why it finds nothing.
 
-**What still does not fit is left out.** Past the context, the oldest exchanges
-of the prompt are dropped — the messages you sent since her previous reply, and
-that reply, go together, so she is never shown an answer without the messages
-it answered. What she is answering now is sent whatever it takes.
+Measuring means counting tokens, which only the host can do exactly, and it
+counts every prompt a reply sends. Paula counts words and turns them into tokens
+at a rate read off those counts, per model.
 
-Measuring means counting tokens, which only the host can do exactly. Paula
-starts at a token every 3.5 characters, which counts a little high, and
-corrects it per model from the count an answer comes back with.
+A word does not cost the same in every prompt. A history of short messages, each
+with a time before it, came to about 2.1 tokens a word on one model, and the
+card with a summary to about 1.3. So the rate is the most the prompts of the
+run have come to, and a prompt that comes to less leaves it where it was: a
+mistake makes the history compacted a little early rather than a prompt too
+long. A prompt that comes to more is taken only once the next one comes to
+more as well, and then at the lower of the two, so one prompt that is an
+exception does not set the rate for the rest of the run. The rate rises a reply
+late, which the user input's reservation leaves room for.
+
+Only the first round of a reply is read: the rounds after it carry the calls it
+made and what they answered, which the history never does. A run starts at
+three tokens a word, more than any prompt has come to, until its first reply is
+counted; a run that starts on a history near its reservation has it compacted
+before its first turn. A compaction's count is not used: it carries the
+conversation as a transcript, not as a reply does.
 
 A picture is counted the same way. A host bills one by how big it is, and each
 host by its own reckoning — tiles for one, pixels for another — so there is no
 number that is right for all of them and none to set in the file. Paula starts
 at 1000 tokens a picture, which is high for the size she stores them at, and
-reads what one really costs off the same count: a prompt that carried pictures
-says nothing about characters, since the pictures are in the count and not in
-them, but what is left of that count once the characters are paid for is what
-the pictures came to.
-
-Both numbers are the model's own, and both are what a fold weighs an exchange
-by, since what a fold decides is what a prompt can carry.
+reads what one really costs off the counts of two prompts in a row: when the
+second carries a picture more and at least the words of the first, the two
+counts give what a word and a picture cost. After that, what a word costs is
+read off every prompt less its pictures. Until then, a model that sees counts
+its pictures as part of the words, which errs high: it carries the pictures of
+the recent messages in every prompt, so none of its prompts is words alone.
 
 **The time is told, not written into a message.** Before each message of yours
 stands a message of its own: `The next message was sent at Saturday, 19
@@ -678,12 +733,13 @@ name is the card's `id` and what the request is for. `paula turns` shows how
 much of each prompt a host had cached and how much it wrote to the cache, as
 each API reports it.
 
-**Pictures are described once.** She accepts JPEG, PNG, GIF and WebP up to 64
+**Pictures are kept twice.** She accepts JPEG, PNG, GIF and WebP up to 64
 megapixels. Each one is scaled to `image_max_px`, turned upright by its EXIF
-orientation and kept as JPEG in `media/`. The `vision` model describes a
-picture the first time it is used, and that description stays in the
-conversation for good. Recent pictures also go to the chat model itself, when
-it can see them.
+orientation and kept as JPEG in `media/`, and the `vision` model describes it
+the first time it is used; both stay for good, whatever the chat model can do,
+so any model you switch to can be served it. A chat model that sees images is
+sent every picture its prompt carries as the picture, never its description in
+its place; any other is sent the description.
 
 **Slow APIs are visible.** Any request still waiting after five seconds is
 logged at `warn`, which the default level shows, with its runner and its URL.
@@ -742,9 +798,33 @@ The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
 which request each file came from.
 
-One test asks a real model whether its cache works, and runs only when
-`PAULA_LIVE` names a configuration file. It keeps the conversation in a
-directory of its own, never in the file's `data_dir`. It sends
+Three tests run against real models, and only when `PAULA_LIVE` names a
+configuration file. Each reads the keys the environment holds, as `serve` does.
+
+```
+PAULA_LIVE=live.yaml go test ./internal/conversation -run '^TestLive$' -v -timeout 3h
+```
+
+The first holds the conversation to the file's default chat and vision
+models, at the context the file gives the chat model. It goes through months
+of ordinary texting in `internal/conversation/testdata`, which covers contexts
+up to about 200,000 tokens; a larger model's `context` holds it there.
+
+The test runs Paula three times. The first run, after the first day of that
+past, asks her to remember something and sends a picture. Before each of the
+other two runs, as much more of the past is written as the history's
+reservation holds, measured at the most a word has cost in the runs before.
+Each of those runs starts counting a word higher than that, finds the history
+past its reservation, and compacts it before its first turn, whose messages
+wait for it; the second of them compresses the summary so far with it. The
+last one then asks for her memories and for the picture again.
+
+Everything goes to a data directory of its own, which is kept, with a
+`report.md` of every check, what it expected and what it found, the requests
+that show it, and what each request sent, was cached and cost.
+
+The second asks a model whether its cache works. It keeps the conversation in
+a directory of its own, never in the file's `data_dir`. It sends
 `PAULA_LIVE_TURNS` messages (4 by default) to the chat model, or to the model
 `PAULA_LIVE_MODEL` names. Some reply after the first has to read the cache, and
 from that one on each has to read at least as much as the one before, ending
@@ -754,8 +834,22 @@ Set the wait past how long the model's cache lasts:
 
 ```
 OPENROUTER_API_KEY=… PAULA_LIVE=scratch/paula.yaml PAULA_LIVE_CACHE_WAIT=6m \
-  go test ./internal/conversation -run TestLive -v -timeout 30m
+  go test ./internal/conversation -run TestLiveTheCache -v -timeout 30m
 ```
 
 `-v` prints how much each round of every reply read from the cache and wrote to
 it, and the reply itself, which shows whether a model read her notes as notes.
+
+The third holds what a word costs to what the host counts. It sends ten texts
+to the chat model, one asking her to keep something and one asking for it, so
+some replies run a tool. A model that sees gets a picture with the second
+text, and the first round of that reply has to give what a picture costs.
+Every reply's rate has to be its first round's count, less its pictures, over
+that round's words, and the rate kept has to be the most two replies in a row
+came to. It keeps its data directory, with a `report.md` of what every round
+was counted at:
+
+```
+OPENROUTER_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
+  go test ./internal/conversation -run TestLiveTheRate -v -timeout 20m
+```

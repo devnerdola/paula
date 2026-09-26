@@ -343,54 +343,40 @@ type notesAsUser struct{}
 func (notesAsUser) Notes() api.Notes                     { return api.Notes{Role: api.RoleUser} }
 func (notesAsUser) Body(map[string]any, api.ChatRequest) {}
 
-// A model whose family reads her notes as user messages is sent them in that
-// role, the times and what she remembers alike, and is told right after the
-// card that they come from the app rather than from Caio.
+// A model whose family reads her notes as user messages is sent the times in
+// that role, and is told right after the card that they come from the app
+// rather than from Caio.
 func TestHerNotesAreToldInTheRoleTheModelsFamilyGivesThem(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hello")}
 	set := setup(f)
 	set.Models[0].Settings.Extension = notesAsUser{}
 	r := openReplyWith(t, f, set)
-	ctx := context.Background()
 	r.say(t, "hey")
-	first, err := r.store.MessagesAfter(ctx, 0)
-	if err != nil || len(first) == 0 {
-		t.Fatalf("messages = %+v, %v", first, err)
-	}
-	if err := r.store.Remember(ctx, &store.Memory{
-		Content: "Caio started learning the guitar this week.", Source: first[0].ID,
-	}); err != nil {
-		t.Fatal(err)
-	}
 	r.say(t, "you there?")
 
 	var shape []string
 	for _, m := range f.asked().Messages {
 		shape = append(shape, m.Role+": "+text(m))
 	}
-	if len(shape) != 7 {
-		t.Fatalf("the prompt is\n%s\n\nwant the card and six messages", strings.Join(shape, "\n"))
+	if len(shape) != 6 {
+		t.Fatalf("the prompt is\n%s\n\nwant the card and five messages", strings.Join(shape, "\n"))
 	}
 	told := "Some messages come from the app you and Caio text through, not from Caio: " +
-		"the one before each of Caio's messages saying when it was sent, the one saying what time it is now, " +
-		"and the one listing what you remember. They are for you to know, never to answer."
+		"the one before each of Caio's messages saying when it was sent, " +
+		"and the one saying what time it is now. They are for you to know, never to answer."
 	if !strings.HasPrefix(shape[0], "system: You are Paula, texting with Caio.") || !strings.HasSuffix(shape[0], "\n\n"+told) {
 		t.Errorf("the system message is %q, want the card and then %q", shape[0], told)
 	}
-	for i, want := range []string{
+	want := []string{
 		"user: The next message was sent at Wednesday, 16 September 2026, 22:22 UTC+02:00.",
 		"user: hey",
 		"assistant: hello",
-		"user: What you remember from your conversations with Caio, oldest first:",
 		"user: It is now Wednesday, 16 September 2026, 22:22 UTC+02:00.",
 		"user: you there?",
-	} {
-		if !strings.HasPrefix(shape[i+1], want) {
-			t.Errorf("message %d is %q, want %q", i+1, shape[i+1], want)
-		}
 	}
-	if !strings.Contains(shape[4], "Caio started learning the guitar this week.") {
-		t.Errorf("what she remembers is %q, want the memory in it", shape[4])
+	if got := shape[1:]; !slices.Equal(got, want) {
+		t.Errorf("the prompt after the card is\n%s\n\nwant\n%s",
+			strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -433,8 +419,8 @@ func TestAPromptThatTellsTheLastTimeAsSentStartsTheNext(t *testing.T) {
 		t.Errorf("the message she answers is told after %q, want when it was sent", got)
 	}
 	told := "Some messages come from the app you and Caio text through, not from Caio: " +
-		"the one before each of Caio's messages saying when it was sent, " +
-		"and the one listing what you remember. They are for you to know, never to answer."
+		"the one before each of Caio's messages saying when it was sent. " +
+		"They are for you to know, never to answer."
 	if card := text(last[0]); !strings.HasSuffix(card, "\n\n"+told) {
 		t.Errorf("the system message is %q, want the card and then %q", card, told)
 	}
@@ -883,7 +869,10 @@ func TestAnImageIsDescribedByItsCaption(t *testing.T) {
 	}
 }
 
-func TestOnlyTheLatestImagesAreSent(t *testing.T) {
+// A model that sees images is sent every picture its prompt carries as the
+// picture, however many there are and however old: none is ever replaced by
+// what it showed.
+func TestAModelThatSeesIsSentEveryPicture(t *testing.T) {
 	model := chatModel()
 	model.Vision = true
 	f := &fakeRunner{model: model, chat: says("nice")}
@@ -892,8 +881,8 @@ func TestOnlyTheLatestImagesAreSent(t *testing.T) {
 	sendPhoto(t, r, "one", photo(t))
 	sendPhoto(t, r, "two", photo(t))
 	sendPhoto(t, r, "three", photo(t))
+	r.say(t, "and now?")
 
-	// engine.image_messages is 2, so the oldest of the three is described.
 	var sent, described int
 	for _, m := range f.asked().Messages[1:] {
 		if len(images(m)) > 0 {
@@ -903,8 +892,8 @@ func TestOnlyTheLatestImagesAreSent(t *testing.T) {
 			described++
 		}
 	}
-	if sent != 2 || described != 1 {
-		t.Errorf("%d photos sent and %d described, want 2 and 1", sent, described)
+	if sent != 3 || described != 0 {
+		t.Errorf("%d photos sent and %d described, want all 3 sent", sent, described)
 	}
 }
 

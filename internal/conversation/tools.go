@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"nerdola.dev/x/paula/internal/media"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 	toolsapi "nerdola.dev/x/paula/internal/tools/api"
@@ -41,8 +42,9 @@ var errNotRun = errors.New("not run: the reply had taken every round of calls it
 
 // call runs one tool a model asked for, and is what the model is sent back.
 // Whatever came of it is written down under the reply's entry and the request
-// that asked, a call that could not run among them.
-func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.ToolCall, run bool) string {
+// that asked, a call that could not run among them. The pictures it shows are
+// added to shown, which is nil for a call that is not run.
+func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.ToolCall, run bool, shown *pictures) string {
 	rec := &store.ToolCall{
 		EntryID:   a.entry.ID,
 		RequestID: request,
@@ -58,7 +60,7 @@ func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.Tool
 		e.log.Error("keeping a tool call", "entry", a.entry.ID, "error", err)
 	}
 
-	result, err := e.run(ctx, a, c, run)
+	result, err := e.run(ctx, a, c, run, shown)
 	if err != nil {
 		rec.Error = err.Error()
 		result = "error: " + rec.Error
@@ -74,7 +76,7 @@ func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.Tool
 }
 
 // run is a call itself: the tool it names, held to the arguments it gives.
-func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool) (string, error) {
+func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool, shown *pictures) (string, error) {
 	if !run {
 		return "", errNotRun
 	}
@@ -92,20 +94,66 @@ func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool) 
 	// From here the reply has done something, whatever the tool answers: a
 	// call that named no tool, or gave no arguments one could read, did not.
 	a.acted = true
-	return tool.Call(ctx, env{e: e, a: a}, args)
+	return tool.Call(ctx, env{e: e, a: a, shown: shown}, args)
 }
 
-// env is what a call reaches of the conversation: the engine, and the reply
-// that asked for it.
+// pictures are the pictures a call showed, which go to the model in its
+// answer, and whether the model sees them.
+type pictures struct {
+	sees   bool
+	images [][]byte
+}
+
+// answered is what a call answered as the model is sent it: the text, and the
+// pictures it showed.
+func (e *Engine) answered(result string, p pictures) []api.Part {
+	out := []api.Part{{Type: api.PartText, Text: result}}
+	for _, data := range p.images {
+		out = append(out, api.Part{Type: api.PartImage, MIME: media.MIMEJPEG, Data: data})
+	}
+	return out
+}
+
+// env is what a call reaches of the conversation: the engine, the reply that
+// asked for it, and the pictures the call shows.
 type env struct {
-	e *Engine
-	a *attempt
+	e     *Engine
+	a     *attempt
+	shown *pictures
 }
 
 func (v env) Date(t time.Time) string { return dateText(v.e.clock.Now().Location(), t) }
 
+func (v env) Time(t time.Time) string { return timeText(v.e.clock.Now().Location(), t) }
+
 func (v env) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
 	return v.e.Memories(ctx, query, limit)
+}
+
+func (v env) AllMemories(ctx context.Context) ([]store.Memory, error) {
+	return v.e.store.Memories(ctx)
+}
+
+func (v env) Images(ctx context.Context) ([]store.Image, error) { return v.e.store.Images(ctx) }
+
+func (v env) Image(ctx context.Context, id int64) (*store.Image, error) {
+	return v.e.store.Image(ctx, id)
+}
+
+// Show sends a picture in the call's answer, to a model that sees images: any
+// other, and one whose file cannot be read, has what it showed in the
+// answer's text.
+func (v env) Show(img store.Image) bool {
+	if v.shown == nil || !v.shown.sees {
+		return false
+	}
+	data, err := v.e.media.Load(img.SHA256)
+	if err != nil {
+		v.e.log.Warn("reading an image", "sha256", img.SHA256, "error", err)
+		return false
+	}
+	v.shown.images = append(v.shown.images, data)
+	return true
 }
 
 // Remember keeps a memory as said in the newest message the reply answers,

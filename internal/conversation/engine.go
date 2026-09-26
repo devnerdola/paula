@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/media"
@@ -52,12 +51,6 @@ type attempt struct {
 	// entry is what is written down of it, and what says which messages it is
 	// answering and where they were sent from.
 	entry *store.Entry
-	// foldDue says the messages this attempt's prompt carried took more than
-	// their share of the context, and compactDue that the summary it opened
-	// with took more than its room. The goroutine building the prompt is the
-	// one that knows; the loop reads them once the attempt is done.
-	foldDue    bool
-	compactDue bool
 	// acted says the reply has run a tool, which stands whatever becomes of
 	// the reply. The goroutine writing it sets it; the loop reads it once the
 	// attempt is done.
@@ -164,12 +157,12 @@ type Engine struct {
 	log      *slog.Logger
 	events   *events
 	tools    tools
-	// costs are what a character and a picture of a prompt come to, which every
-	// request that comes back counted says more about.
+	// costs are what a word and a picture of a prompt come to, which every
+	// reply that comes back counted says more about.
 	costs costs
 	// captions are what a picture is written as once something has described
 	// it, which never changes again. Every prompt carries the pictures of the
-	// messages it holds, and a fold weighs the same ones a second time.
+	// messages it holds, and measuring the history weighs the same ones again.
 	captions sync.Map
 
 	posts     chan postRequest
@@ -274,11 +267,12 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		ended:     make(chan struct{}),
 	}
 	e.base = context.WithoutCancel(ctx)
+	if err := e.holdCard(ctx); err != nil {
+		return nil, nil, err
+	}
 	if err := e.recover(ctx); err != nil {
 		return nil, nil, err
 	}
-
-	e.checkRoom(ctx)
 
 	// The loop's state is built before the loop runs, so a caller that posts
 	// or waits as soon as Open returns finds it ready.
@@ -291,8 +285,8 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 }
 
 // runEnded is what an entry ends with when the run stopped before the reply
-// did, and workEnded the same of an entry that answers no message: a fold, or
-// a summary written again.
+// did, and workEnded the same of an entry that answers no message: a
+// compaction.
 const (
 	runEnded  = "the run ended before the reply did"
 	workEnded = "the run ended before it was done"
@@ -462,32 +456,15 @@ type loop struct {
 	pending  bool
 	waiters  []chan Seq
 
-	// keeping is the work that holds the prompt to the context. It runs beside
-	// the loop, and waits after a failure before it is tried again.
-	keeping work
-}
-
-// work is one piece of background work: whether it is out, how to cut it short,
-// and when the next try may start. A piece that failed waits, doubling up to
-// foldMost, since a host that refused one step refuses the next.
-type work struct {
-	out    bool
-	cancel context.CancelFunc
-	wait   time.Duration
-	after  time.Time
-}
-
-// due reports whether this piece may start now: nothing of it is out, and
-// whatever wait its last failure earned is over.
-func (w *work) due(now time.Time) bool {
-	return !w.out && !now.Before(w.after)
-}
-
-// start marks the piece as out and returns the context it runs under.
-func (w *work) start(ctx context.Context) context.Context {
-	ctx, cancel := context.WithCancel(ctx)
-	w.out, w.cancel = true, cancel
-	return ctx
+	// compacting says the history is being measured against its reservation,
+	// and compacted when it has passed it, beside the loop; cancel cuts that
+	// short. waiting says a turn is due and waits for it to end. unchecked
+	// says the history has not been measured since the run started or since a
+	// compaction failed, so the next turn has it measured first.
+	compacting bool
+	cancel     context.CancelFunc
+	waiting    bool
+	unchecked  bool
 }
 
 func (l *loop) run() {
@@ -511,13 +488,14 @@ func (l *loop) run() {
 				}
 				l.finish(ctx, req)
 			}
-			// Work behind a reply is cut short by the run ending, and what it
-			// had written stands: the entry it left says how far it got.
-			if l.keeping.out {
-				l.keeping.cancel()
-				l.take(<-e.worked)
+			// A compaction is cut short by the run ending, and what it had
+			// written stands: the entry it left says how far it got.
+			if l.compacting {
+				l.cancel()
+				<-e.worked
+				l.compacting = false
 			}
-			l.pending = false
+			l.pending, l.waiting = false, false
 			l.wake()
 			return
 
@@ -548,61 +526,59 @@ func (l *loop) run() {
 			l.finish(ctx, req)
 
 		case err := <-e.worked:
-			l.take(err)
+			l.compacted(ctx, err)
 		}
 	}
 }
 
-// take marks the work as no longer out. What it failed at sets how long the
-// next try waits.
-func (l *loop) take(err error) {
-	w := &l.keeping
-	w.out, w.cancel = false, nil
-	w.wait, w.after = l.waitAfter(w.wait, err, "keeping the conversation inside the context")
-}
-
-// waitAfter is how long the next try of one piece of work waits, and the time
-// it may start at. Work that did not fail waits for nothing.
-func (l *loop) waitAfter(was time.Duration, err error, what string) (time.Duration, time.Time) {
-	if err == nil || errors.Is(err, context.Canceled) {
-		return 0, time.Time{}
-	}
-	wait := min(max(2*was, foldWait), foldMost)
-	l.e.log.Warn(what, "error", err, "next try in", wait)
-	return wait, l.e.clock.Now().Add(wait)
-}
-
-// behind starts the work that runs behind a reply. It runs beside the loop, so
-// the conversation answers while it works.
-func (l *loop) behind(ctx context.Context, a *attempt) {
-	// Keeping the prompt inside the context is due when the prompt that just
-	// went out says so: the messages took more than their share, or the summary
-	// took more than its room.
-	if (a.foldDue || a.compactDue) && l.keeping.due(l.e.clock.Now()) {
-		l.keep(ctx, a.foldDue)
-	}
-}
-
-// keep starts the work that holds the prompt to the context.
-func (l *loop) keep(ctx context.Context, fold bool) {
+// compact measures the history against its reservation beside the loop, and
+// compacts it when it has passed it, or when room says a turn needs the room
+// it takes.
+func (l *loop) compact(ctx context.Context, room bool) {
 	e := l.e
-	ctx = l.keeping.start(ctx)
-	cancel := l.keeping.cancel
+	ctx, cancel := context.WithCancel(ctx)
+	l.compacting, l.cancel = true, cancel
 	go func() {
 		defer cancel()
-		// A fold is what makes the summary longer, so the summary is written
-		// again after it rather than before. One the messages are not due takes
-		// exchanges that are still inside their share and adds them to the very
-		// summary that has outgrown its room.
-		var err error
-		if fold {
-			err = e.fold(ctx)
-		}
+		m, err := e.roleModel(ctx, config.RoleChat)
 		if err == nil {
-			err = e.compact(ctx)
+			over := room
+			if !over {
+				over, err = e.overflowed(ctx, m)
+			}
+			if err == nil && over {
+				err = e.compact(ctx, m)
+			}
 		}
 		e.worked <- err
 	}()
+}
+
+// compacted takes what a compaction came to. A turn that waited for it starts;
+// one that failed is said the way a failed reply is, and the turn it held is
+// left to the next input, which has the history measured again first.
+func (l *loop) compacted(ctx context.Context, err error) {
+	e := l.e
+	l.compacting, l.cancel = false, nil
+	if err != nil {
+		l.unchecked = true
+		e.log.Warn("compacting the history", "error", err)
+		e.events.publish(Event{Kind: ReplyFailed, Channel: l.channel, Text: err.Error()})
+		l.waiting = false
+		l.wake()
+		return
+	}
+	l.unchecked = false
+	if l.waiting {
+		l.waiting = false
+		// A message that arrived while the turn waited has a wait of its own,
+		// which begins the turn once it is over.
+		if !l.pending {
+			l.begin(ctx)
+		}
+		return
+	}
+	l.wake()
 }
 
 // start picks the conversation up where it was left.
@@ -636,7 +612,9 @@ func (l *loop) start(ctx context.Context) error {
 			l.debounce.Reset(e.cfg.Debounce.Duration())
 		}
 	}
-
+	// A run starts with the history as the last one left it, which nothing has
+	// measured against this run's reservation.
+	l.unchecked = true
 	return nil
 }
 
@@ -677,7 +655,7 @@ func (l *loop) stop(ctx context.Context) stopResult {
 		l.running.end(stopped)
 		return stopResult{stopped: true}
 	}
-	if !l.pending {
+	if !l.pending && !l.waiting {
 		return stopResult{}
 	}
 
@@ -685,7 +663,7 @@ func (l *loop) stop(ctx context.Context) stopResult {
 	// messages waiting for a reply with nothing: what has been answered is read
 	// back from the entries, so a stop that left none would be answered again by
 	// the next run.
-	l.pending = false
+	l.pending, l.waiting = false, false
 	l.debounce.Stop()
 	now := l.e.clock.Now()
 	entry := &store.Entry{
@@ -707,9 +685,21 @@ func (l *loop) stop(ctx context.Context) stopResult {
 	return stopResult{stopped: true}
 }
 
-// begin starts an entry for the messages that have no reply yet.
+// begin starts an entry for the messages that have no reply yet. Its prompt
+// needs the history within its reservation, so a turn waits for a compaction
+// that is running, and has the history measured first when nothing has since
+// the run started or since a compaction failed.
 func (l *loop) begin(ctx context.Context) {
 	e := l.e
+	if l.compacting {
+		l.waiting = true
+		return
+	}
+	if l.unchecked {
+		l.waiting = true
+		l.compact(ctx, false)
+		return
+	}
 	entry := &store.Entry{
 		Channel:        l.channel,
 		AfterMessageID: l.answered,
@@ -764,24 +754,38 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 	if cutShort {
 		status = store.StatusStopped
 	}
+	// A turn whose prompt is past the context is begun again once the history
+	// is compacted to make room for it.
+	room := status == store.StatusFailed && errors.Is(r.err, errNoRoom)
+	if room {
+		status = store.StatusRestarted
+	}
 
 	a.entry.Status = status
 	a.entry.EndedAt = e.clock.Now()
-	if r.err != nil && (status == store.StatusFailed || cutShort) {
+	if r.err != nil && (status == store.StatusFailed || cutShort || room) {
 		a.entry.Error = r.err.Error()
 	}
 	e.endEntry(ctx, a.entry)
 	e.log.Info("entry ended", "entry", a.entry.ID,
 		"status", status, "duration", a.entry.EndedAt.Sub(a.entry.StartedAt))
 
-	// However the reply ended, its prompt is what says whether the messages
-	// have outgrown their share. One that failed for being too long is the
-	// case a fold is most needed in.
-	l.behind(ctx, a)
+	// A turn that answered its messages added them and its reply to the
+	// history, which is measured against its reservation right after it, and
+	// compacted if it has passed it: what took it over went out in the user
+	// input's reservation.
+	if status == store.StatusDone || status == store.StatusStopped {
+		l.compact(ctx, false)
+	}
 
 	switch status {
 	case store.StatusRestarted:
 		e.events.publish(Event{Kind: ReplyRestarted, Entry: a.entry.ID, Channel: a.entry.Channel})
+		if room {
+			l.waiting = true
+			l.compact(ctx, true)
+			return
+		}
 	case store.StatusStopped:
 		l.answered = max(l.answered, a.entry.UptoMessageID)
 		if cutShort {
@@ -852,9 +856,11 @@ func (e *Engine) endEntry(ctx context.Context, entry *store.Entry) {
 	}
 }
 
-// idle reports whether nothing is being written and nothing is waiting to be.
+// idle reports whether nothing is being written or waiting to be. A compaction
+// no turn waits for is not something being written: it goes on beside the
+// conversation, and the next turn waits for it.
 func (l *loop) idle() bool {
-	return l.running == nil && !l.pending
+	return l.running == nil && !l.pending && !l.waiting
 }
 
 // wake answers every Wait, once there is nothing left pending.

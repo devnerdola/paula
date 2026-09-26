@@ -13,7 +13,7 @@ import (
 )
 
 // Summary is what she has been told of the conversation before the messages a
-// prompt still carries, and nil while it has never been folded.
+// prompt still carries, and nil while it has never been compacted.
 func (e *Engine) Summary(ctx context.Context) (*store.Summary, error) {
 	return e.summary(ctx)
 }
@@ -25,8 +25,7 @@ func (e *Engine) Forget(ctx context.Context, id store.MemoryID) ([]store.Memory,
 }
 
 // Memories are the memories that hold the words of a query, or the newest ones
-// when there is no query. They are what she has been told, whether or not a
-// prompt had room to tell her.
+// when there is no query.
 func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
 	return SearchMemories(ctx, e.store, e.persona, query, limit)
 }

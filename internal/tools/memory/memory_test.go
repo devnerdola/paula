@@ -30,10 +30,20 @@ type fakeEnv struct {
 
 func (f *fakeEnv) Date(t time.Time) string { return t.UTC().Format("2 Jan") }
 
+func (f *fakeEnv) Time(t time.Time) string { return t.UTC().Format("2 Jan 15:04") }
+
 func (f *fakeEnv) Memories(_ context.Context, query string, limit int) ([]store.Memory, error) {
 	f.searched, f.query, f.limit = true, query, limit
 	return f.memories, nil
 }
+
+func (f *fakeEnv) AllMemories(context.Context) ([]store.Memory, error) { return f.memories, nil }
+
+func (f *fakeEnv) Images(context.Context) ([]store.Image, error) { return nil, nil }
+
+func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return nil, store.ErrNotFound }
+
+func (f *fakeEnv) Show(store.Image) bool { return false }
 
 func (f *fakeEnv) Remember(_ context.Context, content string, replaces []store.MemoryID) (*store.Memory, error) {
 	f.kept, f.replaces = content, replaces
@@ -116,6 +126,30 @@ func TestASearchAnswersWithTheNumberAndTheDayOfEachMemory(t *testing.T) {
 	}
 }
 
+// Every memory is listed, with the number it is forgotten by and the day it was
+// said, and a conversation that has none says so.
+func TestAListIsEveryMemory(t *testing.T) {
+	e := env()
+	e.memories = nil
+	if got, err := call(t, "list_memories", e, `{}`); err != nil || got != "no memories yet" {
+		t.Errorf("listing no memories answered %q, %v", got, err)
+	}
+
+	e = env()
+	got, err := call(t, "list_memories", e, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon.\n" +
+		"#7 (said on 20 Sep) Ana visits in December."
+	if got != want {
+		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
+	}
+	if e.searched {
+		t.Error("listing searched the memories")
+	}
+}
+
 func TestNothingToRememberIsNotKept(t *testing.T) {
 	e := env()
 	if _, err := call(t, "remember", e, `{"memory":" "}`); err == nil {
@@ -173,6 +207,7 @@ func TestForgettingAMemorySaysWhatWent(t *testing.T) {
 // What is shown while a call runs says what it was asked.
 func TestEachCallSaysWhatItIsDoing(t *testing.T) {
 	for _, tc := range []struct{ name, args, want string }{
+		{"list_memories", `{}`, "listing memories"},
 		{"search_memories", `{"query":"Ana"}`, "searching memories for Ana"},
 		{"remember", `{"memory":"Ana lives in Lisbon."}`, "remembering: Ana lives in Lisbon."},
 		{"forget_memory", `{"id":3}`, "forgetting memory #3"},
@@ -183,19 +218,26 @@ func TestEachCallSaysWhatItIsDoing(t *testing.T) {
 	}
 }
 
-// A model is told who a memory is about and what it is written in by the card,
-// the same way a fold is.
+// A model is told who a memory is about and what it is written in by the card.
+// Memories are never in its prompt, so the tools that reach them say so, and
+// name the tools it has them by.
 func TestAToolIsDescribedByTheCard(t *testing.T) {
 	d := tool(t, "remember").Definition().Description
-	for _, want := range []string{"Caio", "Paula", "Portuguese"} {
+	for _, want := range []string{"Caio", "Paula", "Portuguese", "not in your prompt", "list_memories", "search_memories"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("remember is described as %q, without %q", d, want)
 		}
 	}
-	for _, name := range []string{"search_memories", "forget_memory"} {
-		if d := tool(t, name).Definition().Description; !strings.Contains(d, "Caio") {
-			t.Errorf("%s is described as %q, without who it is about", name, d)
+	for _, name := range []string{"list_memories", "search_memories"} {
+		d := tool(t, name).Definition().Description
+		for _, want := range []string{"Caio", "not in your prompt", "remember", "forget_memory"} {
+			if !strings.Contains(d, want) {
+				t.Errorf("%s is described as %q, without %q", name, d, want)
+			}
 		}
+	}
+	if d := tool(t, "forget_memory").Definition().Description; !strings.Contains(d, "Caio") {
+		t.Errorf("forget_memory is described as %q, without who it is about", d)
 	}
 	// A search looks for words, and the memories hold them in that language.
 	var params struct {
@@ -248,8 +290,9 @@ func TestASearchAnswersWithAsManyAsTheFileSays(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	i := slices.IndexFunc(tools, func(t api.Tool) bool { return t.Definition().Name == "search_memories" })
 	e := env()
-	if _, err := tools[0].Call(context.Background(), e, json.RawMessage(`{"query":"Ana"}`)); err != nil {
+	if _, err := tools[i].Call(context.Background(), e, json.RawMessage(`{"query":"Ana"}`)); err != nil {
 		t.Fatal(err)
 	}
 	if e.limit != 3 {

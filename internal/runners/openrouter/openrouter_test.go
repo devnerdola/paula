@@ -103,6 +103,9 @@ func TestCatalogue(t *testing.T) {
 	if m.Context != 1048576 {
 		t.Errorf("%s has context %d, want the listing's", m.ID, m.Context)
 	}
+	if m.Output != 943718 {
+		t.Errorf("%s writes at most %d, want the listing's", m.ID, m.Output)
+	}
 	if !slices.Equal(m.Efforts, []string{"low", "high", "max"}) {
 		t.Errorf("%s efforts = %v, want the listing's in the documented order", m.ID, m.Efforts)
 	}
@@ -912,8 +915,8 @@ func TestAListingThatSaysLittle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Context != 0 {
-		t.Errorf("context = %d, want none given", m.Context)
+	if m.Context != 0 || m.Output != 0 {
+		t.Errorf("context = %d, output = %d, want neither given", m.Context, m.Output)
 	}
 	if m.Parameters != nil {
 		t.Errorf("parameters = %v, want none listed", m.Parameters)
