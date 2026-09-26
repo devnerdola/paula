@@ -618,7 +618,7 @@ func (shower) Definition() toolsapi.Definition {
 func (shower) Note(json.RawMessage) string { return "looking" }
 
 func (shower) Call(ctx context.Context, env toolsapi.Env, _ json.RawMessage) (string, error) {
-	images, err := env.Images(ctx)
+	images, err := env.Images(ctx, 0, 1)
 	if err != nil || len(images) == 0 {
 		return "", fmt.Errorf("no picture: %v", err)
 	}

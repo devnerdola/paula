@@ -82,11 +82,11 @@ func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
 	return scanMemories(rows)
 }
 
-// LatestMemories are the memories that still stand, newest first, at most
-// limit of them: what she has been told most recently.
-func (s *Store) LatestMemories(ctx context.Context, limit int) ([]Memory, error) {
+// LatestMemories are the memories that still stand, newest first, from the one
+// at from on and at most limit of them: what she has been told most recently.
+func (s *Store) LatestMemories(ctx context.Context, from, limit int) ([]Memory, error) {
 	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
-		 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ?`, limit)
+		 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ? OFFSET ?`, limit, from)
 	if err != nil {
 		return nil, err
 	}

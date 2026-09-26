@@ -56,7 +56,7 @@ func memoryListCommand() *command {
 				}
 				defer s.Close()
 
-				found, err := s.LatestMemories(context.Background(), *n)
+				found, err := s.LatestMemories(context.Background(), 0, *n)
 				if err != nil {
 					return err
 				}

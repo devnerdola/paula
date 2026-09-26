@@ -130,11 +130,13 @@ func (v env) Memories(ctx context.Context, query string, limit int) ([]store.Mem
 	return v.e.Memories(ctx, query, limit)
 }
 
-func (v env) AllMemories(ctx context.Context) ([]store.Memory, error) {
-	return v.e.store.Memories(ctx)
+func (v env) LatestMemories(ctx context.Context, from, limit int) ([]store.Memory, error) {
+	return v.e.store.LatestMemories(ctx, from, limit)
 }
 
-func (v env) Images(ctx context.Context) ([]store.Image, error) { return v.e.store.Images(ctx) }
+func (v env) Images(ctx context.Context, from, limit int) ([]store.Image, error) {
+	return v.e.store.ImagesFrom(ctx, from, limit)
+}
 
 func (v env) Image(ctx context.Context, id int64) (*store.Image, error) {
 	return v.e.store.Image(ctx, id)

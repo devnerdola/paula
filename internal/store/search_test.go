@@ -145,7 +145,7 @@ func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
 		t.Fatalf("forgot %+v, want the memory and the one it replaced, oldest first", gone)
 	}
 
-	latest, err := s.LatestMemories(ctx, 10)
+	latest, err := s.LatestMemories(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

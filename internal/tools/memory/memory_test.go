@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,9 +38,18 @@ func (f *fakeEnv) Memories(_ context.Context, query string, limit int) ([]store.
 	return f.memories, nil
 }
 
-func (f *fakeEnv) AllMemories(context.Context) ([]store.Memory, error) { return f.memories, nil }
+// LatestMemories are the test's memories, which it gives oldest first, newest
+// first from the one at from on.
+func (f *fakeEnv) LatestMemories(_ context.Context, from, limit int) ([]store.Memory, error) {
+	newest := slices.Clone(f.memories)
+	slices.Reverse(newest)
+	if from >= len(newest) {
+		return nil, nil
+	}
+	return newest[from:min(from+limit, len(newest))], nil
+}
 
-func (f *fakeEnv) Images(context.Context) ([]store.Image, error) { return nil, nil }
+func (f *fakeEnv) Images(context.Context, int, int) ([]store.Image, error) { return nil, nil }
 
 func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return nil, store.ErrNotFound }
 
@@ -126,9 +136,9 @@ func TestASearchAnswersWithTheNumberAndTheDayOfEachMemory(t *testing.T) {
 	}
 }
 
-// Every memory is listed, with the number it is forgotten by and the day it was
-// said, and a conversation that has none says so.
-func TestAListIsEveryMemory(t *testing.T) {
+// The memories are listed newest first, with the number each is forgotten by
+// and the day it was said, and a conversation that has none says so.
+func TestAListIsTheNewestMemories(t *testing.T) {
 	e := env()
 	e.memories = nil
 	if got, err := call(t, "list_memories", e, `{}`); err != nil || got != "no memories yet" {
@@ -140,13 +150,58 @@ func TestAListIsEveryMemory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon.\n" +
-		"#7 (said on 20 Sep) Ana visits in December."
+	want := "#7 (said on 20 Sep) Ana visits in December.\n" +
+		"#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon."
 	if got != want {
 		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
 	}
 	if e.searched {
 		t.Error("listing searched the memories")
+	}
+}
+
+// What a call answers goes into the prompt of the round after it, so a list of
+// many memories answers fifty at a time, saying where the older ones are.
+func TestAListOfManyMemoriesAnswersAPageAtATime(t *testing.T) {
+	e := env()
+	e.memories = nil
+	for i := range 120 {
+		e.memories = append(e.memories, store.Memory{ID: store.MemoryID(i + 1), Content: fmt.Sprintf("Memory %d.", i+1),
+			SaidAt: time.Date(2026, 9, 19, 1, 0, 0, 0, time.UTC)})
+	}
+	for _, tc := range []struct {
+		args        string
+		first, last string
+		lines       int
+		older       string
+	}{
+		{`{}`, "#120 ", "#71 ", 50, "list_memories with from 50"},
+		{`{"from":50}`, "#70 ", "#21 ", 50, "list_memories with from 100"},
+		{`{"from":100}`, "#20 ", "#1 ", 20, ""},
+	} {
+		got, err := call(t, "list_memories", e, tc.args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(got, "\n")
+		memories := lines
+		if tc.older != "" {
+			memories = lines[:len(lines)-1]
+			if !strings.Contains(lines[len(lines)-1], tc.older) {
+				t.Errorf("%s: the list ends with %q, want it to say %q", tc.args, lines[len(lines)-1], tc.older)
+			}
+		}
+		if len(memories) != tc.lines || !strings.HasPrefix(memories[0], tc.first) ||
+			!strings.HasPrefix(memories[len(memories)-1], tc.last) {
+			t.Errorf("%s: the list is %d memories from %q to %q, want %d from %q to %q", tc.args, len(memories),
+				memories[0], memories[len(memories)-1], tc.lines, tc.first, tc.last)
+		}
+	}
+	if got, err := call(t, "list_memories", e, `{"from":200}`); err != nil || got != "no memories past the newest 200" {
+		t.Errorf("listing past every memory answered %q, %v", got, err)
+	}
+	if _, err := call(t, "list_memories", e, `{"from":-1}`); err == nil {
+		t.Error("listing from below zero was answered")
 	}
 }
 

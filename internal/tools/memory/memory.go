@@ -55,32 +55,64 @@ func arrangement(n api.Names) string {
 		"forget_memory to take it away."
 }
 
+// page is how many memories a list answers with at once. What a call answers
+// goes into the prompt of the round after it, and a list of every memory of a
+// long conversation would take more of it than the round has.
+const page = 50
+
 type list struct{ h api.Host }
 
 func (t list) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "list_memories",
-		Description: "List every memory you have kept about " + n.User + " and about yourself, oldest first, " +
-			"each with its number and the day it was said. " + arrangement(n) + " List them when you need to know " +
-			"what you know about " + n.User + ": when the conversation picks up after a while, when something " +
-			"personal comes up that you may have been told before, and before keeping a memory, to see whether " +
-			"it updates one you already have.",
-		Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
+		Description: fmt.Sprintf("List the memories you have kept about %s and about yourself, newest first, "+
+			"%d at a time, each with its number and the day it was said. ", n.User, page) + arrangement(n) +
+			" List them when you need to know what you know about " + n.User + ": when the conversation picks " +
+			"up after a while, when something personal comes up that you may have been told before, and before " +
+			"keeping a memory, to see whether it updates one you already have. A list with older memories " +
+			"after it says so, and from lists them.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"from":{"type":"integer","description":"how many of the newest memories to pass over; leave it out for the newest"}}}`),
 	}
+}
+
+type listArgs struct {
+	From int `json:"from"`
 }
 
 func (list) Note(json.RawMessage) string { return "listing memories" }
 
-func (list) Call(ctx context.Context, env api.Env, _ json.RawMessage) (string, error) {
-	memories, err := env.AllMemories(ctx)
+func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
+	var a listArgs
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", err
+		}
+	}
+	if a.From < 0 {
+		return "", fmt.Errorf("from is %d, below zero", a.From)
+	}
+	// One past the page says whether there are older ones to list.
+	memories, err := env.LatestMemories(ctx, a.From, page+1)
 	if err != nil {
 		return "", err
 	}
 	if len(memories) == 0 {
+		if a.From > 0 {
+			return fmt.Sprintf("no memories past the newest %d", a.From), nil
+		}
 		return "no memories yet", nil
 	}
-	return lines(env, memories), nil
+	older := len(memories) > page
+	if older {
+		memories = memories[:page]
+	}
+	out := lines(env, memories)
+	if older {
+		out += fmt.Sprintf("\nThere are older memories: list_memories with from %d lists them.", a.From+page)
+	}
+	return out, nil
 }
 
 type search struct {

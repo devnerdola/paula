@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func (f *fakeEnv) Time(t time.Time) string { return t.UTC().Format("2 Jan 15:04"
 
 func (f *fakeEnv) Memories(context.Context, string, int) ([]store.Memory, error) { return nil, nil }
 
-func (f *fakeEnv) AllMemories(context.Context) ([]store.Memory, error) { return nil, nil }
+func (f *fakeEnv) LatestMemories(context.Context, int, int) ([]store.Memory, error) { return nil, nil }
 
 func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Memory, error) {
 	return nil, nil
@@ -36,7 +37,14 @@ func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Me
 
 func (f *fakeEnv) Forget(context.Context, store.MemoryID) ([]store.Memory, error) { return nil, nil }
 
-func (f *fakeEnv) Images(context.Context) ([]store.Image, error) { return f.images, nil }
+// Images are the test's pictures, which it gives newest first, from the one at
+// from on.
+func (f *fakeEnv) Images(_ context.Context, from, limit int) ([]store.Image, error) {
+	if from >= len(f.images) {
+		return nil, nil
+	}
+	return f.images[from:min(from+limit, len(f.images))], nil
+}
 
 func (f *fakeEnv) Image(_ context.Context, id int64) (*store.Image, error) {
 	for _, img := range f.images {
@@ -96,6 +104,50 @@ func TestAListIsEveryPicture(t *testing.T) {
 		"#1 (sent 21 Sep 19:44) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
 	if got != want {
 		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
+	}
+}
+
+// What a call answers goes into the prompt of the round after it, so a list of
+// many pictures answers fifty at a time, saying where the older ones are.
+func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
+	e := &fakeEnv{}
+	for i := 120; i > 0; i-- {
+		e.images = append(e.images, store.Image{ID: int64(i), SHA256: fmt.Sprintf("sha-%d", i),
+			Caption: fmt.Sprintf("picture %d", i), SentAt: time.Date(2026, 9, 21, 19, 44, 0, 0, time.UTC)})
+	}
+	for _, tc := range []struct {
+		args        string
+		first, last string
+		lines       int
+		older       string
+	}{
+		{`{}`, "#120 ", "#71 ", 50, "list_images with from 50"},
+		{`{"from":50}`, "#70 ", "#21 ", 50, "list_images with from 100"},
+		{`{"from":100}`, "#20 ", "#1 ", 20, ""},
+	} {
+		got, err := call(t, "list_images", e, tc.args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(got, "\n")
+		pictures := lines
+		if tc.older != "" {
+			pictures = lines[:len(lines)-1]
+			if !strings.Contains(lines[len(lines)-1], tc.older) {
+				t.Errorf("%s: the list ends with %q, want it to say %q", tc.args, lines[len(lines)-1], tc.older)
+			}
+		}
+		if len(pictures) != tc.lines || !strings.HasPrefix(pictures[0], tc.first) ||
+			!strings.HasPrefix(pictures[len(pictures)-1], tc.last) {
+			t.Errorf("%s: the list is %d pictures from %q to %q, want %d from %q to %q", tc.args, len(pictures),
+				pictures[0], pictures[len(pictures)-1], tc.lines, tc.first, tc.last)
+		}
+	}
+	if got, err := call(t, "list_images", e, `{"from":200}`); err != nil || got != "no pictures past the newest 200" {
+		t.Errorf("listing past every picture answered %q, %v", got, err)
+	}
+	if _, err := call(t, "list_images", e, `{"from":-1}`); err == nil {
+		t.Error("listing from below zero was answered")
 	}
 }
 

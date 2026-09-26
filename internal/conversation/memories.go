@@ -35,7 +35,7 @@ func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store
 // is no query.
 func SearchMemories(ctx context.Context, s *store.Store, card *persona.Card, query string, limit int) ([]store.Memory, error) {
 	if query == "" {
-		return s.LatestMemories(ctx, limit)
+		return s.LatestMemories(ctx, 0, limit)
 	}
 	words := searchWords(card, query)
 	if len(words) == 0 {

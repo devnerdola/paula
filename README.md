@@ -516,7 +516,7 @@ which tool reaches what, at whatever length that takes.
 
 | Tool | What she does with it |
 |---|---|
-| `list_memories` | lists every memory she kept, oldest first, each with its number and the day it was said |
+| `list_memories` | lists the memories she kept, newest first and 50 at a time, each with its number and the day it was said; a list with older ones after it says so, and `from` lists them |
 | `search_memories` | looks for memories by the words they hold, in the card's language; each comes with its number |
 | `remember` | keeps a lasting fact about you or about her, in place of the memories it updates, given by their numbers |
 | `forget_memory` | takes a memory away by its number, and the ones it replaced, when you ask her to |
@@ -540,7 +540,7 @@ changes a memory.
 
 | Tool | What she does with it |
 |---|---|
-| `list_images` | lists every picture, newest first: its number, when it was sent, and what it showed |
+| `list_images` | lists the pictures, newest first and 50 at a time: its number, when it was sent, and what it showed; a list with older ones after it says so, and `from` lists them |
 | `get_image` | looks at one picture again by its number: a model that sees images is sent the picture in the call's answer, and any other what it showed |
 
 ```yaml

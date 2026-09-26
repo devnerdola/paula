@@ -352,6 +352,44 @@ func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
 	}
 }
 
+// A picture is looked up by the number the model was told it by, so a database
+// brought up to date keeps every picture's number, the gap a picture left
+// behind it included.
+func TestAPictureKeepsItsNumberWhenTheDatabaseIsBroughtUpToDate(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := openStore(dir, true, migrations[:5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO media (sha256, caption) VALUES ('sha-a', 'a red square'), ('sha-b', ''), ('sha-c', 'a blue circle')`,
+		`DELETE FROM media WHERE sha256 = 'sha-b'`,
+		`INSERT INTO messages (role, parts_json, created_at) VALUES ('user',
+			'[{"type":"image","sha256":"sha-a","mime":"image/jpeg"},{"type":"image","sha256":"sha-c","mime":"image/jpeg"}]', 1)`,
+	} {
+		if _, err := s.db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	s, err = openStore(dir, true, migrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for number, caption := range map[int64]string{1: "a red square", 3: "a blue circle"} {
+		img, err := s.Image(ctx, number)
+		if err != nil {
+			t.Fatalf("picture %d: %v", number, err)
+		}
+		if img.Caption != caption {
+			t.Errorf("picture %d shows %q, want %q", number, img.Caption, caption)
+		}
+	}
+}
+
 // The model serving a role is the one thing the kv table holds: what is put
 // there is read back, what is written twice keeps the last of it, and what is
 // taken away is gone.

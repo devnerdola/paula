@@ -64,7 +64,7 @@ type Image struct {
 
 // imagesFrom is every picture a message carries, with what is known of its
 // file. A picture sent twice is one file, and two pictures.
-const imagesFrom = `SELECT media.rowid, media.sha256, media.caption, messages.id, messages.created_at
+const imagesFrom = `SELECT media.id, media.sha256, media.caption, messages.id, messages.created_at
 	  FROM messages, json_each(messages.parts_json) AS part
 	  JOIN media ON media.sha256 = json_extract(part.value, '$.sha256')
 	 WHERE json_extract(part.value, '$.type') = 'image'`
@@ -75,6 +75,20 @@ func (s *Store) Images(ctx context.Context) ([]Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanImages(rows)
+}
+
+// ImagesFrom are the pictures of the conversation, newest first, from the one
+// at from on and at most limit of them.
+func (s *Store) ImagesFrom(ctx context.Context, from, limit int) ([]Image, error) {
+	rows, err := s.ro.QueryContext(ctx, imagesFrom+` ORDER BY messages.id DESC, part.key LIMIT ? OFFSET ?`, limit, from)
+	if err != nil {
+		return nil, err
+	}
+	return scanImages(rows)
+}
+
+func scanImages(rows *sql.Rows) ([]Image, error) {
 	defer rows.Close()
 	var out []Image
 	for rows.Next() {
@@ -89,7 +103,7 @@ func (s *Store) Images(ctx context.Context) ([]Image, error) {
 
 // Image is the picture of that number, as the message it first came in sent it.
 func (s *Store) Image(ctx context.Context, id int64) (*Image, error) {
-	row := s.ro.QueryRowContext(ctx, imagesFrom+` AND media.rowid = ? ORDER BY messages.id LIMIT 1`, id)
+	row := s.ro.QueryRowContext(ctx, imagesFrom+` AND media.id = ? ORDER BY messages.id LIMIT 1`, id)
 	img, err := scanImage(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

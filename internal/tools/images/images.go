@@ -35,32 +35,63 @@ func arrangement(n api.Names) string {
 		"conversation, which mentions a picture at most."
 }
 
+// page is how many pictures a list answers with at once. What a call answers
+// goes into the prompt of the round after it, and a list of every picture of a
+// long conversation would take more of it than the round has.
+const page = 50
+
 type list struct{ h api.Host }
 
 func (t list) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "list_images",
-		Description: "List every picture " + n.User + " has sent, newest first: its number, when it was sent, " +
-			"and what it showed. " + arrangement(n) + " List them when " + n.User + " brings up a picture you " +
-			"do not have in front of you, and look at one again with get_image, by its number.",
-		Parameters: json.RawMessage(`{"type":"object","properties":{}}`),
+		Description: fmt.Sprintf("List the pictures %s has sent, newest first, %d at a time: its number, when "+
+			"it was sent, and what it showed. ", n.User, page) + arrangement(n) + " List them when " + n.User +
+			" brings up a picture you do not have in front of you, and look at one again with get_image, by " +
+			"its number. A list with older pictures after it says so, and from lists them.",
+		Parameters: json.RawMessage(`{"type":"object","properties":{` +
+			`"from":{"type":"integer","description":"how many of the newest pictures to pass over; leave it out for the newest"}}}`),
 	}
+}
+
+type listArgs struct {
+	From int `json:"from"`
 }
 
 func (list) Note(json.RawMessage) string { return "listing pictures" }
 
-func (list) Call(ctx context.Context, env api.Env, _ json.RawMessage) (string, error) {
-	images, err := env.Images(ctx)
+func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
+	var a listArgs
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", err
+		}
+	}
+	if a.From < 0 {
+		return "", fmt.Errorf("from is %d, below zero", a.From)
+	}
+	// One past the page says whether there are older ones to list.
+	images, err := env.Images(ctx, a.From, page+1)
 	if err != nil {
 		return "", err
 	}
 	if len(images) == 0 {
+		if a.From > 0 {
+			return fmt.Sprintf("no pictures past the newest %d", a.From), nil
+		}
 		return "no pictures yet", nil
+	}
+	older := len(images) > page
+	if older {
+		images = images[:page]
 	}
 	out := make([]string, len(images))
 	for i, img := range images {
 		out[i] = line(env, img)
+	}
+	if older {
+		out = append(out, fmt.Sprintf("There are older pictures: list_images with from %d lists them.", a.From+page))
 	}
 	return strings.Join(out, "\n"), nil
 }
