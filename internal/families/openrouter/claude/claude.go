@@ -39,6 +39,8 @@ func Open(cache bool) (api.Extension, error) {
 
 func (e extension) Notes() chat.Notes { return chat.Notes{Role: chat.RoleSystem} }
 
+func (e extension) PastThought() bool { return false }
+
 func (e extension) Body(body map[string]any, req chat.ChatRequest) {
 	if req.CacheKey != "" {
 		body["session_id"] = req.CacheKey

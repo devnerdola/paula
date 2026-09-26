@@ -20,6 +20,20 @@ func listed(t *testing.T, name string) []string {
 	return strings.Fields(string(b))
 }
 
+// With tools in a request, only DeepSeek's chat template keeps the thinking of
+// earlier turns, so only DeepSeek is sent what earlier replies thought.
+func TestOnlyDeepSeekIsSentWhatEarlierRepliesThought(t *testing.T) {
+	for name, e := range table {
+		x, err := e.open(true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := x.PastThought(), strings.HasSuffix(name, "/deepseek"); got != want {
+			t.Errorf("%s asks for what earlier replies thought: %v, want %v", name, got, want)
+		}
+	}
+}
+
 func TestEveryExtensionIsForARunnerKind(t *testing.T) {
 	for name, e := range table {
 		if e.runner != openrouter.Kind && e.runner != venice.Kind {

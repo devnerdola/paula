@@ -56,11 +56,15 @@ func (e *Engine) overflowed(ctx context.Context, m *model) (bool, error) {
 	if reserved <= 0 {
 		return false, nil
 	}
-	_, said, _, err := e.history(ctx)
+	summary, said, _, err := e.history(ctx)
 	if err != nil || len(said) == 0 {
 		return false, err
 	}
-	msgs, _ := e.render(said, m.catalogue.Vision, 0, m.notes(), e.weighing(ctx))
+	weighing := e.weighing(ctx)
+	if weighing.thought, err = e.pastThought(ctx, m, coveredUpto(summary)); err != nil {
+		return false, err
+	}
+	msgs, _ := e.render(said, m.catalogue.Vision, 0, m.notes(), weighing)
 	return size(msgs, e.costs.rate(m.Name), e.costs.image(m.Name)) > reserved, nil
 }
 

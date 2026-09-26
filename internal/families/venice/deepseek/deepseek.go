@@ -16,6 +16,12 @@
 // Venice caches a prompt's prefix without being asked for a DeepSeek model, so
 // what a request adds is the prompt_cache_key Venice routes the requests of a
 // conversation to one server by, which is where their cache is.
+//
+// With tools in a request, DeepSeek's chat template keeps the thinking of
+// earlier turns. A reply sent back without its thinking reads as one that
+// thought nothing, and the model learns from it to skip its thinking, or to
+// write the reply inside it. Every earlier reply goes back with what it
+// thought.
 package deepseek
 
 import (
@@ -37,6 +43,8 @@ func Open(cache bool) (api.Extension, error) {
 func (extension) Notes() chat.Notes {
 	return chat.Notes{Role: chat.RoleUser, LastAsSent: true}
 }
+
+func (extension) PastThought() bool { return true }
 
 func (extension) Body(body map[string]any, req chat.ChatRequest) {
 	if req.CacheKey != "" {

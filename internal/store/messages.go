@@ -151,6 +151,37 @@ func (s *Store) LastMessage(ctx context.Context, role string) (*Message, error) 
 	return m, err
 }
 
+// Writer is the runner and the model a reply was written by.
+type Writer struct {
+	Runner string
+	Model  string
+}
+
+// Writers are what wrote each reply after a message: the runner and the model
+// of the last request its entry sent for a reply. A reply whose entry sent no
+// such request has no writer.
+func (s *Store) Writers(ctx context.Context, after MessageID) (map[MessageID]Writer, error) {
+	rows, err := s.ro.QueryContext(ctx, `SELECT m.id, r.runner, r.model
+		  FROM messages m
+		  JOIN requests r ON r.id = (SELECT max(id) FROM requests
+		                              WHERE entry_id = m.entry_id AND purpose = ?)
+		 WHERE m.role = ? AND m.id > ?`, PurposeReply, RoleAssistant, after)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[MessageID]Writer{}
+	for rows.Next() {
+		var id MessageID
+		var w Writer
+		if err := rows.Scan(&id, &w.Runner, &w.Model); err != nil {
+			return nil, err
+		}
+		out[id] = w
+	}
+	return out, rows.Err()
+}
+
 // ReplyOfEntry returns the message an entry stored, and says when it stored
 // none.
 func (s *Store) ReplyOfEntry(ctx context.Context, entryID EntryID) (*Message, error) {

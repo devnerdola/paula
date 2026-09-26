@@ -506,6 +506,8 @@ type signing struct{}
 
 func (signing) Notes() api.Notes { return api.Notes{Role: api.RoleSystem} }
 
+func (signing) PastThought() bool { return false }
+
 func (signing) Body(body map[string]any, req api.ChatRequest) { body["signed"] = req.CacheKey }
 
 // What a model was set up with beside its settings adds to the body the runner

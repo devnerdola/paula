@@ -341,6 +341,7 @@ func TestThePromptOfAReply(t *testing.T) {
 type notesAsUser struct{}
 
 func (notesAsUser) Notes() api.Notes                     { return api.Notes{Role: api.RoleUser} }
+func (notesAsUser) PastThought() bool                    { return false }
 func (notesAsUser) Body(map[string]any, api.ChatRequest) {}
 
 // A model whose family reads her notes as user messages is sent the times in
@@ -387,6 +388,7 @@ type notesAsSent struct{}
 func (notesAsSent) Notes() api.Notes {
 	return api.Notes{Role: api.RoleUser, LastAsSent: true}
 }
+func (notesAsSent) PastThought() bool                    { return false }
 func (notesAsSent) Body(map[string]any, api.ChatRequest) {}
 
 // A host that reads only the whole of an earlier prompt needs every prompt to

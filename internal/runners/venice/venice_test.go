@@ -122,6 +122,30 @@ func TestTheReasoningOfACallGoesBackInTheFieldItCameIn(t *testing.T) {
 	}
 }
 
+// A reply of several rounds is kept as one message, with what every round
+// thought, and goes back with what its last round thought, as it came: what a
+// GPT model thinks comes as an encrypted item OpenAI parses only whole and on
+// its own, and three rounds' items handed back together were refused.
+func TestAReplyGoesBackWithWhatItsLastRoundThought(t *testing.T) {
+	earlier := streamed(t, "stream_tool_calls.sse")
+	last := streamed(t, "stream_cache_write.sse")
+	if !strings.HasPrefix(last.Reasoning, "__ENCRYPTED_REASONING__") {
+		t.Fatalf("the captured round thought %q, want the encrypted item it came as", last.Reasoning)
+	}
+	out := map[string]any{}
+	hooks{}.Message(out, api.Message{
+		Role:  api.RoleAssistant,
+		Parts: []api.Part{{Type: api.PartText, Text: "hey love"}},
+		Reasoning: &api.Reasoning{
+			Text:    earlier.Reasoning + "\n\n" + last.Reasoning,
+			Details: last.ReasoningDetails,
+		},
+	})
+	if got := out["reasoning_content"]; got != last.Reasoning {
+		t.Errorf("reasoning_content = %q, want what the last round thought, %q", got, last.Reasoning)
+	}
+}
+
 // streamed is what the runner makes of a captured stream.
 func streamed(t *testing.T, name string) *api.Result {
 	t.Helper()

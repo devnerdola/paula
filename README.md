@@ -601,15 +601,23 @@ the summary does not cover, in order, each reply after what it answers, and last
 the time it is now and the message she is answering. Her memories are not in
 it: she reaches them with her tools.
 
-Each reply goes back with what she thought on the way to it, as the API sent
-it: the reasoning text, and on OpenRouter the details it sent beside it, which
-may be signed and so go back exactly as they came. A reply that ran tools goes
-back as one message, the round that wrote it, so the details are that round's;
-what the rounds before it thought went back with their calls. A model offered
-tools reads the thinking of every earlier reply, and one shown replies with no
-thinking learns to skip its own, or to leave it open and write the reply inside
-it. That thinking is part of the prompt, so it is counted with the history and
-compacted with the messages it belongs to.
+Within a reply, each round that asked for tools goes back with what she
+thought in it, as the API sent it. Earlier replies go back as what she said,
+except to DeepSeek. With tools in a request, DeepSeek reads the thinking of
+every earlier reply, and one shown replies with no thinking learns to skip its
+own, or to leave it open and write the reply inside it. So DeepSeek gets each
+earlier reply with what she thought on the way to it: the reasoning text, and
+the details sent beside it. A reply that ran tools goes back as one message,
+the round that wrote it, so the details are that round's. That thinking is
+part of the prompt, so it is counted with the history and compacted with the
+messages it belongs to.
+
+The details go back exactly as they came, and only to the model that wrote
+them, on the runner it wrote them on: signed or encrypted thinking belongs to
+that model and host, and another's refuses it. Switch to DeepSeek and the
+replies another model wrote go to it with their thinking as text alone. Each
+reply looks the same in every prompt of one model, so each model keeps its own
+cache, and switching back finds the first model's prompt as it left it.
 
 **Every part of the prompt has its reservation.** The card and the tools are
 written into every reply. What the model's `context`, or the largest its

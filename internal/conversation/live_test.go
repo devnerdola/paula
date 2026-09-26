@@ -706,11 +706,15 @@ func (lv *live) replied(entry store.EntryID) (store.Request, bool) {
 
 func (lv *live) historySize(e *Engine, m *model) int {
 	ctx := context.Background()
-	_, said, _, err := e.history(ctx)
+	summary, said, _, err := e.history(ctx)
 	if err != nil {
 		return -1
 	}
-	msgs, _ := e.render(said, m.catalogue.Vision, 0, m.notes(), e.weighing(ctx))
+	weighing := e.weighing(ctx)
+	if weighing.thought, err = e.pastThought(ctx, m, coveredUpto(summary)); err != nil {
+		return -1
+	}
+	msgs, _ := e.render(said, m.catalogue.Vision, 0, m.notes(), weighing)
 	return size(msgs, e.costs.rate(m.Name), e.costs.image(m.Name))
 }
 

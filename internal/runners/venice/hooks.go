@@ -95,14 +95,37 @@ func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
 	return c.Choices[0].Delta.ReasoningContent, nil
 }
 
-// End has nothing to finish: the reasoning comes as text, whole once it is
-// read.
-func (hooks) End(*api.Result) {}
+// End keeps the reasoning of the round as it came, as the one detail to hand
+// back with it. A reply of several rounds is one message whose reasoning is
+// every round's, and what a GPT model thought comes as an encrypted item that
+// OpenAI parses only whole and on its own: three rounds' items handed back
+// together were refused.
+func (hooks) End(res *api.Result) {
+	if res.Reasoning == "" {
+		return
+	}
+	raw, err := json.Marshal(res.Reasoning)
+	if err != nil {
+		return
+	}
+	res.ReasoningDetails = []json.RawMessage{raw}
+}
 
 // Message hands back the reasoning an assistant message came with, in the
-// field the stream gave it in.
+// field the stream gave it in: the last round's as it came, or the text of a
+// message kept with no detail.
 func (hooks) Message(out map[string]any, m api.Message) {
-	if m.Reasoning != nil && m.Reasoning.Text != "" {
+	if m.Reasoning == nil {
+		return
+	}
+	if n := len(m.Reasoning.Details); n > 0 {
+		var came string
+		if json.Unmarshal(m.Reasoning.Details[n-1], &came) == nil && came != "" {
+			out["reasoning_content"] = came
+			return
+		}
+	}
+	if m.Reasoning.Text != "" {
 		out["reasoning_content"] = m.Reasoning.Text
 	}
 }

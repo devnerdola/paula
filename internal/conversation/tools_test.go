@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 	toolsapi "nerdola.dev/x/paula/internal/tools/api"
@@ -336,18 +337,23 @@ func TestTheReasoningOfARoundGoesBackWithItsCalls(t *testing.T) {
 	}
 }
 
-// A model offered tools reads the thinking of every reply before the one it is
-// writing, so each goes back with what it thought: the text of every round,
-// and the details of the round that answered. The reply goes back as one
-// message, which in the answer was that round, and a host holds signed details
-// to the response they came in: a round's with another's are not what either
-// sent. A reply that thought nothing goes back with nothing.
-func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
+// keepsThought is a family extension that has every earlier reply sent back
+// with what it thought.
+type keepsThought struct{}
+
+func (keepsThought) Notes() api.Notes                     { return api.Notes{Role: api.RoleSystem} }
+func (keepsThought) PastThought() bool                    { return true }
+func (keepsThought) Body(map[string]any, api.ChatRequest) {}
+
+// talkedWithThought is a reply that ran a tool and thought in both its rounds,
+// and two that did not think, and the replies the last prompt carried. The
+// details are what OpenRouter sent of a reply that asked for a tool, in the
+// item its fragments make, and what it sent of one that answered.
+func talkedWithThought(t *testing.T, extension api.Extension) (answered json.RawMessage, replies []api.Message) {
+	t.Helper()
 	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
-	// The details are what OpenRouter sent of a reply that asked for a tool,
-	// in the item its fragments make, and what it sent of one that answered.
 	asking := json.RawMessage(`{"type":"reasoning.text","text":"I need to search memories for Caio's sister's name.","format":"unknown","index":0}`)
-	answered := json.RawMessage(`{"type":"reasoning.text","text":"She lives in Lisbon.","format":"unknown","index":0}`)
+	answered = json.RawMessage(`{"type":"reasoning.text","text":"She lives in Lisbon.","format":"unknown","index":0}`)
 	f := &fakeRunner{model: chatModel(), chat: answering(
 		round{reasoning: "I need to search memories for Caio's sister's name.", details: []json.RawMessage{asking},
 			calls: []api.ToolCall{lookup("call_1", `{"query":"sister"}`)}},
@@ -355,15 +361,15 @@ func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
 		round{text: "hi"},
 		round{text: "sure"},
 	)}
-	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	set := setup(f)
+	set.Models[0].Settings.Extension = extension
+	r := openReplyOffering(t, f, set, config.DefaultEngine(), look)
 	r.say(t, "what's my sister's name?")
 	r.say(t, "hey")
 	r.say(t, "ok")
 
 	requests := f.all()
-	msgs := requests[len(requests)-1].Messages
-	var replies []api.Message
-	for _, m := range msgs {
+	for _, m := range requests[len(requests)-1].Messages {
 		if m.Role == api.RoleAssistant {
 			replies = append(replies, m)
 		}
@@ -371,6 +377,19 @@ func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
 	if len(replies) != 2 {
 		t.Fatalf("the last prompt carries %d replies, want the two before it", len(replies))
 	}
+	return answered, replies
+}
+
+// A family whose chat template keeps the thinking of earlier turns reads a
+// reply sent back without it as one that thought nothing, and learns to think
+// nothing. Its extension asks for every earlier reply with what it thought:
+// the text of every round, and the details of the round that answered. The
+// reply goes back as one message, which in the answer was that round, and a
+// host holds signed details to the response they came in: a round's with
+// another's are not what either sent. A reply that thought nothing goes back
+// with nothing.
+func TestAPastReplyGoesBackWithWhatItThoughtWhenItsFamilyAsks(t *testing.T) {
+	answered, replies := talkedWithThought(t, keepsThought{})
 	thought := replies[0].Reasoning
 	if thought == nil || thought.Text != "I need to search memories for Caio's sister's name.\n\nShe lives in Lisbon." {
 		t.Fatalf("the first reply went back with %+v, want what both its rounds thought", thought)
@@ -380,6 +399,81 @@ func TestAPastReplyGoesBackWithWhatItThought(t *testing.T) {
 	}
 	if replies[1].Reasoning != nil {
 		t.Errorf("a reply that thought nothing went back with %+v", replies[1].Reasoning)
+	}
+}
+
+// A model whose family does not ask for what earlier replies thought reads
+// each of them as what it said, whether no extension serves it or one that
+// asks for nothing does.
+func TestAPastReplyGoesBackAsWhatItSaidWhenItsFamilyDoesNotAsk(t *testing.T) {
+	for _, extension := range []api.Extension{nil, notesAsUser{}} {
+		_, replies := talkedWithThought(t, extension)
+		for i, reply := range replies {
+			if reply.Reasoning != nil {
+				t.Errorf("with %T, reply %d went back with %+v, want what it said alone", extension, i+1, reply.Reasoning)
+			}
+		}
+	}
+}
+
+// What a model thought is signed or encrypted for it and the host it came
+// from, so a reply goes back with it as it came only to the model that wrote
+// it. A model whose family asks for what earlier replies thought is sent
+// another model's replies with what they thought as text alone: switched to
+// another model, it reads the first model's thinking as text, and switched
+// back, the first model reads its own as it came.
+func TestAReplyGoesBackWithWhatItThoughtAsItCameOnlyToTheModelThatWroteIt(t *testing.T) {
+	details := json.RawMessage(`{"type":"reasoning.text","text":"She lives in Lisbon.","format":"unknown","index":0}`)
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{text: "Ana, in Lisbon", reasoning: "She lives in Lisbon.", details: []json.RawMessage{details}},
+	)}
+	g := &fakeRunner{model: api.Model{ID: "other/model", Context: 100000, Chat: true, Tools: true}, chat: answering(
+		round{text: "yes", reasoning: "Another model's thought."},
+	)}
+	first := &runners.Configured{Name: "chat", ID: f.model.ID, Runner: f, Settings: api.Settings{Extension: keepsThought{}}}
+	second := &runners.Configured{Name: "other", ID: g.model.ID, Runner: g, Settings: api.Settings{Extension: keepsThought{}}}
+	r := openReplyWith(t, f, &runners.Setup{
+		Runners:  []runners.Runner{f, g},
+		Models:   []*runners.Configured{first, second},
+		Defaults: map[config.Role]*runners.Configured{config.RoleChat: first},
+	})
+	ctx := context.Background()
+	replies := func(req api.ChatRequest) []api.Message {
+		var out []api.Message
+		for _, m := range req.Messages {
+			if m.Role == api.RoleAssistant {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+
+	r.say(t, "where does Ana live?")
+	if err := r.SetModel(ctx, config.RoleChat, "other"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "you there?")
+	got := replies(g.asked())
+	if len(got) != 1 {
+		t.Fatalf("the other model was sent %d replies, want the first model's", len(got))
+	}
+	if got[0].Reasoning == nil || got[0].Reasoning.Text != "She lives in Lisbon." || len(got[0].Reasoning.Details) != 0 {
+		t.Errorf("the other model was sent the first model's reply with %+v, want what it thought as text alone", got[0].Reasoning)
+	}
+
+	if err := r.SetModel(ctx, config.RoleChat, "chat"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "ok")
+	got = replies(f.asked())
+	if len(got) != 2 {
+		t.Fatalf("the first model was sent %d replies, want both", len(got))
+	}
+	if got[0].Reasoning == nil || len(got[0].Reasoning.Details) != 1 || string(got[0].Reasoning.Details[0]) != string(details) {
+		t.Errorf("the first model was sent its own reply with %+v, want what it thought as it came", got[0].Reasoning)
+	}
+	if got[1].Reasoning == nil || got[1].Reasoning.Text != "Another model's thought." || len(got[1].Reasoning.Details) != 0 {
+		t.Errorf("the first model was sent the other model's reply with %+v, want what it thought as text alone", got[1].Reasoning)
 	}
 }
 

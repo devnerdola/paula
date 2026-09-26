@@ -161,6 +161,10 @@ type Notes struct {
 // model is sent.
 type Extension interface {
 	Notes() Notes
+	// PastThought says every earlier reply goes back with what it thought.
+	// Every reply goes back with it within its own rounds of calls; a family
+	// that is not sent it for earlier replies reads them as what they said.
+	PastThought() bool
 	// Body adds its own fields to the body of a chat request once the runner
 	// has built it. The runner hands it the body and knows nothing of what it
 	// adds.

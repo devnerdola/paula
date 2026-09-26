@@ -57,6 +57,10 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 		}
 	}
 	kept = ordered(kept)
+	sending := e.sending(ctx, a)
+	if sending.thought, err = e.pastThought(ctx, m, coveredUpto(summary)); err != nil {
+		return nil, 0, err
+	}
 
 	out := []api.Message{e.systemMessage(m, summary)}
 	// What time it is now is told before the message she is answering, which
@@ -64,7 +68,7 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 	// that one: a reply written while the next message arrived carries the
 	// higher id of the two, and one whose message the summary covers keeps the
 	// place its id gives it.
-	msgs, at := e.render(kept, m.catalogue.Vision, a.entry.UptoMessageID, m.notes(), e.sending(ctx, a))
+	msgs, at := e.render(kept, m.catalogue.Vision, a.entry.UptoMessageID, m.notes(), sending)
 	if at >= 0 {
 		standing = len(out) + at
 	}
@@ -166,6 +170,36 @@ func (e *Engine) render(messages []store.Message, sees bool, last store.MessageI
 type reading struct {
 	describe func(sha256 string) string
 	load     bool
+	// thought is what a reply goes back with of what it thought, and nil for
+	// a model that is sent none.
+	thought func(store.Message) *api.Reasoning
+}
+
+// pastThought is what earlier replies go back to a model with of what they
+// thought, and nil for a model whose family extension does not ask for it:
+// such a model reads each reply as what it said. A reply goes back to the
+// model that wrote it, on the runner it wrote it on, with what it thought as
+// it came. What a model thought is signed or encrypted for that model and the
+// host it came from, and another model's host refuses it, so to any other
+// model it goes back as its text alone.
+func (e *Engine) pastThought(ctx context.Context, m *model, after store.MessageID) (func(store.Message) *api.Reasoning, error) {
+	if m.settings.Extension == nil || !m.settings.Extension.PastThought() {
+		return nil, nil
+	}
+	writers, err := e.store.Writers(ctx, after)
+	if err != nil {
+		return nil, err
+	}
+	return func(msg store.Message) *api.Reasoning {
+		if w, ok := writers[msg.ID]; ok && w.Runner == m.Runner.Name() && w.Model == m.ID &&
+			(msg.Reasoning != "" || len(msg.ReasoningDetails) > 0) {
+			return &api.Reasoning{Text: msg.Reasoning, Details: msg.ReasoningDetails}
+		}
+		if msg.Reasoning != "" {
+			return &api.Reasoning{Text: msg.Reasoning}
+		}
+		return nil
+	}, nil
 }
 
 // sending is how a prompt reads messages, under the attempt it is for.
@@ -214,14 +248,9 @@ func ordered(messages []store.Message) []store.Message {
 // every picture as one; any other is sent a line with what the picture showed.
 func (e *Engine) message(msg store.Message, sees bool, r reading) api.Message {
 	if msg.Role == store.RoleAssistant {
-		// A reply goes back with what she thought on the way to it. A model
-		// offered tools reads the thinking of every reply before the one it is
-		// writing, and one shown replies that thought nothing learns to think
-		// nothing: it skips its thinking, or leaves it open and writes the
-		// reply inside it.
 		out := api.Text(api.RoleAssistant, msg.Text())
-		if msg.Reasoning != "" || len(msg.ReasoningDetails) > 0 {
-			out.Reasoning = &api.Reasoning{Text: msg.Reasoning, Details: msg.ReasoningDetails}
+		if r.thought != nil {
+			out.Reasoning = r.thought(msg)
 		}
 		return out
 	}

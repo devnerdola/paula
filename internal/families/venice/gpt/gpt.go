@@ -40,6 +40,8 @@ func (extension) Notes() chat.Notes {
 	return chat.Notes{Role: chat.RoleUser, LastAsSent: true}
 }
 
+func (extension) PastThought() bool { return false }
+
 func (extension) Body(body map[string]any, req chat.ChatRequest) {
 	if req.CacheKey != "" {
 		body["prompt_cache_key"] = req.CacheKey
