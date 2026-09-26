@@ -101,9 +101,8 @@ func describe(url string) string {
 		return url
 	}
 	mime := strings.TrimSuffix(strings.TrimPrefix(head, "data:"), ";base64")
-	size := base64.StdEncoding.DecodedLen(len(rest))
-	if b, err := base64.StdEncoding.DecodeString(rest); err == nil {
-		size = len(b)
-	}
+	// Four characters of base64 are three bytes, less one for each padding
+	// character at the end.
+	size := base64.StdEncoding.DecodedLen(len(rest)) - (len(rest) - len(strings.TrimRight(rest, "=")))
 	return fmt.Sprintf("%s, %d bytes", mime, size)
 }

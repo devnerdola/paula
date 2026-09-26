@@ -228,6 +228,10 @@ func TestRetryWithADelayHeader(t *testing.T) {
 	if r.Attempts[0].Error == "" {
 		t.Error("the first attempt kept no error")
 	}
+	// The answer the record keeps is the second try's, and so is when it began.
+	if !r.FirstByteAt.Equal(r.Attempts[1].FirstByteAt) {
+		t.Errorf("first byte = %v, want the second try's %v", r.FirstByteAt, r.Attempts[1].FirstByteAt)
+	}
 }
 
 func TestRetryWithoutADelayHeader(t *testing.T) {
@@ -1041,6 +1045,25 @@ func TestAnAnswerThatTakesTooLong(t *testing.T) {
 	}
 	if took := time.Since(start); took > 4*limit {
 		t.Errorf("the request took %s, want it given up after %s", took, limit)
+	}
+}
+
+// The bound running out while a try waits to be sent again is named the same
+// way as one running out in the middle of an answer.
+func TestTheBoundRunningOutDuringTheWaitSaysSo(t *testing.T) {
+	const limit = 100 * time.Millisecond
+	ts, _ := newServer(t, answer(http.StatusTooManyRequests, `{"error":{"message":"slow down"}}`))
+	c, _ := client(t, ts.URL, parts{retry: func(time.Time, int, http.Header) (time.Duration, bool) {
+		return time.Minute, true
+	}})
+	c.RequestTimeout = limit
+	c.IdleTimeout = time.Minute
+	// The wait is real, and the bound ends it.
+	c.Sleep = nil
+
+	err := c.Get(context.Background(), "/models", new(struct{}))
+	if !errors.Is(err, ErrSlow) {
+		t.Fatalf("error = %v, want the answer given up on", err)
 	}
 }
 

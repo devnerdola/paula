@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -836,6 +837,21 @@ func TestEveryMigrationIsNamedForItsVersion(t *testing.T) {
 			t.Errorf("%s is version %d, want the versions to run from 1 without gaps", m.name, m.version)
 		}
 	}
+}
+
+// Two files of one version would leave a database stamped by either without
+// the other, so they are refused as the migrations are read.
+func TestTwoMigrationsOfOneVersionAreRefused(t *testing.T) {
+	fsys := fstest.MapFS{
+		"migrations/0001_notes.sql":  {Data: []byte("CREATE TABLE notes (id INTEGER PRIMARY KEY);")},
+		"migrations/0001_colour.sql": {Data: []byte("ALTER TABLE notes ADD COLUMN colour TEXT;")},
+	}
+	defer func() {
+		if recover() == nil {
+			t.Error("two migrations of one version were loaded")
+		}
+	}()
+	loadMigrations(fsys, "migrations")
 }
 
 // The database lands in the directory it was asked for, and the pragmas on the

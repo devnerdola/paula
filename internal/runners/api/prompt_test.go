@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +42,10 @@ func TestReadPromptReadsBackWhatWasSent(t *testing.T) {
 	}
 
 	// The image of a caption comes back as its type and its size, not as the
-	// bytes again.
-	p, ok = ReadPrompt(fixture(t, "chat_request_image.json"))
+	// bytes again. The size is the picture's own, which decoding the data URL
+	// of the body here says.
+	body := fixture(t, "chat_request_image.json")
+	p, ok = ReadPrompt(body)
 	if !ok {
 		t.Fatal("ReadPrompt did not read the body carrying an image")
 	}
@@ -50,8 +55,14 @@ func TestReadPromptReadsBackWhatWasSent(t *testing.T) {
 	if !strings.HasPrefix(p.Messages[0].Text, "Describe this image") {
 		t.Errorf("message = %+v", p.Messages[0])
 	}
-	if got := p.Messages[0].Images[0]; !strings.HasPrefix(got, "image/jpeg, ") {
-		t.Errorf("image = %q", got)
+	from := bytes.Index(body, []byte("base64,")) + len("base64,")
+	to := from + bytes.IndexByte(body[from:], '"')
+	picture, err := base64.StdEncoding.DecodeString(string(body[from:to]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := p.Messages[0].Images[0], fmt.Sprintf("image/jpeg, %d bytes", len(picture)); got != want {
+		t.Errorf("image = %q, want %q", got, want)
 	}
 
 	if _, ok := ReadPrompt([]byte("not a body at all")); ok {

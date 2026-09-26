@@ -66,6 +66,13 @@ func loadMigrations(fsys fs.FS, dir string) []migration {
 		out = append(out, migration{version: version, name: e.Name(), sql: string(statements)})
 	}
 	slices.SortFunc(out, func(a, b migration) int { return a.version - b.version })
+	// A database stamped with a version by one file would never run another
+	// of the same version.
+	for i := 1; i < len(out); i++ {
+		if out[i].version == out[i-1].version {
+			panic("store: " + dir + "/" + out[i-1].name + " and " + out[i].name + " are both version " + strconv.Itoa(out[i].version))
+		}
+	}
 	return out
 }
 

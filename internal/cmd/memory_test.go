@@ -96,7 +96,7 @@ func TestMemorySearch(t *testing.T) {
 	cfg := memoryConfig(t, dir)
 
 	// A question about Caio's sister finds the memory about her, and not the
-	// other memory that names him.
+	// other memory, which names Caio too.
 	code, out, errOut := exec(t, "-config", cfg, "memory", "search", "where is Caio's sister")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)

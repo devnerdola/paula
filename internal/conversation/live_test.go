@@ -301,7 +301,7 @@ type pastFile struct {
 	} `json:"days"`
 }
 
-// exchange is what he sent and her reply to it, as a run would have stored
+// exchange is what was sent and her reply to it, as a run would have stored
 // them, on the day of the past it was said.
 type exchange struct {
 	day   int
@@ -370,8 +370,8 @@ func (lv *live) load() *past {
 			}
 			at := date.Add(time.Duration(clock.Hour())*time.Hour + time.Duration(clock.Minute())*time.Minute)
 			if m.From == "user" {
-				// What she said before he wrote again was her reply, and what
-				// she says before he has written anything is nothing a run
+				// What she said before the next message was her reply, and
+				// what she says before any message has come is nothing a run
 				// could have sent: she only answers.
 				if len(said) > 0 {
 					flush()
@@ -391,7 +391,7 @@ func (lv *live) load() *past {
 	return p
 }
 
-// write stores exchanges the way a run stores its turns: his messages, an
+// write stores exchanges the way a run stores its turns: the messages sent, an
 // entry that answered them, and her reply in that entry. Nothing is stored
 // before what the conversation already holds, and the clock is left after
 // what was written.
@@ -445,13 +445,13 @@ func (lv *live) write(exchanges []exchange, clock *pastClock) {
 }
 
 // talkPast writes as much of the past as the history's reservation holds, and
-// runs Paula on the past that follows, a turn for each burst of his messages,
-// and then runs Paula on the two exchanges of the past that follow.
+// runs Paula on the past that follows, a turn for each burst of messages, and
+// then runs Paula on the two exchanges of the past that follow.
 //
 // What is written is measured at the dearest a word has cost in the runs
 // before, the nearest there is to what the host will count. The run starts
 // counting a word higher than that, so it finds the history past its
-// reservation and has it compacted before its first turn, which his messages
+// reservation and has it compacted before its first turn, which the messages
 // of that turn wait for.
 func (lv *live) talkPast(name string, before []*liveRun, p *past, clock *pastClock) *liveRun {
 	t := lv.t
@@ -502,7 +502,7 @@ func (lv *live) talkPast(name string, before []*liveRun, p *past, clock *pastClo
 	return r
 }
 
-// exchange sends his messages of an exchange of the past, each at its time,
+// exchange sends the messages of an exchange of the past, each at its time,
 // and has her answer them.
 func (r *liveRun) exchange(x exchange) {
 	var texts []string
@@ -525,7 +525,7 @@ type liveRun struct {
 	turns []liveTurn
 }
 
-// liveTurn is what he sent in one turn and what came of it: the entry of the
+// liveTurn is what was sent in one turn and what came of it: the entry of the
 // reply, the history and the reservations as the engine measured them right
 // after it, and the summary that stood then.
 type liveTurn struct {
@@ -564,9 +564,9 @@ func (r *liveRun) model() *model {
 	return m
 }
 
-// send posts his messages of one turn, each at its time when it has one, and
+// send posts the messages of one turn, each at its time when it has one, and
 // waits for the turn that answers them, and no longer: the next goes out as
-// soon as she has answered, the way he would text back.
+// soon as she has answered, the way a person texts back.
 func (r *liveRun) send(texts []string, at []time.Time, images ...[]byte) {
 	lv := r.lv
 	ctx := context.Background()
@@ -733,7 +733,7 @@ func (lv *live) checkAnswered(r *liveRun) {
 }
 
 // checkCompactedFirst holds a run that starts on a history past its
-// reservation to compacting it before its first turn, and his messages of that
+// reservation to compacting it before its first turn, and the messages of that
 // turn to waiting for it: the turn starts once the compaction has ended, and
 // carries the summary and only those messages.
 func (lv *live) checkCompactedFirst(r *liveRun) {
@@ -761,8 +761,8 @@ func (lv *live) checkCompactedFirst(r *liveRun) {
 	carries := len(sent) > 0 && first.standing != "" && strings.Contains(sent[0].text, firstLine(first.standing))
 	lv.check("a run whose history is past its reservation compacts it before its first turn, which waits for it and carries the summary and no message it covers",
 		c.Status == store.StatusDone && before && later && carries && slices.Equal(users, first.sent),
-		"the compaction first, his messages sent before it ended, the turn started after it, with the summary and only his messages of that turn",
-		fmt.Sprintf("compaction entry %d %s, %s to %s; his first message sent %s; the turn started %s; summary in the prompt: %v; his messages in it: %d of the turn's %d",
+		"the compaction first, the messages sent before it ended, the turn started after it, with the summary and only the messages of that turn",
+		fmt.Sprintf("compaction entry %d %s, %s to %s; the first message sent %s; the turn started %s; summary in the prompt: %v; the messages in it: %d of the turn's %d",
 			c.ID, c.Status, c.StartedAt.Format(time.TimeOnly), c.EndedAt.Format(time.TimeOnly), stamp(msg), stampEntry(entry),
 			carries, len(users), len(first.sent)),
 		lv.ids(c.ID, first.entry)...)
@@ -1076,7 +1076,7 @@ func sentMessages(body []byte) []sentMessage {
 	return out
 }
 
-// userText is the text of the first message of his a request carried.
+// userText is the text of the first user message a request carried.
 func userText(body []byte) string {
 	for _, m := range sentMessages(body) {
 		if m.role == api.RoleUser {

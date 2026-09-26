@@ -248,7 +248,7 @@ func (c *Client) attempts(ctx context.Context, a ask, rec *api.Record) error {
 			return err
 		}
 		if err := c.sleep(ctx, wait); err != nil {
-			return err
+			return cut(ctx, err)
 		}
 	}
 }
@@ -318,8 +318,9 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 	}
 	req.Header = a.header.Clone()
 	// What the record says of the answer is this try's: one whose connection
-	// went got no status and no body, not the ones of the try before it.
-	rec.Status, rec.ResponseHeaders, rec.ResponseBody = 0, nil, nil
+	// went got no status, no body and no first byte, not the ones of the try
+	// before it.
+	rec.Status, rec.ResponseHeaders, rec.ResponseBody, rec.FirstByteAt = 0, nil, nil, time.Time{}
 
 	// The wait for an answer counts as silence too, so a host that takes the
 	// request and says nothing is given up on.
@@ -328,10 +329,7 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 		cancel:  func() { cancel(ErrIdle) },
 		now:     c.now,
 		onFirst: func(t time.Time) {
-			attempt.FirstByteAt = t
-			if rec.FirstByteAt.IsZero() {
-				rec.FirstByteAt = t
-			}
+			attempt.FirstByteAt, rec.FirstByteAt = t, t
 		},
 	}
 	idle.start()
