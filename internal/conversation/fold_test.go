@@ -660,7 +660,7 @@ func TestEveryMemoryIsToldWhenNothingBoundsThePrompt(t *testing.T) {
 
 	// A model that says nothing of its context holds the system message to
 	// nothing, so every memory is told whatever share memories have of it.
-	told := e.remembering([]store.Memory{
+	told := e.remembering(&model{}, []store.Memory{
 		{Content: "Caio's sister is Ana", SaidAt: said},
 		{Content: "Caio cooks on Saturdays", SaidAt: said},
 	}, 0, 1.0/3.5)

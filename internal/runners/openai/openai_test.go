@@ -500,24 +500,36 @@ func TestTheBaseURLKeepsItsOwnQuery(t *testing.T) {
 	}
 }
 
-func TestTheCacheKeyIsSent(t *testing.T) {
-	ts, srv := newServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		io.WriteString(w, `data: {"choices":[{"index":0,"delta":{"content":"hey","role":"assistant"},"finish_reason":"stop"}]}`+"\n\n")
-		io.WriteString(w, "data: [DONE]\n\n")
-	})
+// signing is an extension that writes the key of the conversation a request
+// belongs to under a field of its own.
+type signing struct{}
+
+func (signing) Notes() api.Notes { return api.Notes{Role: api.RoleSystem} }
+
+func (signing) Body(body map[string]any, req api.ChatRequest) { body["signed"] = req.CacheKey }
+
+// What a model was set up with beside its settings adds to the body the runner
+// built. The runner sends nothing of the conversation a request belongs to by
+// itself: that is for the extension to say.
+func TestAnExtensionAddsToTheBodyTheRunnerBuilt(t *testing.T) {
+	ts, srv := newServer(t, streamed("hey"), streamed("hey"))
 	c, _ := client(t, ts.URL, parts{})
-	ctx := context.Background()
-	_, err := c.Chat(ctx, api.ChatRequest{
-		Model:    "some/model",
-		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
-		CacheKey: "paula-paula-reply",
-	}, func(api.Chunk) error { return nil })
-	if err != nil {
-		t.Fatal(err)
+	for _, extension := range []api.Extension{nil, signing{}} {
+		_, err := c.Chat(context.Background(), api.ChatRequest{
+			Model:    "some/model",
+			Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+			Settings: api.Settings{Extension: extension},
+			CacheKey: "paula-paula-reply",
+		}, func(api.Chunk) error { return nil })
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
-	if !strings.Contains(srv.bodies[0], `"prompt_cache_key":"paula-paula-reply"`) {
-		t.Errorf("body = %s", srv.bodies[0])
+	if strings.Contains(srv.bodies[0], "paula-paula-reply") {
+		t.Errorf("a request with no extension carries its conversation's key: %s", srv.bodies[0])
+	}
+	if !strings.Contains(srv.bodies[1], `"signed":"paula-paula-reply"`) {
+		t.Errorf("the extension's field is not in the body: %s", srv.bodies[1])
 	}
 }
 
@@ -534,6 +546,7 @@ func TestTheConversationIsTheLastOfTheBody(t *testing.T) {
 		Model:    "some/model",
 		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
 		Tools:    []api.ToolDef{{Name: "search_memories", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		Settings: api.Settings{Extension: signing{}},
 		CacheKey: "paula-paula-reply",
 	}, func(api.Chunk) error { return nil })
 	if err != nil {
@@ -541,7 +554,7 @@ func TestTheConversationIsTheLastOfTheBody(t *testing.T) {
 	}
 	body := srv.bodies[0]
 	messages := strings.Index(body, `"messages":`)
-	for _, field := range []string{`"model":`, `"prompt_cache_key":`, `"stream":`, `"tools":`} {
+	for _, field := range []string{`"model":`, `"signed":`, `"stream":`, `"tools":`} {
 		if at := strings.Index(body, field); at < 0 || at > messages {
 			t.Errorf("%s comes after the conversation: %s", field, body)
 		}

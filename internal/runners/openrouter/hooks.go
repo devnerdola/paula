@@ -30,64 +30,13 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	if len(prov.Sampling.LogitBias) > 0 {
 		out["logit_bias"] = prov.Sampling.LogitBias
 	}
-	if c := prov.Cache.Control; c.Type != "" || c.TTL != "" {
-		control := map[string]any{}
-		if c.Type != "" {
-			control["type"] = c.Type
-		}
-		if c.TTL != "" {
-			control["ttl"] = c.TTL
-		}
-		out["cache_control"] = control
-		// The top-level marker is the end of the prompt, where the rounds of a
-		// reply find what the round before them wrote. A cache is written only
-		// where a request marks it, and the next reply changes the end of this
-		// prompt, so the last message that it sends again is marked too.
-		//
-		// That message is usually her reply, and some hosts take a marker only on
-		// a message the model was given, not on one it wrote. So the last of
-		// those that stands is marked as well: a host that takes both reads from
-		// the later marker, and the others from this one.
-		if msgs, ok := out["messages"].([]map[string]any); ok && req.Standing > 0 {
-			mark(msgs[req.Standing-1], control)
-			for _, msg := range slices.Backward(msgs[:req.Standing]) {
-				if msg["role"] != api.RoleAssistant {
-					mark(msg, control)
-					break
-				}
-			}
-		}
-	}
 	if prov.ServiceTier != "" {
 		out["service_tier"] = prov.ServiceTier
 	}
 	if o := reasoningObject(req.Settings, prov); len(o) > 0 {
 		out["reasoning"] = o
 	}
-	// The requests that share a prompt go to the host that has read it. The
-	// prompt caching documentation names session_id as the key a conversation
-	// is kept on one host by; without it, the requests of one conversation
-	// land where they land, and none of them finds the prompt before it.
-	if req.CacheKey != "" {
-		out["session_id"] = req.CacheKey
-	}
 	return nil
-}
-
-// mark puts a cache marker on the last part of a message. A marker goes on a
-// part, so a message written as text is sent as the one part it is; one that
-// says nothing has no part to carry it.
-func mark(msg map[string]any, control map[string]any) {
-	switch content := msg["content"].(type) {
-	case string:
-		if content != "" {
-			msg["content"] = []map[string]any{{"type": "text", "text": content, "cache_control": control}}
-		}
-	case []map[string]any:
-		if len(content) > 0 {
-			content[len(content)-1]["cache_control"] = control
-		}
-	}
 }
 
 func reasoningObject(s api.Settings, prov *provider) map[string]any {

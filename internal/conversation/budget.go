@@ -172,7 +172,7 @@ func (e *Engine) checkRoom(ctx context.Context) {
 		// Nothing says what the model holds, so nothing is divided.
 		return
 	}
-	card := size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, e.costs.ratio(m.Name), 0)
+	card := size([]api.Message{api.Text(api.RoleSystem, e.card(m))}, e.costs.ratio(m.Name), 0)
 	if card < system {
 		return
 	}

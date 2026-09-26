@@ -176,9 +176,10 @@ func (e *Engine) foldStep(ctx context.Context) (bool, error) {
 	inline := e.inlineFrom(said, m)
 	groups := exchanges(said)
 	weighing := e.weighing(ctx)
+	notes := m.notes()
 	sizes := make([]int, len(groups))
 	for i, group := range groups {
-		msgs, _ := e.exchange(group, inline, 0, nil, weighing)
+		msgs, _ := e.exchange(group, inline, 0, nil, notes, weighing)
 		sizes[i] = size(msgs, ratio, image)
 	}
 
@@ -339,7 +340,7 @@ func (e *Engine) summaryRoom(m *model, stored []store.Memory, ratio float64) int
 	if system <= 0 {
 		return 0
 	}
-	left := max(0, system-size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, ratio, 0))
+	left := max(0, system-size([]api.Message{api.Text(api.RoleSystem, e.card(m))}, ratio, 0))
 	loc := e.clock.Now().Location()
 	told := remembered(stored, share(left, e.cfg.MemoryRatio), ratio, loc)
 	for _, mem := range told {

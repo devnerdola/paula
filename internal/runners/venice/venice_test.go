@@ -277,6 +277,19 @@ func TestStreamOfACapturedReply(t *testing.T) {
 	}
 }
 
+// The first request of a prompt wrote 3796 of its 3799 tokens to the cache and
+// read none, which is what paula turns has to show of it.
+func TestWhatARequestWroteToTheCacheIsRead(t *testing.T) {
+	r := runner(t, answers(t, "text/event-stream", "stream_cache_write.sse").URL, "")
+	res, err := r.Chat(context.Background(), api.ChatRequest{Model: "m"}, func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Usage.PromptTokens != 3799 || res.Usage.CachedTokens != 0 || res.Usage.CacheWriteTokens != 3796 {
+		t.Errorf("usage = %+v, want 3799 prompt tokens, none read and 3796 written", res.Usage)
+	}
+}
+
 func TestCapturedErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

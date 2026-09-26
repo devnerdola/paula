@@ -46,6 +46,9 @@ type Settings struct {
 	// Provider holds the keys only one API has. It is filled in after
 	// decoding, since only the runner knows them.
 	Provider config.Section `yaml:"-"`
+	// Extension is what the model was set up with beside its settings, which
+	// every request to it carries. It is filled in once the model is.
+	Extension Extension `yaml:"-"`
 }
 
 type ReasoningSettings struct {

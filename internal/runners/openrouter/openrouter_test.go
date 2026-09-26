@@ -1,7 +1,6 @@
 package openrouter
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -775,52 +774,6 @@ func TestAProblemInsideTheProviderIsNamedInFull(t *testing.T) {
 
 // The settings this API names differently go where it documents them, not where
 // an OpenAI body would carry them.
-// The requests that share a prompt are kept on the host that has read it by
-// the session id the prompt caching documentation names; a request that shares
-// its prompt with nothing names none.
-func TestARequestNamesTheSessionItsPromptBelongsTo(t *testing.T) {
-	var bodies []string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, string(b))
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write(read(t, "stream_reply.sse"))
-	}))
-	t.Cleanup(ts.Close)
-
-	r := runner(t, ts.URL, "")
-	for _, key := range []string{"", "paula-paula-reply"} {
-		_, err := r.Chat(context.Background(), api.ChatRequest{
-			Model:    "some/model",
-			Messages: []api.Message{api.Text(api.RoleUser, "hey")},
-			CacheKey: key,
-		}, func(api.Chunk) error { return nil })
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	type named struct {
-		Session *string `json:"session_id"`
-	}
-	var sent []named
-	for _, b := range bodies {
-		var s named
-		if err := json.Unmarshal([]byte(b), &s); err != nil {
-			t.Fatal(err)
-		}
-		sent = append(sent, s)
-	}
-	if len(sent) != 2 {
-		t.Fatalf("%d requests were sent, want two", len(sent))
-	}
-	if sent[0].Session != nil {
-		t.Errorf("a request with no cache key names the session %q", *sent[0].Session)
-	}
-	if sent[1].Session == nil || *sent[1].Session != "paula-paula-reply" {
-		t.Errorf("the session is %v, want the cache key", sent[1].Session)
-	}
-}
-
 func TestTheRequestBodyCarriesWhatOnlyOpenRouterDocuments(t *testing.T) {
 	var body []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -836,10 +789,6 @@ provider:
     top_a: 0.2
     logit_bias:
       "123": -5
-  cache:
-    control:
-      type: ephemeral
-      ttl: 5m
   service_tier: flex
   reasoning:
     max_tokens: 2048
@@ -861,11 +810,7 @@ provider:
 	var sent struct {
 		TopA      float64        `json:"top_a"`
 		LogitBias map[string]int `json:"logit_bias"`
-		Cache     struct {
-			Type string `json:"type"`
-			TTL  string `json:"ttl"`
-		} `json:"cache_control"`
-		Tier      string `json:"service_tier"`
+		Tier      string         `json:"service_tier"`
 		Reasoning struct {
 			Enabled   *bool  `json:"enabled"`
 			Effort    string `json:"effort"`
@@ -882,8 +827,8 @@ provider:
 	if sent.TopA != 0.2 || sent.LogitBias["123"] != -5 {
 		t.Errorf("sampling = %+v", sent)
 	}
-	if sent.Cache.Type != "ephemeral" || sent.Cache.TTL != "5m" || sent.Tier != "flex" {
-		t.Errorf("cache and tier = %+v, %q", sent.Cache, sent.Tier)
+	if sent.Tier != "flex" {
+		t.Errorf("tier = %q", sent.Tier)
 	}
 	if sent.Reasoning.Enabled == nil || !*sent.Reasoning.Enabled ||
 		sent.Reasoning.Effort != "high" || sent.Reasoning.MaxTokens != 2048 {
@@ -891,92 +836,6 @@ provider:
 	}
 	if !slices.Equal(sent.Provider.Only, []string{"ionstream"}) || !sent.Provider.ZDR {
 		t.Errorf("provider = %+v", sent.Provider)
-	}
-}
-
-// A cache is written only where a request marks it, and the end of a prompt is
-// what the next reply changes. So the last message the next reply sends again is
-// marked beside the end, and so is the last of them the model was given, which
-// is the only kind OpenAI takes a marker on. Only a model told to cache is
-// marked.
-func TestTheLastMessagesThatStandAreMarkedForTheCache(t *testing.T) {
-	var bodies [][]byte
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		bodies = append(bodies, b)
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write(read(t, "stream_reply.sse"))
-	}))
-	t.Cleanup(ts.Close)
-
-	messages := []api.Message{
-		api.Text(api.RoleSystem, "You are Paula."),
-		api.Text(api.RoleUser, "hey"),
-		api.Text(api.RoleAssistant, "hi love"),
-		api.Text(api.RoleSystem, "It is now Wednesday."),
-		api.Text(api.RoleUser, "you there?"),
-	}
-	plain := runner(t, ts.URL, "")
-	cached := runner(t, ts.URL, "provider:\n  cache:\n    control:\n      type: ephemeral\n      ttl: 1h\n")
-	for _, c := range []struct {
-		r        *Runner
-		standing int
-	}{{plain, 3}, {cached, 0}, {cached, 3}} {
-		_, err := c.r.Chat(context.Background(), api.ChatRequest{
-			Model: "some/model", Messages: messages, Settings: c.r.Settings(), Standing: c.standing,
-		}, func(api.Chunk) error { return nil })
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	type sent struct {
-		Messages []struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"messages"`
-	}
-	var got []sent
-	for _, b := range bodies {
-		var s sent
-		if err := json.Unmarshal(b, &s); err != nil {
-			t.Fatalf("the body was not read back: %v (%s)", err, b)
-		}
-		got = append(got, s)
-	}
-	if len(got) != 3 {
-		t.Fatalf("%d requests were sent, want three", len(got))
-	}
-	// Her reply, and the message it answered.
-	want := map[int]string{1: "hey", 2: "hi love"}
-	for i, s := range got {
-		for j, m := range s.Messages {
-			text, marked := want[j]
-			marked = marked && i == 2
-			if !marked {
-				if bytes.Contains(m.Content, []byte("cache_control")) {
-					t.Errorf("request %d marks message %d: %s", i+1, j, m.Content)
-				}
-				if m.Content[0] != '"' {
-					t.Errorf("request %d sends message %d as %s, want its text", i+1, j, m.Content)
-				}
-				continue
-			}
-			var parts []struct {
-				Type    string `json:"type"`
-				Text    string `json:"text"`
-				Control struct {
-					Type string `json:"type"`
-					TTL  string `json:"ttl"`
-				} `json:"cache_control"`
-			}
-			if err := json.Unmarshal(m.Content, &parts); err != nil {
-				t.Fatalf("marked message %d is %s: %v", j, m.Content, err)
-			}
-			if len(parts) != 1 || parts[0].Type != "text" || parts[0].Text != text ||
-				parts[0].Control.Type != "ephemeral" || parts[0].Control.TTL != "1h" {
-				t.Errorf("marked message %d is %+v, want its text as one part carrying the marker", j, parts)
-			}
-		}
 	}
 }
 

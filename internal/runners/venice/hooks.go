@@ -34,9 +34,6 @@ func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	if prov.Output.Verbosity != "" {
 		out["verbosity"] = prov.Output.Verbosity
 	}
-	if prov.Cache.Retention != "" {
-		out["prompt_cache_retention"] = prov.Cache.Retention
-	}
 	if len(prov.Fallbacks) > 0 {
 		out["fallbacks"] = prov.Fallbacks
 	}
@@ -72,6 +69,11 @@ type streamChunk struct {
 	Cost *struct {
 		USD float64 `json:"usd"`
 	} `json:"cost"`
+	Usage *struct {
+		PromptTokensDetails *struct {
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"prompt_tokens_details"`
+	} `json:"usage"`
 }
 
 func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
@@ -81,6 +83,11 @@ func (hooks) Chunk(raw []byte, res *api.Result) (string, error) {
 	}
 	if c.Cost != nil {
 		res.Usage.Cost = c.Cost.USD
+	}
+	// What a request wrote to the cache is Venice's own field, beside the
+	// tokens it read that every OpenAI-compatible API reports.
+	if u := c.Usage; u != nil && u.PromptTokensDetails != nil {
+		res.Usage.CacheWriteTokens = u.PromptTokensDetails.CacheCreationInputTokens
 	}
 	if len(c.Choices) == 0 {
 		return "", nil

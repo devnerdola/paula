@@ -13,7 +13,6 @@ type provider struct {
 	Routing   routing   `yaml:"routing"`
 	Reasoning reasoning `yaml:"reasoning"`
 	Sampling  sampling  `yaml:"sampling"`
-	Cache     cache     `yaml:"cache"`
 
 	ServiceTier string `yaml:"service_tier"`
 }
@@ -48,15 +47,6 @@ type sampling struct {
 	LogitBias map[string]float64 `yaml:"logit_bias"`
 }
 
-type cache struct {
-	Control control `yaml:"control"`
-}
-
-type control struct {
-	Type string `yaml:"type"`
-	TTL  string `yaml:"ttl"`
-}
-
 var (
 	dataCollections = []string{"allow", "deny"}
 	quantizations   = []string{"int4", "int8", "fp4", "mxfp4", "nvfp4", "fp6",
@@ -66,7 +56,6 @@ var (
 	percentiles = []string{"p50", "p75", "p90", "p95", "p99"}
 	tiers       = []string{"auto", "default", "fast", "flex", "priority", "scale"}
 	prices      = []string{"prompt", "completion", "image", "audio", "request"}
-	ttls        = []string{"5m", "1h"}
 )
 
 // decodeProvider reads the block only OpenRouter documents.
@@ -83,10 +72,6 @@ func (p *provider) Validate() []error {
 	api.OneOf(out, "provider.routing.sort.by", p.Routing.Sort.By, sortsBy)
 	api.OneOf(out, "provider.routing.sort.partition", p.Routing.Sort.Partition, partitions)
 	api.OneOf(out, "provider.service_tier", p.ServiceTier, tiers)
-	api.OneOf(out, "provider.cache.control.ttl", p.Cache.Control.TTL, ttls)
-	if t := p.Cache.Control.Type; t != "" && t != "ephemeral" {
-		addf("provider.cache.control.type: %q is not ephemeral", t)
-	}
 	if p.Routing.Sort.Partition != "" && p.Routing.Sort.By == "" {
 		addf("provider.routing.sort.partition: no sort.by is set")
 	}

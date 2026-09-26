@@ -172,6 +172,81 @@ default_models:
 	}
 }
 
+// A model is given the cache extension that serves it, set up from its own
+// cache section, and a model no extension serves is given none.
+func TestAModelIsGivenTheFamilyExtensionThatServesIt(t *testing.T) {
+	cfg := load(t, `
+runners:
+  openrouter:
+    type: openrouter
+models:
+  claude:
+    runner: openrouter
+    id: anthropic/claude-opus-5.5
+  quiet:
+    runner: openrouter
+    id: anthropic/claude-opus-5.5
+    cache: false
+  glm:
+    runner: openrouter
+    id: z-ai/glm-5.3
+default_models:
+  chat: claude
+`)
+	s, err := Configure(cfg, Host{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"claude", "quiet"} {
+		if s.Model(name).Settings.Extension == nil {
+			t.Errorf("%s was given no family extension", name)
+		}
+	}
+	if e := s.Model("glm").Settings.Extension; e != nil {
+		t.Errorf("glm was given %v, want no family extension", e)
+	}
+}
+
+// A cache key is reported under it when no extension serves the model it is
+// written for, when it turns off what the family's host caches regardless,
+// and when it is anything but true or false.
+func TestACacheKeyIsReportedUnderIt(t *testing.T) {
+	cfg := load(t, `
+runners:
+  openrouter:
+    type: openrouter
+models:
+  claude:
+    runner: openrouter
+    id: anthropic/claude-opus-5.5
+    cache:
+      ttl: 1h
+  pro:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+    cache: false
+  glm:
+    runner: openrouter
+    id: z-ai/glm-5.3
+    cache: true
+default_models:
+  chat: claude
+`)
+	_, err := Configure(cfg, Host{})
+	if err == nil {
+		t.Fatal("Configure succeeded")
+	}
+	for _, want := range []string{
+		`models.claude.cache: ttl: cannot unmarshal !!map into bool`,
+		`models.pro.cache: DeepSeek caches every prompt it is sent, and nothing turns that off`,
+		`models.glm.cache: no family extension serves the openrouter model "z-ai/glm-5.3"`,
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want %q in it", err, want)
+		}
+	}
+}
+
 func TestDefaultsAndNeeds(t *testing.T) {
 	cfg := load(t, `
 runners:

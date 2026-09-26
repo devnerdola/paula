@@ -28,9 +28,6 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 		"stream_options": map[string]any{"include_usage": true},
 	}
 
-	if req.CacheKey != "" {
-		body["prompt_cache_key"] = req.CacheKey
-	}
 	if len(req.Tools) > 0 {
 		tools := make([]map[string]any, len(req.Tools))
 		for i, t := range req.Tools {
@@ -52,6 +49,9 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 	settings(body, req.Settings)
 	if err := hooks.Body(body, req); err != nil {
 		return nil, err
+	}
+	if req.Settings.Extension != nil {
+		req.Settings.Extension.Body(body, req)
 	}
 	return body, nil
 }

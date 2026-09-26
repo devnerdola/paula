@@ -23,9 +23,9 @@ func timeText(loc *time.Location, t time.Time) string {
 }
 
 // sentAt says when the message after it was sent, and now says what time it
-// is. Each is told in a message of its own, in the role a model reads for what
-// it is told rather than for what it is answering, so there is no mark inside
-// a message to explain and none for a model to copy.
+// is. Each is told in a message of its own, in the role the model's family
+// gives her notes, so there is no mark inside a message to explain and none
+// for a model to copy.
 func (e *Engine) sentAt(t time.Time) string {
 	return "The next message was sent at " + timeText(e.clock.Now().Location(), t) + "."
 }
@@ -66,8 +66,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 	ratio := e.costs.ratio(m.Name)
 	limit := m.limit()
 	system, history := e.split(m)
-	card := e.systemMessage(summary)
-	told := e.remembering(memories, system, ratio)
+	card := e.systemMessage(m, summary)
+	told := e.remembering(m, memories, system, ratio)
 	// The summary is told whole, so nothing else notices when it has outgrown
 	// what is left of the system message once the card and the memories are
 	// written. This is where both numbers are known.
@@ -111,8 +111,9 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 	answering, tail := -1, 0
 	dropped := 0
 	sending := e.sending(ctx, a)
+	notes := m.notes()
 	for i, group := range slices.Backward(groups) {
-		msgs, at := e.exchange(group, inline, last, told, sending)
+		msgs, at := e.exchange(group, inline, last, told, notes, sending)
 		n := size(msgs, ratio, image)
 		if at >= 0 {
 			n -= size(told, ratio, 0)
@@ -162,8 +163,8 @@ func (e *Engine) prompt(ctx context.Context, a *attempt, m *model) (_ []api.Mess
 // until a fold: the card, and the summary of the messages it no longer carries,
 // left out while there is none, so a run with no fold behind it reads exactly
 // as it did before there were folds.
-func (e *Engine) systemMessage(summary *store.Summary) api.Message {
-	sections := []string{e.rendered}
+func (e *Engine) systemMessage(m *model, summary *store.Summary) api.Message {
+	sections := []string{e.card(m)}
 	if summary != nil && summary.Content != "" {
 		sections = append(sections, "Earlier in your conversation with "+
 			e.persona.User.Name+":\n"+summary.Content)
@@ -171,15 +172,42 @@ func (e *Engine) systemMessage(summary *store.Summary) api.Message {
 	return api.Text(api.RoleSystem, strings.Join(sections, "\n\n"))
 }
 
+// notes is how her notes are told: as the model's family extension says, and
+// as system messages, the role a model reads for what it is told rather than
+// for what it is answering, for a model no extension serves.
+func (m *model) notes() api.Notes {
+	if m.settings.Extension == nil {
+		return api.Notes{Role: api.RoleSystem}
+	}
+	return m.settings.Extension.Notes()
+}
+
+// card is the character card as a model reads it. A model told her notes as
+// user messages is told whose they are right after the card, where it stands
+// as long as the card does, naming the ones it is told.
+func (e *Engine) card(m *model) string {
+	notes := m.notes()
+	if notes.Role == api.RoleSystem {
+		return e.rendered
+	}
+	told := "the one before each of USER's messages saying when it was sent, "
+	if !notes.LastAsSent {
+		told += "the one saying what time it is now, "
+	}
+	told += "and the one listing what you remember"
+	return e.rendered + "\n\n" + e.fill("Some messages come from the app you and USER text through, not from USER: "+
+		told+". They are for you to know, never to answer.", 0)
+}
+
 // remembering is what she remembers, as a message of its own, and nothing
 // while she remembers nothing. What is left of the system message's room once
 // the card is written is divided between the memories and the summary, and
 // nothing bounding the prompt leaves both of them whole.
-func (e *Engine) remembering(memories []store.Memory, room int, ratio float64) []api.Message {
+func (e *Engine) remembering(m *model, memories []store.Memory, room int, ratio float64) []api.Message {
 	loc := e.clock.Now().Location()
 	told := memories
 	if room > 0 {
-		left := max(0, room-size([]api.Message{api.Text(api.RoleSystem, e.rendered)}, ratio, 0))
+		left := max(0, room-size([]api.Message{api.Text(api.RoleSystem, e.card(m))}, ratio, 0))
 		told = remembered(memories, share(left, e.cfg.MemoryRatio), ratio, loc)
 	}
 	if len(told) == 0 {
@@ -187,10 +215,10 @@ func (e *Engine) remembering(memories []store.Memory, room int, ratio float64) [
 	}
 	lines := []string{"What you remember from your conversations with " +
 		e.persona.User.Name + ", oldest first:"}
-	for _, m := range told {
-		lines = append(lines, memoryLine(m, loc))
+	for _, mem := range told {
+		lines = append(lines, memoryLine(mem, loc))
 	}
-	return []api.Message{api.Text(api.RoleSystem, strings.Join(lines, "\n"))}
+	return []api.Message{api.Text(m.notes().Role, strings.Join(lines, "\n"))}
 }
 
 // memoryLine is one memory as a model reads it, dated by the day it was said
@@ -238,20 +266,22 @@ func coveredUpto(summary *store.Summary) store.MessageID {
 // written, so a host that keeps a prompt keeps all of it but the time before
 // the last message. What she remembers, told, goes before that time, and at is
 // where in the exchange the two begin, or -1 when the last message is not in it.
-func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, told []api.Message, r reading) (out []api.Message, at int) {
+// The times are told the way notes says, which may tell the last one as when
+// it was sent.
+func (e *Engine) exchange(group []store.Message, inline, last store.MessageID, told []api.Message, notes api.Notes, r reading) (out []api.Message, at int) {
 	out = make([]api.Message, 0, 2*len(group)+len(told))
 	at = -1
 	for _, msg := range group {
 		if msg.Role == store.RoleUser {
-			var when string
+			when := e.sentAt(msg.CreatedAt)
 			if msg.ID == last {
 				at = len(out)
 				out = append(out, told...)
-				when = e.now()
-			} else {
-				when = e.sentAt(msg.CreatedAt)
+				if !notes.LastAsSent {
+					when = e.now()
+				}
 			}
-			out = append(out, api.Text(api.RoleSystem, when))
+			out = append(out, api.Text(notes.Role, when))
 		}
 		out = append(out, e.message(msg, inline, r))
 	}

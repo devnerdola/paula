@@ -218,44 +218,11 @@ times, and gives up on a wait longer than two minutes.
 | `routing.order`, `.only`, `.ignore`, `.allow_fallbacks`, `.require_parameters`, `.data_collection`, `.zdr`, `.enforce_distillable_text`, `.quantizations`, `.sort`, `.preferred_min_throughput`, `.preferred_max_latency`, `.max_price` | the `provider` object |
 | `reasoning.max_tokens` | `reasoning.max_tokens` |
 | `sampling.top_a`, `sampling.logit_bias` | `top_a`, `logit_bias` |
-| `cache.control` | `cache_control` |
 | `service_tier` | `service_tier` |
 
 `routing.only` pins a model to certain hosts. At startup Paula checks that one
 of them accepts every parameter she sends and serves the context you asked for.
 A base name covers its variants, so `novita` matches `novita/fp8`.
-
-Most models cache a prompt without being asked. Claude, and OpenAI's models
-from GPT-5.6 on, write a cache only where a request marks it, and
-`cache.control` is what marks it. Set on such a model, every request carries
-it three times. A top-level `cache_control` marks the end of the prompt, where
-the rounds of a reply find what the round before them wrote. What she
-remembers and what time it is now change from one reply to the next, so the
-last message before them is marked too, which is usually her reply, and so is
-the last message she was sent before it, since OpenAI takes a marker only on a
-message the model was given. The next reply finds everything up to the later
-of the two on Claude, and up to the earlier on OpenAI:
-
-```yaml
-models:
-  opus:
-    runner: openrouter
-    id: anthropic/claude-opus-5.5
-    provider:
-      cache:
-        control:
-          type: ephemeral
-          ttl: 1h
-```
-
-`type` is `ephemeral`, and `ttl` is `5m` or `1h`. Reading the cache costs a
-tenth of the input price; writing it costs 1.25 times the input price with
-`5m` and twice with `1h`, and each reply writes only what is new since the one
-before. Texts are often more than five minutes apart, which a `5m` cache does
-not outlast, so `1h` is the one for a conversation. On OpenAI the `ttl` is
-dropped: a cache lasts at least 30 minutes, reading it costs a tenth of the
-input price and writing it 1.25 times. Neither caches anything shorter than
-the minimum of its model, so a conversation that has just begun may show none.
 
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
 from `GET /models`, which lists the models that write text, and checks the key
@@ -274,7 +241,6 @@ prompt. The catalogue page of each model says which it is.
 | `system_prompt`, `character`, `e2ee` | `venice_parameters` |
 | `sampling.min_temperature`, `sampling.max_temperature` | `min_temp`, `max_temp` |
 | `output.stop_token_ids`, `output.verbosity` | `stop_token_ids`, `verbosity` |
-| `cache.retention` | `prompt_cache_retention` |
 | `fallbacks` | `fallbacks`, up to 10 models the catalogue serves |
 | `search.provider` | `search_provider` of the web search |
 
@@ -284,7 +250,8 @@ against nothing there. Only what a model can do is checked.
 ### Models
 
 A model needs a `runner` and the `id` that runner knows it by. It may also set
-`context`, and any of the settings below.
+`context`, `cache: false` where its family allows it (see
+[Model families](#model-families)), and any of the settings below.
 
 Without a `context`, Paula uses the largest the catalogue reports. The number
 is never sent to the API. It is what `paula models` shows, what a host pinned
@@ -326,6 +293,109 @@ reasoning off on a model that could use it.
 
 Each API documents settings the other does not. Those live in the `provider`
 block of its runner, and are listed with each runner above.
+
+### Model families
+
+How a model reads a prompt, and what it needs to cache one, depends on its
+family and on the API that serves it. So each pair has an extension of its
+own, chosen by the runner's `type` and the model's `id`. No two extensions
+serve the same model, so changing one never changes what another model is
+sent. A model none of them serves is sent nothing about caching, and reads her
+notes as system messages.
+
+An extension decides two things. The first is the role of her notes: the time
+before each message you send, and what she remembers. A system message is the
+role a model reads for what it is told rather than for what it answers. Some
+hosts move every system message ahead of the conversation, next to the card,
+where the times change the prompt on every reply and nothing of the
+conversation is read from the cache. For those, her notes are user messages,
+and the card is followed by a sentence saying that they come from the app
+rather than from you, and are not to be answered. A host that caches where it
+chooses, rather than where a request marks, reads an earlier prompt only as far
+as the next one starts with it. A model on such a host is also told the time
+before the message she answers as when it was sent, the way the next prompt
+tells it, rather than as what time it is now. The second is what a request
+carries for caching.
+
+Every model an extension serves caches, the way its host caches best: where
+the host takes explicit caching, for the longest the host keeps it, and
+otherwise as the host caches by itself. `cache: false` on a model turns caching
+off where its host allows that, and is reported where it does not. A `cache`
+key on a model no extension serves is reported too.
+
+```yaml
+models:
+  opus:
+    runner: openrouter
+    id: anthropic/claude-opus-5.5
+    cache: false
+```
+
+| Extension | Serves the ids | Notes | Sends | Caches | `cache: false` |
+|---|---|---|---|---|---|
+| `openrouter/claude` | `anthropic/*`, `~anthropic/*` | system | `session_id` | two markers on a reply, for an hour | marks nothing |
+| `openrouter/gpt` | `openai/gpt-5.6*`, `openai/gpt-6*`, `~openai/gpt-astra-latest`, `~openai/gpt-sol-latest`, `~openai/gpt-terra-latest`, `~openai/gpt-luna-latest` | system | `session_id`, `prompt_cache_key` | explicit mode, two breakpoints, for 30 minutes | explicit mode with no breakpoint |
+| `openrouter/deepseek` | `deepseek/*`, `~deepseek/*` | user, the last time as sent | `session_id` | by itself | reported |
+| `venice/claude` | `claude-*` | user | `prompt_cache_key` | Venice's markers and one more | reported |
+| `venice/gpt` | `openai-gpt-56-*`, `openai-gpt-6-*` | user, the last time as sent | `prompt_cache_key` | by itself, for at least 30 minutes | reported |
+| `venice/deepseek` | `deepseek-*` | user, the last time as sent | `prompt_cache_key` | by itself | reported |
+
+GPT models before 5.6 cache by other rules, and no extension serves them.
+
+A host keeps a cache on the machine that wrote it. OpenRouter sends every
+request that names one `session_id` to the host that served the first of them.
+Venice routes by `prompt_cache_key`, and OpenAI groups its cache by it. Both
+are the card's `id` and what the request is for.
+
+**Claude on OpenRouter** writes a cache only where a request marks it, and a
+request of a reply carries two markers. A top-level `cache_control` marks the
+end of the prompt, where the rounds of a reply find what the round before them
+wrote. The other marks the last message the next reply sends again as it is,
+which is where the next reply finds what this one wrote: the time before the
+message she answers reads differently in the next prompt. Nothing else is
+marked. A request that also marked the message she was given before that one
+read nothing new once its cache had expired. A caption or a fold is marked
+nowhere, since no later request sends it again.
+
+A marker lasts an hour, the longest Anthropic keeps one. Texts are often more
+than five minutes apart, which the five-minute marker does not outlast.
+Reading the cache costs a tenth of the input price, and writing it for an hour
+costs twice the input price. Each reply writes only what is new since the one
+before.
+
+**GPT on OpenRouter**, from GPT-5.6 on, takes a breakpoint only on the text of
+a message the model was given, and a request carries two. One is on the last
+such message the next reply sends again, which is where the next reply finds
+what this one wrote. The other is where the reply before it put its own, since
+in explicit mode a request reads only at the breakpoints it carries. Explicit
+mode writes nothing but at a breakpoint, so the time before the message she
+answers, which the next prompt tells otherwise, is never written. A cache
+lasts 30 minutes, the only lifetime OpenAI gives, reading it costs a tenth of
+the input price and writing it 1.25 times.
+
+**GPT on Venice** takes no `prompt_cache_options`, and read no more with
+breakpoints than without, so OpenAI writes its cache at the end of the prompt.
+A request read the whole of the one before when that prompt started it as it
+was sent, and only the card when the time before the message she answered was
+told as what time it is now. So that time is told as when it was sent, which
+is the same minute whenever a reply starts as the message lands. Nothing sets
+how long the cache lasts: from GPT-5.6 on, only `prompt_cache_options` does.
+
+**Claude on Venice** is marked by Venice itself, on the system prompt and on
+the second-to-last user message. With her notes as user messages, that one is
+the time before the message she answers, which the next reply tells
+otherwise, so the last message the next reply sends again is marked as well.
+The marker lasts as long as Venice's own: a longer one takes a header Venice
+does not document.
+
+**DeepSeek** caches a prompt without being asked, on both hosts, and reads it
+in steps of 256 tokens, for five minutes. With the time before the message she
+answered told as what time it is now, the third reply of a conversation read
+3840 tokens; told as when it was sent, it read 4096, the whole of the prompt
+before it.
+
+No model caches a prompt shorter than its minimum, so a conversation that has
+just begun may show none.
 
 ### Roles
 
@@ -590,19 +660,23 @@ Both numbers are the model's own, and both are what a fold weighs an exchange
 by, since what a fold decides is what a prompt can carry.
 
 **The time is told, not written into a message.** Before each message of yours
-stands a system message of its own: `The next message was sent at Saturday, 19
+stands a message of its own: `The next message was sent at Saturday, 19
 September 2026, 09:06 UTC+02:00.`, and `It is now …` before the last one. A
 model writes like the messages it reads, and a small one that reads a time
 inside the message it is answering starts stamping its own replies with one. As
 a message of its own it is read rather than copied, it needs no notation to
 explain, and since only the one before your latest message ever changes, what a
-host has cached of everything earlier still stands.
+host has cached of everything earlier still stands. It is a system message, or
+a user message for a model whose host moves system messages ahead of the
+conversation. A model whose host caches where it chooses, rather than where a
+request marks, is told when your latest message was sent rather than what time
+it is now (see [Model families](#model-families)).
 
 A host keeps a prompt on the machine that read it, so the requests of one
-conversation name it: `prompt_cache_key` on both APIs, which Venice routes by,
-and on OpenRouter also `session_id`, which is what keeps them on one host. The
+conversation name it, in the field the model's family extension sends. The
 name is the card's `id` and what the request is for. `paula turns` shows how
-much of each prompt a host had cached.
+much of each prompt a host had cached and how much it wrote to the cache, as
+each API reports it.
 
 **Pictures are described once.** She accepts JPEG, PNG, GIF and WebP up to 64
 megapixels. Each one is scaled to `image_max_px`, turned upright by its EXIF
@@ -667,3 +741,21 @@ belongs to the commit it ran in.
 The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
 which request each file came from.
+
+One test asks a real model whether its cache works, and runs only when
+`PAULA_LIVE` names a configuration file. It keeps the conversation in a
+directory of its own, never in the file's `data_dir`. It sends
+`PAULA_LIVE_TURNS` messages (4 by default) to the chat model, or to the model
+`PAULA_LIVE_MODEL` names. Some reply after the first has to read the cache, and
+from that one on each has to read at least as much as the one before, ending
+with more. With `PAULA_LIVE_CACHE_WAIT`, it waits that long and sends as many
+again. After the wait, reading has to come back and pass what it read before.
+Set the wait past how long the model's cache lasts:
+
+```
+OPENROUTER_API_KEY=… PAULA_LIVE=scratch/paula.yaml PAULA_LIVE_CACHE_WAIT=6m \
+  go test ./internal/conversation -run TestLive -v -timeout 30m
+```
+
+`-v` prints how much each round of every reply read from the cache and wrote to
+it, and the reply itself, which shows whether a model read her notes as notes.

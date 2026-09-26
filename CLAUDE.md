@@ -51,8 +51,11 @@ about any one implementation: outside the kind table, no code in
 `internal/frontend` names the repl and none in `internal/runners` names a
 provider.
 
-Built for `internal/runners` (`api`, `openai`, `openrouter`, `venice`) and
-`internal/frontend` (`api`, `repl`). The same shape applies to tools and to
+Built for `internal/runners` (`api`, `openai`, `openrouter`, `venice`),
+`internal/frontend` (`api`, `repl`) and `internal/families` (`api`, and one
+extension per family under the runner kind that serves it). A family extension
+shapes a runner's request, so `internal/families/api` takes
+`internal/runners/api` as well. The same shape applies to tools and to
 whatever comes next.
 
 ## What the design holds to
@@ -72,13 +75,30 @@ whatever comes next.
 - **One setting never clamps another.** Two bounds over the same request each
   measure their own thing: `idle_timeout` a gap between bytes,
   `request_timeout` the whole of a request that is not a reply.
-- **Setup-agnostic.** Nothing in the code names a model, a family or a host.
-  Roles are `chat` and `vision`, and what a role needs is a capability.
+- **Setup-agnostic.** Nothing in the code names a model, a family or a host,
+  apart from the family extensions and their table. Roles are `chat` and
+  `vision`, and what a role needs is a capability.
+- **One family extension per model.** What a model needs of its prompt and to
+  cache one belongs to its family and the host that serves it, and lives in
+  the one extension the table picks for it by runner kind and id. Drivers and
+  the prompt builder know nothing of any family: they ask the extension. No two
+  extensions serve the same id and none shares code with another, so a new
+  model never changes what a tested one is sent. Every model caches by default,
+  the way its host caches best: explicitly, for the longest the host keeps a
+  cache, where the host takes that, and as the host caches by itself
+  otherwise. `cache: false` is the one setting, taken where the host can turn
+  caching off and reported where it cannot. Every extension passes the live
+  cache test before it is called done.
 - **The prompt is the card, then the conversation.** A time is told in a
   message of its own before each message she was sent — when an older one was
   sent, and what time it is now before the one she is answering. Nothing is
   written inside a message: a model writes like the messages it reads, and one
-  that reads a time in them starts writing times of its own.
+  that reads a time in them starts writing times of its own. Her notes, the
+  times and what she remembers, are told as the model's family extension says:
+  in the role it gives them, where a user role comes with a sentence after the
+  card saying whose they are, and with the time before the message she answers
+  told as when it was sent for a host that caches where it chooses rather than
+  where a request marks.
 - **What changes goes last.** A host caches the longest matching prefix of a
   prompt, so anything that changes every turn belongs at the end, after
   everything that does not.

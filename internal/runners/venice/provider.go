@@ -18,7 +18,6 @@ type provider struct {
 
 	Sampling sampling `yaml:"sampling"`
 	Output   output   `yaml:"output"`
-	Cache    cache    `yaml:"cache"`
 	Search   search   `yaml:"search"`
 }
 
@@ -32,17 +31,12 @@ type output struct {
 	Verbosity    string `yaml:"verbosity"`
 }
 
-type cache struct {
-	Retention string `yaml:"retention"`
-}
-
 type search struct {
 	Provider string `yaml:"provider"`
 }
 
 var (
 	verbosities = []string{"low", "medium", "high", "auto"}
-	retentions  = []string{"default", "extended", "24h"}
 	searchers   = []string{"brave", "google"}
 )
 
@@ -55,7 +49,6 @@ func decodeProvider(s config.Section) (*provider, []error) {
 func (p *provider) Validate() []error {
 	out := &api.Problems{}
 	api.OneOf(out, "provider.output.verbosity", p.Output.Verbosity, verbosities)
-	api.OneOf(out, "provider.cache.retention", p.Cache.Retention, retentions)
 	api.OneOf(out, "provider.search.provider", p.Search.Provider, searchers)
 
 	api.Between(out, "provider.sampling.min_temperature", p.Sampling.MinTemperature, 0, 2)

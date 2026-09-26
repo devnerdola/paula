@@ -74,6 +74,7 @@ type totals struct {
 	requests   int
 	prompt     int
 	cached     int
+	written    int
 	completion int
 	reasoning  int
 	cost       float64
@@ -91,6 +92,7 @@ func sum(requests []store.Request) totals {
 		}
 		t.prompt += r.Usage.PromptTokens
 		t.cached += r.Usage.CachedTokens
+		t.written += r.Usage.CacheWriteTokens
 		t.completion += r.Usage.CompletionTokens
 		t.reasoning += r.Usage.ReasoningTokens
 	}
@@ -115,13 +117,13 @@ func listTurns(ctx context.Context, w io.Writer, s *store.Store, n int) error {
 			e.Status,
 			orDash(strings.Join(t.models, ",")),
 			strconv.Itoa(t.requests),
-			strconv.Itoa(t.prompt), strconv.Itoa(t.cached),
+			strconv.Itoa(t.prompt), strconv.Itoa(t.cached), strconv.Itoa(t.written),
 			strconv.Itoa(t.completion), strconv.Itoa(t.reasoning),
 			money(t.cost), took(e),
 		})
 	}
 	table(w, []string{"ID", "TIME", "STATUS", "MODELS", "REQUESTS",
-		"PROMPT", "CACHED", "COMPLETION", "REASONING", "COST", "DURATION"},
+		"PROMPT", "CACHED", "WRITTEN", "COMPLETION", "REASONING", "COST", "DURATION"},
 		func(row func(...string)) {
 			for _, r := range rows {
 				row(r...)
@@ -152,7 +154,7 @@ func showTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 	if len(requests) > 0 {
 		fmt.Fprintln(w)
 		table(w, []string{"REQUEST", "PURPOSE", "RUNNER", "MODEL", "PROVIDER", "STATUS",
-			"ATTEMPTS", "PROMPT", "CACHED", "COMPLETION", "REASONING", "COST",
+			"ATTEMPTS", "PROMPT", "CACHED", "WRITTEN", "COMPLETION", "REASONING", "COST",
 			"FIRST BYTE", "DURATION", "FINISH"}, func(row func(...string)) {
 			for i, r := range requests {
 				u := r.Usage
@@ -163,6 +165,7 @@ func showTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 					orDash(r.Provider), strconv.Itoa(r.Status),
 					strconv.Itoa(len(r.Attempts)),
 					strconv.Itoa(u.PromptTokens), strconv.Itoa(u.CachedTokens),
+					strconv.Itoa(u.CacheWriteTokens),
 					strconv.Itoa(u.CompletionTokens), strconv.Itoa(u.ReasoningTokens),
 					money(r.Cost), since(r.StartedAt, r.FirstByteAt),
 					since(r.StartedAt, r.EndedAt), orDash(r.FinishReason))

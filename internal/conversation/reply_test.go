@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -316,6 +317,11 @@ func TestThePromptOfAReply(t *testing.T) {
 	if !strings.HasPrefix(shape[0], "system: You are Paula, texting with Caio.") {
 		t.Errorf("the prompt opens with %q, want the card", shape[0])
 	}
+	// A model no family extension serves reads the times as system messages,
+	// which need no word on whose they are.
+	if strings.Contains(shape[0], "come from the app") {
+		t.Errorf("the card is followed by %q, want nothing on whose the times are", shape[0])
+	}
 	// Then every message in order, with the time before each of mine: when an
 	// older one was sent, and what time it is now before the one she answers.
 	want := []string{
@@ -328,6 +334,109 @@ func TestThePromptOfAReply(t *testing.T) {
 	if got := shape[1:]; !slices.Equal(got, want) {
 		t.Errorf("the prompt after the card is\n%s\n\nwant\n%s",
 			strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// notesAsUser is a family extension that has her notes told as user messages.
+type notesAsUser struct{}
+
+func (notesAsUser) Notes() api.Notes                     { return api.Notes{Role: api.RoleUser} }
+func (notesAsUser) Body(map[string]any, api.ChatRequest) {}
+
+// A model whose family reads her notes as user messages is sent them in that
+// role, the times and what she remembers alike, and is told right after the
+// card that they come from the app rather than from Caio.
+func TestHerNotesAreToldInTheRoleTheModelsFamilyGivesThem(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hello")}
+	set := setup(f)
+	set.Models[0].Settings.Extension = notesAsUser{}
+	r := openReplyWith(t, f, set)
+	ctx := context.Background()
+	r.say(t, "hey")
+	first, err := r.store.MessagesAfter(ctx, 0)
+	if err != nil || len(first) == 0 {
+		t.Fatalf("messages = %+v, %v", first, err)
+	}
+	if err := r.store.Remember(ctx, &store.Memory{
+		Content: "Caio started learning the guitar this week.", Source: first[0].ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "you there?")
+
+	var shape []string
+	for _, m := range f.asked().Messages {
+		shape = append(shape, m.Role+": "+text(m))
+	}
+	if len(shape) != 7 {
+		t.Fatalf("the prompt is\n%s\n\nwant the card and six messages", strings.Join(shape, "\n"))
+	}
+	told := "Some messages come from the app you and Caio text through, not from Caio: " +
+		"the one before each of Caio's messages saying when it was sent, the one saying what time it is now, " +
+		"and the one listing what you remember. They are for you to know, never to answer."
+	if !strings.HasPrefix(shape[0], "system: You are Paula, texting with Caio.") || !strings.HasSuffix(shape[0], "\n\n"+told) {
+		t.Errorf("the system message is %q, want the card and then %q", shape[0], told)
+	}
+	for i, want := range []string{
+		"user: The next message was sent at Wednesday, 16 September 2026, 22:22 UTC+02:00.",
+		"user: hey",
+		"assistant: hello",
+		"user: What you remember from your conversations with Caio, oldest first:",
+		"user: It is now Wednesday, 16 September 2026, 22:22 UTC+02:00.",
+		"user: you there?",
+	} {
+		if !strings.HasPrefix(shape[i+1], want) {
+			t.Errorf("message %d is %q, want %q", i+1, shape[i+1], want)
+		}
+	}
+	if !strings.Contains(shape[4], "Caio started learning the guitar this week.") {
+		t.Errorf("what she remembers is %q, want the memory in it", shape[4])
+	}
+}
+
+// notesAsSent is a family extension that has her notes told as user messages,
+// and the time before the message she answers as when it was sent.
+type notesAsSent struct{}
+
+func (notesAsSent) Notes() api.Notes {
+	return api.Notes{Role: api.RoleUser, LastAsSent: true}
+}
+func (notesAsSent) Body(map[string]any, api.ChatRequest) {}
+
+// A host that reads only the whole of an earlier prompt needs every prompt to
+// start with the one before it. A family that tells the time before the
+// message she answers as when it was sent tells it the way the next prompt
+// does, so the next prompt only adds to it. The sentence after the card names
+// no time it is now.
+func TestAPromptThatTellsTheLastTimeAsSentStartsTheNext(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: says("hello")}
+	set := setup(f)
+	set.Models[0].Settings.Extension = notesAsSent{}
+	r := openReplyWith(t, f, set)
+	r.say(t, "hey")
+	r.say(t, "you there?")
+	r.say(t, "hello??")
+
+	requests := f.all()
+	if len(requests) != 3 {
+		t.Fatalf("%d requests were sent, want three", len(requests))
+	}
+	for i := range len(requests) - 1 {
+		was, next := requests[i].Messages, requests[i+1].Messages
+		if len(next) <= len(was) || !reflect.DeepEqual(next[:len(was)], was) {
+			t.Errorf("prompt %d does not start with prompt %d as it was sent", i+2, i+1)
+		}
+	}
+	last := requests[2].Messages
+	if got := last[len(last)-2].Role + ": " + text(last[len(last)-2]); got !=
+		"user: The next message was sent at Wednesday, 16 September 2026, 22:22 UTC+02:00." {
+		t.Errorf("the message she answers is told after %q, want when it was sent", got)
+	}
+	told := "Some messages come from the app you and Caio text through, not from Caio: " +
+		"the one before each of Caio's messages saying when it was sent, " +
+		"and the one listing what you remember. They are for you to know, never to answer."
+	if card := text(last[0]); !strings.HasSuffix(card, "\n\n"+told) {
+		t.Errorf("the system message is %q, want the card and then %q", card, told)
 	}
 }
 

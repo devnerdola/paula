@@ -143,6 +143,27 @@ type ToolCall struct {
 // ToolChoiceNone asks a model for an answer with no tool call in it.
 const ToolChoiceNone = "none"
 
+// Notes is how what she is told beside the conversation reaches a model: the
+// time before each message she was sent, and what she remembers.
+type Notes struct {
+	// Role is the role they are told in.
+	Role string
+	// LastAsSent tells the time before the message she is answering as when it
+	// was sent, the way the next prompt tells it, rather than as what time it
+	// is now.
+	LastAsSent bool
+}
+
+// Extension is what one family of models takes on one host beyond what every
+// model is sent.
+type Extension interface {
+	Notes() Notes
+	// Body adds its own fields to the body of a chat request once the runner
+	// has built it. The runner hands it the body and knows nothing of what it
+	// adds.
+	Body(body map[string]any, req ChatRequest)
+}
+
 type ChatRequest struct {
 	Model    string
 	Messages []Message

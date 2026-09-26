@@ -67,7 +67,7 @@ func filled(t *testing.T) (string, store.EntryID, store.EntryID) {
 	req.EndedAt = when.Add(2 * time.Second)
 	req.Provider = "Novita"
 	req.FinishReason = "stop"
-	req.Usage = &store.Usage{PromptTokens: 20514, CachedTokens: 19968, CompletionTokens: 210, ReasoningTokens: 180}
+	req.Usage = &store.Usage{PromptTokens: 20514, CachedTokens: 19968, CacheWriteTokens: 546, CompletionTokens: 210, ReasoningTokens: 180}
 	req.Cost = 0.0021
 	if err := s.EndRequest(ctx, req); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestTurnsList(t *testing.T) {
 
 	header := line(t, out, "ID ")
 	for _, want := range []string{"TIME", "STATUS", "MODELS", "REQUESTS",
-		"PROMPT", "CACHED", "COMPLETION", "REASONING", "COST", "DURATION"} {
+		"PROMPT", "CACHED", "WRITTEN", "COMPLETION", "REASONING", "COST", "DURATION"} {
 		if !strings.Contains(header, want) {
 			t.Errorf("the header has no %q: %s", want, header)
 		}
@@ -151,7 +151,7 @@ func TestTurnsList(t *testing.T) {
 	}
 
 	row := line(t, out, strconv.FormatInt(int64(entry), 10)+" ")
-	for _, want := range []string{"done", "some/model", "20514", "19968", "210", "180", "$0.002100"} {
+	for _, want := range []string{"done", "some/model", "20514", "19968", "546", "210", "180", "$0.002100"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("the reply row has no %q: %s", want, row)
 		}
@@ -190,7 +190,7 @@ func TestTurnsSummary(t *testing.T) {
 
 	// Every request of the entry is listed, with what it cost.
 	req := line(t, out, "1 ")
-	for _, want := range []string{"reply", "openrouter", "some/model", "Novita", "200", "stop"} {
+	for _, want := range []string{"reply", "openrouter", "some/model", "Novita", "200", "19968", "546", "stop"} {
 		if !strings.Contains(req, want) {
 			t.Errorf("the request row has no %q: %s", want, req)
 		}

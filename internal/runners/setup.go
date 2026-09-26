@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/families"
 	"nerdola.dev/x/paula/internal/runners/api"
 )
 
@@ -85,6 +86,7 @@ func configure(mc config.Model, r Runner) (*Configured, error) {
 		Context      int    `yaml:"context"`
 		api.Settings `yaml:",inline"`
 		Provider     config.Section `yaml:"provider"`
+		Cache        config.Section `yaml:"cache"`
 	}
 	if err := mc.Section.Decode(&own); err != nil {
 		return nil, err
@@ -93,6 +95,14 @@ func configure(mc config.Model, r Runner) (*Configured, error) {
 	base := r.Settings()
 	merged := own.Settings.MergedOver(base)
 	merged.Provider = config.MergeSections(base.Provider, own.Provider)
+	// What the model takes beyond what every model is sent belongs to its
+	// family and the runner that serves it, and lives in the extension that
+	// knows it.
+	extension, err := families.For(r.Kind(), mc.ID, own.Cache)
+	if err != nil {
+		return nil, err
+	}
+	merged.Extension = extension
 
 	return &Configured{
 		Name:     mc.Name,
