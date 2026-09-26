@@ -523,6 +523,9 @@ type liveRun struct {
 	after store.EntryID // the newest entry before the run
 	upto  store.EntryID // the newest entry of the run
 	turns []liveTurn
+	// summary is the summary's reservation as the run opens, which a
+	// compaction before its first turn is written to.
+	summary int
 }
 
 // liveTurn is what was sent in one turn and what came of it: the entry of the
@@ -553,7 +556,9 @@ func (lv *live) newest() store.EntryID {
 }
 
 func (lv *live) run(name string, clock *pastClock) *liveRun {
-	return &liveRun{lv: lv, name: name, clock: clock, after: lv.newest(), e: lv.open(clock)}
+	r := &liveRun{lv: lv, name: name, clock: clock, after: lv.newest(), e: lv.open(clock)}
+	r.summary, _ = r.e.reservations(r.model())
+	return r
 }
 
 func (r *liveRun) model() *model {
@@ -615,10 +620,11 @@ func (r *liveRun) send(texts []string, at []time.Time, images ...[]byte) {
 		clip(turn.said(), 70), len(images), turn.entry, clip(oneLine(textOfMessage(reply)), 120), errorOf(turn.failed),
 		turn.history, turn.reserved)
 	// Every turn after one that failed is about a conversation that did not
-	// happen, so the run stops at it.
+	// happen, so the run stops at it, with what it cost so far.
 	if turn.failed != "" {
 		r.end()
 		lv.check("every message is answered", false, "a reply to each", fmt.Sprintf("%q: %s", turn.said(), turn.failed))
+		lv.requestsTable(r)
 		lv.t.FailNow()
 	}
 }
@@ -754,7 +760,7 @@ func (lv *live) checkCompactedFirst(r *liveRun) {
 	sent := sentMessages(req.RequestBody)
 	var users []string
 	for _, m := range sent {
-		if m.role == api.RoleUser {
+		if m.role == api.RoleUser && !isTime(m.text) {
 			users = append(users, m.text)
 		}
 	}
@@ -769,16 +775,32 @@ func (lv *live) checkCompactedFirst(r *liveRun) {
 }
 
 // checkCompressedAgain holds a compaction that follows another to compressing
-// the summary so far with the history.
+// the summary so far with the history. Its parts are sent at once, so the
+// first of them is the one its prompt calls part 1, whatever order they went
+// in.
 func (lv *live) checkCompressedAgain(r *liveRun) {
 	compactions := r.compactions()
 	if len(compactions) == 0 {
 		return
 	}
-	parts := lv.requests(compactions[0].ID)
-	again := len(parts) > 0 && strings.HasPrefix(userText(parts[0].RequestBody), "Summary so far:")
+	again, what := false, "no part 1 among its requests"
+	for _, p := range lv.requests(compactions[0].ID) {
+		if found := partAsked.FindStringSubmatch(firstText(sentMessages(p.RequestBody))); found != nil && found[1] == "1" {
+			again = strings.HasPrefix(userText(p.RequestBody), "Summary so far:")
+			what = fmt.Sprintf("part 1, request #%d, starts with the summary so far: %v", p.ID, again)
+		}
+	}
 	lv.check("a compaction after another compresses the summary so far with the history", again,
-		"its first part starting with the summary so far", fmt.Sprintf("%v", again), lv.ids(compactions[0].ID)...)
+		"its first part starting with the summary so far", what, lv.ids(compactions[0].ID)...)
+}
+
+// firstText is the text of the first message of a request, and empty when it
+// carried none.
+func firstText(sent []sentMessage) string {
+	if len(sent) == 0 {
+		return ""
+	}
+	return sent[0].text
 }
 
 // checkParts holds each compaction's parts to the context and to what the
@@ -796,10 +818,8 @@ func (lv *live) checkParts(r *liveRun) {
 				continue
 			}
 			asked := "no number of"
-			if sent := sentMessages(p.RequestBody); len(sent) > 0 {
-				if found := wordsAsked.FindStringSubmatch(sent[0].text); found != nil {
-					asked = found[1]
-				}
+			if found := wordsAsked.FindStringSubmatch(firstText(sentMessages(p.RequestBody))); found != nil {
+				asked = found[1]
 			}
 			text := p.Usage.CompletionTokens - p.Usage.ReasoningTokens
 			written += text
@@ -825,9 +845,10 @@ func (lv *live) checkParts(r *liveRun) {
 }
 
 // reservedAt is the summary's reservation as the engine had it for a
-// compaction: the one measured after the turn before it.
+// compaction: the one measured after the turn before it, or the one the run
+// opened with when no turn came before it.
 func (lv *live) reservedAt(r *liveRun, c store.Entry) int {
-	reserved := 0
+	reserved := r.summary
 	for _, turn := range r.turns {
 		if turn.entry < c.ID {
 			reserved = turn.summary
@@ -837,11 +858,11 @@ func (lv *live) reservedAt(r *liveRun, c store.Entry) int {
 }
 
 // checkResent holds each reply to sending the prompt before it again as it
-// was, up to the time now of the message that one answered, while no
+// was, up to the time told before the message that one answered, while no
 // compaction came between them, and writes down what the host kept of it.
 func (lv *live) checkResent(r *liveRun) {
 	lv.printf("\n### What each reply sent again, and what the host kept of it\n")
-	lv.printf("| request | sent | cached | resends the one before up to its time now |")
+	lv.printf("| request | sent | cached | resends the one before up to the time before its last message |")
 	lv.printf("|---|---|---|---|")
 	ok, pairs := true, 0
 	var previous *store.Request
@@ -858,7 +879,7 @@ func (lv *live) checkResent(r *liveRun) {
 		if previous != nil {
 			was := sentMessages(previous.RequestBody)
 			sent := sentMessages(req.RequestBody)
-			k := slices.IndexFunc(was, func(m sentMessage) bool { return strings.HasPrefix(m.text, "It is now ") })
+			k := lastTime(was)
 			same := k > 0 && k <= len(sent) && slices.Equal(was[:k], sent[:k])
 			ok = ok && same
 			pairs++
@@ -871,8 +892,26 @@ func (lv *live) checkResent(r *liveRun) {
 		lv.printf("No two replies of the run came without a compaction between them.")
 		return
 	}
-	lv.check("each reply resends the prompt before it up to its time now, while no compaction comes between", ok,
+	lv.check("each reply resends the prompt before it up to the time before its last message, while no compaction comes between", ok,
 		"every pair the same", fmt.Sprintf("%d pairs, all the same: %v", pairs, ok))
+}
+
+// isTime says a message is a time told before one she was sent: when it was
+// sent, or what time it is now.
+func isTime(text string) bool {
+	return strings.HasPrefix(text, "The next message was sent at ") || strings.HasPrefix(text, "It is now ")
+}
+
+// lastTime is where the time before the last message she was sent is, which
+// is where the next prompt stops sending the one before it again, and -1 when
+// no time was told.
+func lastTime(messages []sentMessage) int {
+	for i, message := range slices.Backward(messages) {
+		if isTime(message.text) {
+			return i
+		}
+	}
+	return -1
 }
 
 // checkNoMemoryTold holds every reply of a run to telling no memory: a memory
@@ -956,11 +995,17 @@ func (lv *live) checkPictureSent(first *liveRun) {
 }
 
 // checkPictureGot holds the request for the picture again to getting it with
-// the tool, whose answer carries the picture to a model that sees.
+// the tool, whose answer carries the picture to a model that sees. A model
+// that does not see is told what a picture showed by either tool, so listing
+// the pictures reaches it as well.
 func (lv *live) checkPictureGot(r *liveRun, looked liveTurn) {
 	ctx := context.Background()
 	sees := r.model().catalogue.Vision
-	lv.checkCalled(looked, "a request to look at an old picture again gets it", "get_image")
+	if sees {
+		lv.checkCalled(looked, "a request to look at an old picture again gets it", "get_image")
+	} else {
+		lv.checkCalled(looked, "a request to look at an old picture again reaches it", "get_image", "list_images")
+	}
 	calls, _ := lv.st.ToolCalls(ctx, looked.entry)
 	if i := slices.IndexFunc(calls, func(c store.ToolCall) bool { return c.Name == "get_image" && c.Error == "" }); i >= 0 {
 		requests := lv.requests(looked.entry)
@@ -990,14 +1035,19 @@ func (lv *live) checkPictureGot(r *liveRun, looked liveTurn) {
 		"a reply saying red", textOfMessage(reply), lv.ids(looked.entry)...)
 }
 
-// checkCalled holds a turn to having called one of the tools named.
+// checkCalled holds a turn to having called one of the tools named, with a
+// call that did not fail: one that did reached nothing.
 func (lv *live) checkCalled(turn liveTurn, name string, tools ...string) {
 	calls, _ := lv.st.ToolCalls(context.Background(), turn.entry)
 	var called []string
 	for _, c := range calls {
-		called = append(called, fmt.Sprintf("%s %s", c.Name, c.Arguments))
+		call := fmt.Sprintf("%s %s", c.Name, c.Arguments)
+		if c.Error != "" {
+			call += " (failed: " + c.Error + ")"
+		}
+		called = append(called, call)
 	}
-	ok := slices.ContainsFunc(calls, func(c store.ToolCall) bool { return slices.Contains(tools, c.Name) })
+	ok := slices.ContainsFunc(calls, func(c store.ToolCall) bool { return slices.Contains(tools, c.Name) && c.Error == "" })
 	lv.check(name, ok, "a call of "+strings.Join(tools, " or "), fmt.Sprintf("calls %v", called), lv.ids(turn.entry)...)
 }
 
