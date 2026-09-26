@@ -317,6 +317,136 @@ func TestARoundWithNothingAfterItsCallIsStillAReply(t *testing.T) {
 	}
 }
 
+// An answer that would take the next round past the context would have the
+// host refuse the round, so the model is told in its place that the call ran
+// and its answer did not fit. An answer that fits goes as it is.
+func TestAnAnswerTooLongForTheContextIsNotSent(t *testing.T) {
+	short := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
+	long := &fakeTool{name: "list_memories", answer: manyWords(1000)}
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(answering(
+		round{calls: []api.ToolCall{
+			{ID: "call_1", Name: "search_memories", Arguments: `{"query":"Ana"}`},
+			{ID: "call_2", Name: "list_memories", Arguments: `{}`},
+		}},
+		round{text: "Ana is in Lisbon"},
+	))}
+	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), short, long)
+	r.say(t, "where does Ana live?")
+
+	requests := f.all()
+	if len(requests) != 2 {
+		t.Fatalf("%d rounds, want the one that asked and the one after it", len(requests))
+	}
+	answers := map[string]string{}
+	for _, m := range requests[1].Messages {
+		if m.Role == api.RoleTool {
+			answers[m.ToolCallID] = text(m)
+		}
+	}
+	if got := answers["call_1"]; got != "Ana lives in Lisbon" {
+		t.Errorf("the answer that fits went as %q", got)
+	}
+	if got := answers["call_2"]; !strings.HasPrefix(got, "error: ") || strings.Contains(got, manyWords(10)) {
+		t.Errorf("the answer too long for the context went as %.60q…, want an error in its place", got)
+	}
+	if reply, _ := stored(t, r); reply.Text() != "Ana is in Lisbon" {
+		t.Errorf("the reply is %q, want the round after the answers", reply.Text())
+	}
+}
+
+// failure is what the latest failed reply said.
+func failure(r *replyEngine) string {
+	var out string
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyFailed {
+			out = ev.Text
+		}
+	}
+	return out
+}
+
+// A round past the context before any answer is in it is one no host takes,
+// and its calls run nothing: what they did would never reach the model. A
+// reply that has done nothing fails and keeps nothing, saying why.
+func TestARoundPastTheContextRunsNoneOfItsCalls(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(answering(
+		round{text: manyWords(1000), calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{text: "never sent"},
+	))}
+	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), look)
+	ctx := context.Background()
+	r.say(t, "tell me about Ana")
+
+	if got := look.calls(); len(got) != 0 {
+		t.Errorf("the tool ran with %q, want none of the round's calls run", got)
+	}
+	if n := len(f.sentFor(store.PurposeReply)); n != 1 {
+		t.Errorf("%d rounds went out, want the one before the round past the context", n)
+	}
+	if got := failure(r); !strings.Contains(got, "context") {
+		t.Errorf("the reply ended saying %q, want it to say the round is past the context", got)
+	}
+	entries, err := r.store.Entries(ctx, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries = %+v, %v", entries, err)
+	}
+	if kept, err := r.store.ReplyOfEntry(ctx, entries[0].ID); err == nil {
+		t.Errorf("the reply kept %.60q…, want nothing of a reply that did nothing", kept.Text())
+	}
+}
+
+// A reply whose earlier round ran a tool has done something, so a round past
+// the context after it ends the reply with what she had written, the way any
+// failure after a tool ran does.
+func TestARoundPastTheContextAfterACallThatRanKeepsWhatItWrote(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(answering(
+		round{text: "let me look", calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{text: manyWords(1000), calls: []api.ToolCall{lookup("call_2", `{"query":"Lisbon"}`)}},
+		round{text: "never sent"},
+	))}
+	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), look)
+	r.say(t, "tell me about Ana")
+
+	if got := look.calls(); len(got) != 1 {
+		t.Errorf("the tool ran %d times, want only in the round that fit", len(got))
+	}
+	if got := failure(r); !strings.Contains(got, "context") {
+		t.Errorf("the reply ended saying %q, want it to say the round is past the context", got)
+	}
+	if reply, _ := stored(t, r); reply.Text() != "let me look\n\n"+manyWords(1000) {
+		t.Errorf("the reply kept %.60q…, want what she had written", reply.Text())
+	}
+}
+
+// A round whose answers were all too long is still past the context when the
+// notes in their places take it there, and the reply ends with what she had
+// written.
+func TestARoundPastTheContextWithNotesInPlaceOfItsAnswersEndsTheReply(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: manyWords(1000)}
+	var calls []api.ToolCall
+	for i := range 50 {
+		calls = append(calls, lookup(fmt.Sprintf("call_%d", i), `{"query":"Ana"}`))
+	}
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(answering(
+		round{text: "let me look", calls: calls},
+		round{text: "never sent"},
+	))}
+	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), look)
+	r.say(t, "tell me about Ana")
+
+	if n := len(f.sentFor(store.PurposeReply)); n != 1 {
+		t.Errorf("%d rounds went out, want the one before the round past the context", n)
+	}
+	if got := failure(r); !strings.Contains(got, "context") {
+		t.Errorf("the reply ended saying %q, want it to say the round is past the context", got)
+	}
+	if reply, _ := stored(t, r); reply.Text() != "let me look" {
+		t.Errorf("the reply kept %q, want what she had written", reply.Text())
+	}
+}
+
 // A model that reasons across the rounds of a reply reads its own thinking
 // again, so the reasoning a round's calls came with goes back with them.
 func TestTheReasoningOfARoundGoesBackWithItsCalls(t *testing.T) {

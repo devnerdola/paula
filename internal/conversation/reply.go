@@ -22,6 +22,11 @@ var errNoModel = errors.New("no model is set")
 // be compacted to make room for it, which the turn waits for.
 var errNoRoom = errors.New("the prompt is past the context, and the history is compacted to make room")
 
+// tooLong is what a model is sent in place of an answer that would take the
+// round past the context. The call ran, which the model is told so it does
+// not run it again.
+const tooLong = "error: the call ran, but what it answered is too long for the room left in the context, so it was not sent"
+
 // model is a configured model and what its runner says it can do.
 type model struct {
 	*runners.Configured
@@ -102,6 +107,16 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	var res *api.Result
 	kept := func(interrupted bool) *store.Message {
 		return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), details, interrupted)
+	}
+	// past ends a reply whose next round is past the context, which no host
+	// takes. One that has run a tool keeps what it wrote, as it does however
+	// else it fails.
+	past := func(over int) (*store.Message, error) {
+		err := fmt.Errorf("the next round is about %d tokens past the %d the model's context holds", over, m.limit())
+		if a.acted {
+			return kept(true), err
+		}
+		return nil, err
 	}
 	for round := 1; ; round++ {
 		// The round after the last a reply may take calls in is asked for an
@@ -208,18 +223,30 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			return kept(true), nil
 		}
 		messages = append(messages, asked(said.String(), res))
+		// A round past the context before any answer is in it runs none of
+		// its calls: what they did would never reach the model.
+		if over := e.excess(m, messages); over > 0 {
+			return past(over)
+		}
 		for _, c := range res.ToolCalls {
 			shown := pictures{sees: m.catalogue.Vision}
 			result := e.call(ctx, a, rec.last, c, true, &shown)
-			messages = append(messages, api.Message{
-				Role:       api.RoleTool,
-				ToolCallID: c.ID,
-				Parts:      e.answered(result, shown),
-			})
+			answer := api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, shown)}
+			// An answer that takes the next round past the context would have
+			// the host refuse the round, so the model is told so in its place.
+			if e.excess(m, append(messages, answer)) > 0 {
+				answer.Parts = []api.Part{{Type: api.PartText, Text: tooLong}}
+			}
+			messages = append(messages, answer)
 		}
 		// A stop while a tool ran keeps what she had written before it.
 		if a.was(stopped) {
 			return kept(true), nil
+		}
+		// The notes that take the place of answers are short, so only a round
+		// that was all but full before its answers is still past the context.
+		if over := e.excess(m, messages); over > 0 {
+			return past(over)
 		}
 	}
 

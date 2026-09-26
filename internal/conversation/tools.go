@@ -40,7 +40,8 @@ func toolsOf(list []toolsapi.Tool) (tools, error) {
 // The round it came in was asked for an answer with no call in it.
 var errNotRun = errors.New("not run: the reply had taken every round of calls it may")
 
-// call runs one tool a model asked for, and is what the model is sent back.
+// call runs one tool a model asked for, and is what it answered, which is what
+// the model is sent back unless it is too long for the room the round has.
 // Whatever came of it is written down under the reply's entry and the request
 // that asked, a call that could not run among them. The pictures it shows are
 // added to shown, which is nil for a call that is not run.

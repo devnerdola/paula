@@ -674,9 +674,14 @@ shows every compaction and what it asked.
 **A prompt past the context is not sent.** A message longer than the user
 input's reservation can take a prompt past the model's context, and the host
 refuses that. A turn measured past it waits for the history to be compacted to
-make room, and a turn still past it fails, saying so. This holds once a prompt
-of the model has been counted: until then a word counts high on purpose, and a
-prompt held back on that count would never be counted.
+make room, and a turn still past it fails, saying so. Each round of tool calls
+adds the calls and what they answered. A round past the context before its
+answers are in runs none of its calls, since what they did would never reach
+her, and the reply fails, saying so. An answer that would take the round past
+the context is not sent: she is told the call ran and its answer did not fit.
+All of this holds once a prompt of the model has been counted: until then a
+word counts high on purpose, and a prompt held back on that count would never
+be counted.
 
 **Memories are found by their words.** SQLite keeps an index of the words each
 memory holds, and a search returns the ones that hold any word of the question,
