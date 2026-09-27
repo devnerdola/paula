@@ -147,6 +147,18 @@ as hers does, which How she works describes. Forgetting is about what
 she carries: the messages a memory was read from, and the summary, stay where
 they are.
 
+`paula callbacks` is the times she scheduled to write to you on her own, the
+ones that have not come yet. It runs beside a `serve` or on its own too:
+
+```
+./paula callbacks list        # soonest first: the number, when it is due, and why
+./paula callbacks cancel 3    # takes one away before it comes
+```
+
+A `serve` reads what is pending again before it fires a call back, so one
+cancelled here does not come, even when it is due within the minute. Times
+are in the machine's time zone.
+
 `paula models` prints what each runner says about the models you configured.
 `paula models -available` lists everything the runners offer, which is how you
 find the id of a model to configure. Both read every runner's listing from its
@@ -599,7 +611,8 @@ chat: no frontend shows it, and what you see is her reply arriving on its own.
 `paula turns` shows the message and the turn that answered it. One that comes
 due while she is writing fires once that reply is done, and one that came due
 while `serve` was not running fires when it starts, oldest first. Her call
-backs are never in her prompt: the tools are how she reaches them.
+backs are never in her prompt: the tools are how she reaches them, and
+`paula callbacks` is how you do.
 
 With the tool, she need not answer a message the moment it arrives. Her system
 prompt tells her that when the person she is would not be writing then, asleep
