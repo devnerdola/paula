@@ -385,6 +385,67 @@ func TestAPromptGoesOutUntilAHostHasCountedOne(t *testing.T) {
 	}
 }
 
+// refusingPast answers with chat, and refuses a prompt of more words than the
+// context holds, the way a host refuses one past its context, at a token a
+// word, the least a word comes to.
+func refusingPast(limit int, chat chatFunc) chatFunc {
+	return func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		var words int
+		for _, m := range req.Messages {
+			words += len(strings.Fields(text(m)))
+		}
+		if words > limit {
+			return nil, &api.APIError{Status: 400, Message: "the prompt is past the context"}
+		}
+		return chat(ctx, req, fn)
+	}
+}
+
+// A prompt the host refused went out uncounted, so nothing held it back, and
+// nothing counts it either. The next turn measures the history first, and
+// goes out with the summary in place of what the host refused.
+func TestAPromptTheHostRefusedIsCompactedBeforeTheNextTurn(t *testing.T) {
+	ctx := context.Background()
+	big := &fakeRunner{model: chatModel(), chat: compacting("hm", "they said things")}
+	small := &fakeRunner{
+		model: api.Model{ID: "small/model", Context: 2000, Chat: true, Tools: true},
+		chat:  refusingPast(2000, compacting("ok", "they said things")),
+	}
+	set := setup(big)
+	set.Runners = append(set.Runners, small)
+	set.Models = append(set.Models, &runners.Configured{Name: "small", ID: small.model.ID, Runner: small})
+	r := openReplyWith(t, big, set)
+	for i := range 3 {
+		r.say(t, fmt.Sprintf("message %d: %s", i, manyWords(800)))
+	}
+
+	// A history the big model held is past the small one's context.
+	if err := r.SetModel(ctx, config.RoleChat, "small"); err != nil {
+		t.Fatal(err)
+	}
+	r.say(t, "and now?")
+	if !seen(r.Engine, ReplyFailed) {
+		t.Fatal("the turn was answered, want it refused by the host")
+	}
+
+	r.say(t, "still there?")
+	var failed int
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyFailed {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Errorf("%d turns failed, want only the one the host refused", failed)
+	}
+	if _, err := r.store.LatestSummary(ctx); err != nil {
+		t.Errorf("the history was not compacted before the next turn: %v", err)
+	}
+	if card := text(small.replied().Messages[0]); !strings.Contains(card, "they said things") {
+		t.Errorf("the turn went out with %q, want the summary in it", card)
+	}
+}
+
 // A model whose context the card and the tools fill on their own is refused
 // when the conversation opens, named by its key. Nothing has been counted
 // then, so they are measured at a token a word, the least a word comes to: a

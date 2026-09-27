@@ -486,7 +486,7 @@ type loop struct {
 	// and compacted when it has passed it, beside the loop; cancel cuts that
 	// short. waiting says a turn is due and waits for it to end. unchecked
 	// says the history has not been measured since the run started or since a
-	// compaction failed, so the next turn has it measured first.
+	// compaction or a reply failed, so the next turn has it measured first.
 	compacting bool
 	cancel     context.CancelFunc
 	waiting    bool
@@ -903,6 +903,11 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 		// the next run. One sent while it was being written is not that next
 		// message: nobody has answered it, and nothing else would.
 		e.events.publish(Event{Kind: ReplyFailed, Entry: a.entry.ID, Channel: a.entry.Channel, Text: r.err.Error()})
+		// A host refuses a prompt past its context, and a model whose prompts
+		// it has not counted yet is held to nothing before one is sent: the
+		// next turn measures the history first, so what the host refused is
+		// compacted rather than sent again.
+		l.unchecked = true
 		if l.last > a.entry.UptoMessageID {
 			l.pending = true
 			l.debounce.Reset(e.cfg.Debounce.Duration())
