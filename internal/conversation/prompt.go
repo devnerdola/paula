@@ -37,10 +37,14 @@ func (e *Engine) now() string {
 // cameDue says a call back she scheduled came due, when, and why: the whole
 // of what she answers, told the way a time is, since none of it is from the
 // user. It reads the same in every prompt after it, so what a host cached
-// stands.
+// stands. The reason is asked for as one sentence, and one that ends as a
+// sentence does is not given a second stop.
 func (e *Engine) cameDue(msg store.Message) string {
-	return "A call back you scheduled came due at " + timeText(e.clock.Now().Location(), msg.CreatedAt) +
-		": " + msg.Text() + "."
+	reason := msg.Text()
+	if !strings.HasSuffix(reason, ".") && !strings.HasSuffix(reason, "!") && !strings.HasSuffix(reason, "?") {
+		reason += "."
+	}
+	return "A call back you scheduled came due at " + timeText(e.clock.Now().Location(), msg.CreatedAt) + ": " + reason
 }
 
 // prompt builds the messages of a reply: the persona with the summary, the

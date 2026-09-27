@@ -155,6 +155,12 @@ func TestACallbackThatComesDueIsAMessageSheAnswers(t *testing.T) {
 	if last.Role != api.RoleSystem || text(last) != want {
 		t.Errorf("the prompt ends with %s: %q, want the note %q", last.Role, text(last), want)
 	}
+	// The tool asks for the reason as one sentence, so a model often ends it
+	// with a stop of its own, which the note does not double.
+	sentence := store.Message{CreatedAt: newClock().Now(), Parts: []store.Part{{Type: store.PartText, Text: "Ask how the interview went."}}}
+	if got := r.cameDue(sentence); !strings.HasSuffix(got, ": Ask how the interview went.") {
+		t.Errorf("a reason that is a sentence is told as %q, want its one stop", got)
+	}
 	if got := said(req, api.RoleUser); len(got) != 1 || got[0] != "off to the interview" {
 		t.Errorf("the prompt carries the user messages %q, want only the one sent before", got)
 	}

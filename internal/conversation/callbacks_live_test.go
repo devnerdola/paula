@@ -173,8 +173,10 @@ func (lv *live) checkCameDue(r *liveRun, fired *store.Message, name string) {
 	answers := err == nil && entry.UptoMessageID == fired.ID && entry.Status == store.StatusDone && reply != nil
 	req, ok := lv.replied(turn.entry)
 	sent := sentMessages(req.RequestBody)
+	// The note ends with the reason, given a stop when the model wrote none.
 	told := ok && len(sent) > 0 && strings.HasPrefix(sent[len(sent)-1].text, "A call back you scheduled came due at ") &&
-		strings.HasSuffix(sent[len(sent)-1].text, ": "+fired.Text()+".")
+		(strings.HasSuffix(sent[len(sent)-1].text, ": "+fired.Text()) ||
+			strings.HasSuffix(sent[len(sent)-1].text, ": "+fired.Text()+"."))
 	lv.check(name, answers && told,
 		"a done entry answering the call back message, whose prompt ends with the note saying it came due",
 		fmt.Sprintf("entry %d %s answers message %d (call back %d); the prompt ends with %q", turn.entry, statusOf(entry),
