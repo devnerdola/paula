@@ -36,16 +36,11 @@ func remembered(t *testing.T) (dir string, newest, replaced, other store.MemoryI
 		if err := s.AddMessage(ctx, m); err != nil {
 			t.Fatal(err)
 		}
-		stored := []store.Memory{{
-			Content: memory, Source: m.ID, Replaces: replaces,
-		}}
-		err := s.Fold(ctx, &store.Summary{
-			UptoMessageID: m.ID, Content: "they talked",
-		}, stored)
-		if err != nil {
+		stored := &store.Memory{Content: memory, Source: m.ID, Replaces: replaces}
+		if err := s.Remember(ctx, stored); err != nil {
 			t.Fatal(err)
 		}
-		return stored[0]
+		return *stored
 	}
 
 	was := add("Ana lives in Porto", "Caio's sister Ana lives in Porto.")

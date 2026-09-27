@@ -98,7 +98,7 @@ func (e *Engine) compact(ctx context.Context, m *model) error {
 				return err
 			}
 		}
-		return e.store.Fold(context.WithoutCancel(ctx), &store.Summary{UptoMessageID: upto, Content: written}, nil)
+		return e.store.Fold(context.WithoutCancel(ctx), &store.Summary{UptoMessageID: upto, Content: written})
 	})
 	if err != nil {
 		return err

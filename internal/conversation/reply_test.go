@@ -448,7 +448,7 @@ func TestTheTimeIsToldBeforeTheMessageSheIsAnswering(t *testing.T) {
 	// it that is the one being answered now.
 	covered := add(t, r, store.RoleUser, "the one it answers")
 	if err := r.store.Fold(ctx, &store.Summary{UptoMessageID: covered,
-		Content: "they talked"}, nil); err != nil {
+		Content: "they talked"}); err != nil {
 		t.Fatal(err)
 	}
 	answering := add(t, r, store.RoleUser, "and this one")

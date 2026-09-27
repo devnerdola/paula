@@ -38,8 +38,8 @@ type Memory struct {
 	SaidAt time.Time
 	// ReplacedBy is the memory that took its place, or zero while it stands.
 	ReplacedBy MemoryID
-	// Replaces are the memories this one takes the place of, which Fold and
-	// Remember read and write as their ReplacedBy. A memory read back carries
+	// Replaces are the memories this one takes the place of, which Remember
+	// reads and writes as their ReplacedBy. A memory read back carries
 	// ReplacedBy rather than this.
 	Replaces []MemoryID
 }
@@ -209,58 +209,18 @@ func (s *Store) Remember(ctx context.Context, m *Memory) error {
 	return nil
 }
 
-// Fold stores what one step of a fold learned: the summary as it now reads,
-// and the memories it read out of the messages that went into it. Both land
-// together, since a summary that covers messages whose memories were lost
-// would lose them for good.
-func (s *Store) Fold(ctx context.Context, summary *Summary, memories []Memory) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	res, err := tx.ExecContext(ctx, `INSERT INTO summaries
+// Fold stores the summary as it reads once a fold has taken the messages up
+// to one into it. Her memories are hers alone, kept with Remember: a fold
+// writes none.
+func (s *Store) Fold(ctx context.Context, summary *Summary) error {
+	res, err := s.db.ExecContext(ctx, `INSERT INTO summaries
 		(upto_message_id, content) VALUES (?, ?)`,
 		int64(summary.UptoMessageID), summary.Content)
 	if err != nil {
 		return err
 	}
-	stored, err := res.LastInsertId()
-	if err != nil {
-		return err
-	}
-	summary.ID = stored
-
-	for i := range memories {
-		m := &memories[i]
-		res, err := tx.ExecContext(ctx, `INSERT INTO memories
-			(content, source_message_id) VALUES (?, ?)`,
-			m.Content, int64(m.Source))
-		if err != nil {
-			return err
-		}
-		stored, err := res.LastInsertId()
-		if err != nil {
-			return err
-		}
-		m.ID = MemoryID(stored)
-		for _, replaced := range m.Replaces {
-			// A memory takes the place of one older than itself that still
-			// stands. The fold read the memories it replaces before it asked
-			// its model: a number is given again once the row that held it is
-			// forgotten, so a step that took long enough can name what is now
-			// its own row, and one she replaced herself meanwhile keeps what
-			// replaced it.
-			if _, err := tx.ExecContext(ctx,
-				`UPDATE memories SET replaced_by = ?
-				  WHERE id = ? AND id < ? AND replaced_by IS NULL`,
-				int64(m.ID), int64(replaced), int64(m.ID)); err != nil {
-				return err
-			}
-		}
-	}
-	return tx.Commit()
+	summary.ID, err = res.LastInsertId()
+	return err
 }
 
 func scanSummary(row scanner) (*Summary, error) {

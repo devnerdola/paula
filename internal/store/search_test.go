@@ -7,17 +7,16 @@ import (
 	"testing"
 )
 
-// remembers stores a fold of one memory about a message, and returns it.
+// remembers stores a message and one memory said in it, and returns the
+// memory.
 func remembers(t *testing.T, s *Store, text, memory string, replaces ...MemoryID) Memory {
 	t.Helper()
 	m := said(t, s, text)
-	stored := []Memory{{Content: memory, Source: m.ID, Replaces: replaces}}
-	err := s.Fold(context.Background(),
-		&Summary{UptoMessageID: m.ID, Content: "they talked"}, stored)
-	if err != nil {
+	stored := &Memory{Content: memory, Source: m.ID, Replaces: replaces}
+	if err := s.Remember(context.Background(), stored); err != nil {
 		t.Fatal(err)
 	}
-	return stored[0]
+	return *stored
 }
 
 // kept are memories a model wrote with the remember tool in conversations run
@@ -136,6 +135,9 @@ func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
 	first := remembers(t, s, "Ana lives in Porto", "Caio's sister Ana lives in Porto.")
 	second := remembers(t, s, "Ana moved to Lisbon", "Caio's sister Ana lives in Lisbon.", first.ID)
 	left := remembers(t, s, "I fixed the bike", "Caio fixed the bicycle.")
+	if err := s.Fold(ctx, &Summary{UptoMessageID: second.Source, Content: "they talked about Ana"}); err != nil {
+		t.Fatal(err)
+	}
 
 	gone, err := s.Forget(ctx, second.ID)
 	if err != nil {
