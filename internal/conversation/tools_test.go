@@ -551,6 +551,27 @@ func TestACallThatCannotRunIsAnsweredWithWhy(t *testing.T) {
 	}
 }
 
+// A model asking for a tool that takes no parameters sends no arguments at all
+// on some hosts, every time it asks: that is a call with none, as an empty
+// object is, and the tool runs. The call is written down as it came.
+func TestACallWithNoArgumentsAsksForNone(t *testing.T) {
+	look := &fakeTool{name: "search_memories", answer: "no call backs scheduled"}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{calls: []api.ToolCall{lookup("call_1", "")}},
+		round{text: "nothing planned yet"},
+	)}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "anything planned for sunday?")
+
+	if got := look.calls(); len(got) != 1 || got[0] != `{}` {
+		t.Errorf("the tool was asked %q, want it run with an empty object", got)
+	}
+	_, calls := stored(t, r)
+	if len(calls) != 1 || calls[0].Arguments != "" || calls[0].Error != "" || calls[0].Result != "no call backs scheduled" {
+		t.Errorf("the call was written down as %+v, want it as it came, and run", calls)
+	}
+}
+
 // What she wrote in any round is what she said. Text written beside a call is
 // on the screen already, and a model often puts its whole answer there and
 // has nothing to add once the call is answered.

@@ -87,10 +87,8 @@ func (list) LooksUp() {}
 
 func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a listArgs
-	if len(args) > 0 {
-		if err := json.Unmarshal(args, &a); err != nil {
-			return "", err
-		}
+	if err := json.Unmarshal(args, &a); err != nil {
+		return "", err
 	}
 	if a.From < 0 {
 		return "", fmt.Errorf("from is %d, below zero", a.From)

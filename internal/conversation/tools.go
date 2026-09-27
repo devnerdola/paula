@@ -109,7 +109,12 @@ func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, call int64
 	if !ok {
 		return "", fmt.Errorf("no tool is called %s", c.Name)
 	}
+	// A model asking for a tool that takes no parameters sends no arguments at
+	// all on some hosts, which is asking for none, as an empty object is.
 	args := json.RawMessage(c.Arguments)
+	if strings.TrimSpace(c.Arguments) == "" {
+		args = json.RawMessage(`{}`)
+	}
 	if !json.Valid(args) {
 		return "", fmt.Errorf("the arguments are not JSON: %s", c.Arguments)
 	}
