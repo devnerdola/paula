@@ -380,13 +380,11 @@ func (a *adapter) write(s string) error {
 // left says the request the stream rode on is over, so nothing more is written
 // to it: the response is the server's again as soon as the handler returns. A
 // beat in the middle of writing one finishes first, and whatever was waiting
-// to be handed to the session is told there is nobody to hand it to.
+// to be handed to the session is told there is nobody to hand it to, whether
+// or not the browser had already gone.
 func (a *adapter) left() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.gone {
-		return
-	}
 	a.gone = true
 	close(a.done)
 }

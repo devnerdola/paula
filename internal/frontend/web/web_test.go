@@ -715,6 +715,31 @@ func TestSomethingTypedOnAPageWhoseSessionEndedIsRefused(t *testing.T) {
 	}
 }
 
+// A page the browser stopped reading is gone before its session ends, and what
+// is typed on it once the session has ended is refused all the same.
+func TestSomethingTypedOnAPageThatWentAwayIsRefusedOnceItsSessionEnded(t *testing.T) {
+	a := &adapter{
+		f: &Frontend{}, inputs: make(chan api.Input), done: make(chan struct{}),
+		w:     closed{httptest.NewRecorder()},
+		flush: http.NewResponseController(closed{httptest.NewRecorder()}),
+	}
+	if err := a.Send(t.Context(), api.Outgoing{Text: "anyone there"}); err != api.ErrGone {
+		t.Fatalf("sending to a page that went away said %v", err)
+	}
+	a.left()
+
+	got := make(chan error, 1)
+	go func() { got <- a.typed(t.Context(), api.Input{Text: "anyone there"}) }()
+	select {
+	case err := <-got:
+		if err != api.ErrGone {
+			t.Errorf("what was typed said %v, want the page said to be gone", err)
+		}
+	case <-time.After(wait):
+		t.Error("what was typed is waiting for a session that has ended")
+	}
+}
+
 // An ask for what came before nothing is an ask for nothing.
 func TestAnAskForWhatCameBeforeNothingIsRefused(t *testing.T) {
 	srv, _ := serving(t, running(t, t.TempDir()))
