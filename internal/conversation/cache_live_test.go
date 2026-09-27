@@ -87,8 +87,9 @@ func TestLiveTheCacheIsReadAndRecovers(t *testing.T) {
 	var offered []tools.Tool
 	for _, tc := range cfg.Tools {
 		opened, err := tools.Open(tc.Name, tc.Section, tools.Host{
-			Names:    tools.Names{Character: card.Name, User: card.User.Name},
-			Language: card.Language,
+			Names:     tools.Names{Character: card.Name, User: card.User.Name},
+			Language:  card.Language,
+			Searchers: set.Searchers(),
 		})
 		if err != nil {
 			t.Fatal(err)

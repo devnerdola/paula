@@ -260,6 +260,39 @@ func TestModelsWithARunnerThatDoesNotAnswer(t *testing.T) {
 	}
 }
 
+// A runner that serves no models has its key checked like any other, and no
+// catalogue to list.
+func TestARunnerThatServesNoModelsListsNone(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	t.Setenv("TAVILY_API_KEY", "test-token-abcdefgh")
+	ts := openrouterCatalogue(t)
+	usage := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The answer to this one is the account's own credits, so there is no
+		// fixture of it (runners/tavily/testdata/SOURCES.md). Health reads
+		// nothing out of the body, only that the key was taken.
+		if r.URL.Path != "/usage" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(usage.Close)
+	path := configFile(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+"/v1\n  tavily:\n    type: tavily\n    url: "+
+		usage.URL+"\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\ndefault_models:\n  chat: talk\n")
+
+	code, out, _ := exec(t, "-config", path, "models", "-available")
+	if code != 0 {
+		t.Fatalf("code = %d:\n%s", code, out)
+	}
+	if !strings.Contains(line(t, out, "tavily "), "ok") {
+		t.Errorf("the tavily row = %s, want its key taken", line(t, out, "tavily "))
+	}
+	if !strings.Contains(out, "tavily serves no models") {
+		t.Errorf("output does not say tavily serves no models:\n%s", out)
+	}
+}
+
 func TestModelsAvailable(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
 	ts := openrouterCatalogue(t)

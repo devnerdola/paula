@@ -23,6 +23,7 @@ const (
 	PurposeReply   = "reply"
 	PurposeCaption = "caption"
 	PurposeSummary = "summary"
+	PurposeTool    = "tool"
 )
 
 // EntryID numbers the entries of the turn log.
@@ -60,8 +61,11 @@ type Attempt struct {
 }
 
 type Request struct {
-	ID              int64
-	EntryID         EntryID
+	ID      int64
+	EntryID EntryID
+	// ToolCall is the call that made the request, or 0 for one of the reply's
+	// own rounds.
+	ToolCall        int64
 	Purpose         string
 	Runner          string
 	Model           string
@@ -198,8 +202,8 @@ func scanEntry(row scanner) (*Entry, error) {
 	return &e, nil
 }
 
-const requestColumns = `id, entry_id, purpose, runner, model, method, url,
-	request_headers_json, request_body_gz, attempts_json, status,
+const requestColumns = `id, entry_id, tool_call_id, purpose, runner, model,
+	method, url, request_headers_json, request_body_gz, attempts_json, status,
 	response_headers_json, response_body_gz, started_at, first_byte_at, ended_at,
 	error, provider, finish_reason, usage_json, cost, pruned`
 
@@ -213,11 +217,15 @@ func (s *Store) AddRequest(ctx context.Context, r *Request) error {
 	if err != nil {
 		return err
 	}
+	var call sql.NullInt64
+	if r.ToolCall != 0 {
+		call = sql.NullInt64{Int64: r.ToolCall, Valid: true}
+	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO requests
-		(entry_id, purpose, runner, model, method, url,
+		(entry_id, tool_call_id, purpose, runner, model, method, url,
 		 request_headers_json, request_body_gz, started_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		r.EntryID, r.Purpose, r.Runner, r.Model, r.Method, r.URL,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.EntryID, call, r.Purpose, r.Runner, r.Model, r.Method, r.URL,
 		headers, reqBody, r.StartedAt.UnixNano())
 	if err != nil {
 		return err
@@ -292,14 +300,16 @@ func scanRequest(row scanner) (*Request, error) {
 		ended     sql.NullInt64
 		usage     string
 		pruned    int64
+		call      sql.NullInt64
 	)
-	err := row.Scan(&r.ID, &r.EntryID, &r.Purpose, &r.Runner, &r.Model,
+	err := row.Scan(&r.ID, &r.EntryID, &call, &r.Purpose, &r.Runner, &r.Model,
 		&r.Method, &r.URL, &reqH, &reqBody, &attempts, &r.Status, &respH,
 		&respBody, &started, &firstByte, &ended, &r.Error, &r.Provider,
 		&r.FinishReason, &usage, &r.Cost, &pruned)
 	if err != nil {
 		return nil, err
 	}
+	r.ToolCall = call.Int64
 	if r.RequestHeaders, err = parseHeaders(reqH); err != nil {
 		return nil, err
 	}

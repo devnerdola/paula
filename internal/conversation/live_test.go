@@ -193,8 +193,9 @@ func openLive(t *testing.T, path string) *live {
 	}
 	for _, tc := range cfg.Tools {
 		opened, err := toolkinds.Open(tc.Name, tc.Section, toolkinds.Host{
-			Names:    toolkinds.Names{Character: card.Name, User: card.User.Name},
-			Language: card.Language,
+			Names:     toolkinds.Names{Character: card.Name, User: card.User.Name},
+			Language:  card.Language,
+			Searchers: lv.set.Searchers(),
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -627,17 +628,6 @@ func (r *liveRun) send(texts []string, at []time.Time, images ...[]byte) {
 		lv.requestsTable(r)
 		lv.t.FailNow()
 	}
-}
-
-// compacted says a compaction of this run has ended and a turn has been
-// answered after it.
-func (r *liveRun) compacted() bool {
-	for _, entry := range r.entries() {
-		if entry.UptoMessageID == 0 && entry.Status != store.StatusRunning {
-			return len(r.turns) > 0 && r.turns[len(r.turns)-1].entry > entry.ID
-		}
-	}
-	return false
 }
 
 // end waits for whatever the last turn set off, and closes the run. Wait

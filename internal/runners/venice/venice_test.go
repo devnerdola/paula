@@ -349,6 +349,100 @@ func TestCapturedErrors(t *testing.T) {
 	}
 }
 
+// posted serves one captured file with a status, and keeps the path and the
+// body of what it was sent.
+func posted(t *testing.T, status int, file string) (*httptest.Server, *string, *map[string]any) {
+	t.Helper()
+	body := read(t, file)
+	var path string
+	var sent map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &path, &sent
+}
+
+type records struct{ ended []*api.Record }
+
+func (r *records) StartRequest(context.Context, *api.Record) error { return nil }
+
+func (r *records) EndRequest(_ context.Context, rec *api.Record) error {
+	r.ended = append(r.ended, rec)
+	return nil
+}
+
+// A search is sent the query and how many pages to answer with, is kept by the
+// recorder it carries, and is what Venice found: each page's title, address
+// and passage, and a date Venice leaves empty when it does not know one.
+func TestASearchIsWhatVeniceFound(t *testing.T) {
+	ts, path, sent := posted(t, http.StatusOK, "search.json")
+	r := runner(t, ts.URL, "")
+	kept := &records{}
+	found, err := r.Search(context.Background(), api.SearchRequest{Query: "concertos em Lisboa esta semana", Limit: 5, Recorder: kept})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *path != "/v1/augment/search" || (*sent)["query"] != "concertos em Lisboa esta semana" || (*sent)["limit"] != 5.0 ||
+		(*sent)["search_provider"] != nil {
+		t.Errorf("sent %v to %s", *sent, *path)
+	}
+	if len(kept.ended) != 1 || kept.ended[0].Status != http.StatusOK {
+		t.Errorf("records = %+v, want the search kept", kept.ended)
+	}
+	if len(found) != 5 {
+		t.Fatalf("found %d pages, want the five Venice answered with", len(found))
+	}
+	first := found[0]
+	if first.Title != "Os concertos em Lisboa que vai querer ver esta semana" ||
+		first.URL != "https://www.timeout.pt/lisboa/pt/musica/os-melhores-concertos-em-lisboa-esta-semana" ||
+		!strings.HasPrefix(first.Content, "Este fim-de-semana, o último, pode ver <strong>FF (25 Set)") || first.Date != "" {
+		t.Errorf("the first page = %+v", first)
+	}
+}
+
+// The engine the runner's provider block names is the one a search goes to.
+func TestASearchGoesToTheEngineTheRunnerNames(t *testing.T) {
+	ts, _, sent := posted(t, http.StatusOK, "search.json")
+	r := runner(t, ts.URL, "provider:\n  search:\n    provider: google")
+	if _, err := r.Search(context.Background(), api.SearchRequest{Query: "fado", Limit: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if (*sent)["search_provider"] != "google" {
+		t.Errorf("sent %v, want the search sent to google", *sent)
+	}
+}
+
+// A page is read as the markdown Venice made of it, and one Venice will not
+// read is refused in its words.
+func TestAPageIsWhatVeniceRead(t *testing.T) {
+	ts, path, sent := posted(t, http.StatusOK, "scrape.json")
+	r := runner(t, ts.URL, "")
+	url := "https://www.timeout.pt/lisboa/pt/musica/os-melhores-concertos-em-lisboa-esta-semana"
+	got, err := r.Read(context.Background(), api.PageRequest{URL: url})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *path != "/v1/augment/scrape" || (*sent)["url"] != url {
+		t.Errorf("sent %v to %s", *sent, *path)
+	}
+	if !strings.HasPrefix(got, "[Ir para o conteúdo](https://www.timeout.pt/") {
+		t.Errorf("the page reads %q", got[:min(len(got), 200)])
+	}
+
+	ts, _, _ = posted(t, http.StatusBadRequest, "error_scrape_blocked.json")
+	_, err = runner(t, ts.URL, "").Read(context.Background(), api.PageRequest{URL: "https://www.reddit.com/r/lisboa/"})
+	var e *api.APIError
+	if !errors.As(err, &e) || e.Status != http.StatusBadRequest ||
+		e.Message != "Reddit blocks automated access to their content. Unable to scrape this URL." {
+		t.Errorf("a page Venice will not read = %v", err)
+	}
+}
+
 func TestRequestBody(t *testing.T) {
 	var sent []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -468,6 +562,34 @@ func TestCheckHoldsTheSettingsAgainstTheCatalogue(t *testing.T) {
 	needs := api.Needs{Chat: true, Vision: true, Tools: true}
 	if err := check(ctx, r, api.Checked{ID: "z-ai-glm-5-3-flash", Settings: s, Needs: needs}); err != nil {
 		t.Errorf("Check = %v, want it to pass", err)
+	}
+}
+
+// A web search goes through the runner, so only the runner's block names the
+// engine it goes to. A model whose own block names another is reported under
+// the key; one that names the runner's, or none, changes nothing.
+func TestOnlyTheRunnerNamesTheSearchEngine(t *testing.T) {
+	ctx := context.Background()
+	url := answers(t, "application/json", "models.json").URL
+	for _, tc := range []struct {
+		runner, model string
+		refused       bool
+	}{
+		{"", "search:\n  provider: google", true},
+		{"provider:\n  search:\n    provider: brave", "search:\n  provider: google", true},
+		{"provider:\n  search:\n    provider: brave", "search:\n  provider: brave", false},
+		{"provider:\n  search:\n    provider: brave", "", false},
+	} {
+		r := runner(t, url, tc.runner)
+		own, err := config.Root([]byte(tc.model))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := api.Settings{Provider: config.MergeSections(r.Settings().Provider, own)}
+		err = check(ctx, r, api.Checked{ID: "z-ai-glm-5-3-flash", Settings: s})
+		if refused := err != nil && strings.Contains(err.Error(), "provider.search.provider"); refused != tc.refused {
+			t.Errorf("a runner of %q and a model of %q = %v, want it refused: %v", tc.runner, tc.model, err, tc.refused)
+		}
 	}
 }
 

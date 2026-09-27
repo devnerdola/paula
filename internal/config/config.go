@@ -106,8 +106,8 @@ type Engine struct {
 	HistoryRatio float64 `yaml:"history_ratio"`
 	ImageMaxPx   int     `yaml:"image_max_px"`
 	LogKeep      int     `yaml:"log_keep"`
-	// ToolRounds is how many rounds of tool calls a reply may take. The round
-	// after them is asked for an answer with no call in it.
+	// ToolRounds is how many rounds of tool calls a reply may take. In the round
+	// after them, a call that only looks something up is not run.
 	ToolRounds int `yaml:"tool_rounds"`
 }
 

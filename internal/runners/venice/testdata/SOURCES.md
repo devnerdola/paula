@@ -9,6 +9,9 @@ whole entries and drops the rest; no field is changed.
 | `stream_cache_write.sse` | `POST /chat/completions` with `openai-gpt-6-luna` on 2026-09-25, streaming with `stream_options.include_usage`, a 17 kB card as the system message and `hey` as the only message; the first request of that prompt, so its cache was written and none was read |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 404 |
 | `error_unauthorized.json` | `POST /chat/completions` with a key that does not exist, 401 |
+| `search.json` | `POST /augment/search` on 2026-09-27 with `{"query":"concertos em Lisboa esta semana","limit":5}` |
+| `scrape.json` | `POST /augment/scrape` on 2026-09-27 with the address of the first page `search.json` found |
+| `error_scrape_blocked.json` | `POST /augment/scrape` on 2026-09-27 with `https://www.reddit.com/r/lisboa/`, 400 |
 
 `GET /api_keys/rate_limits` has no fixture: it answers with the account's own
 balance.

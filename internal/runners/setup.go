@@ -19,7 +19,7 @@ type Configured struct {
 	// problem with it is reported as.
 	Path     string
 	ID       string
-	Runner   Runner
+	Runner   Server
 	Context  int
 	Settings api.Settings
 }
@@ -76,7 +76,11 @@ func Configure(cfg *config.Config, host Host) (*Setup, error) {
 	return s, nil
 }
 
-func configure(mc config.Model, r Runner) (*Configured, error) {
+func configure(mc config.Model, runner Runner) (*Configured, error) {
+	r, ok := runner.(Server)
+	if !ok {
+		return nil, fmt.Errorf("%s.runner: %s serves no models", mc.Section.Path(), runner.Name())
+	}
 	// The settings of a model are read here, and the keys config already read
 	// are named so that a section is decoded whole: it reports any key it does
 	// not know, and these three it does.
@@ -122,6 +126,17 @@ func (s *Setup) Model(name string) *Configured {
 		}
 	}
 	return nil
+}
+
+// Searchers are the runners that search the web, by name.
+func (s *Setup) Searchers() map[string]api.Searcher {
+	out := map[string]api.Searcher{}
+	for _, r := range s.Runners {
+		if searcher, ok := r.(api.Searcher); ok {
+			out[r.Name()] = searcher
+		}
+	}
+	return out
 }
 
 // RoleNeeds is what a model has to be able to do to serve a role, which is the

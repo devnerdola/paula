@@ -61,6 +61,8 @@ type listArgs struct {
 
 func (list) Note(json.RawMessage) string { return "listing pictures" }
 
+func (list) LooksUp() {}
+
 func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a listArgs
 	if len(args) > 0 {
@@ -120,6 +122,8 @@ func (get) Note(args json.RawMessage) string {
 	json.Unmarshal(args, &a)
 	return fmt.Sprintf("looking at picture #%d", a.Number)
 }
+
+func (get) LooksUp() {}
 
 func (get) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a getArgs

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
+	runnersapi "nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 	"nerdola.dev/x/paula/internal/tools/api"
 )
@@ -70,6 +71,8 @@ func (f *fakeEnv) Cancel(_ context.Context, id store.CallbackID) error {
 	f.cancelled = id
 	return nil
 }
+
+func (f *fakeEnv) Recorder() runnersapi.Recorder { return nil }
 
 func (f *fakeEnv) find(id store.CallbackID) *store.Callback {
 	for i := range f.pending {

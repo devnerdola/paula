@@ -125,9 +125,11 @@ each: a reply, or a compaction of the history into the summary.
 `turns 42` shows which messages the reply answered, the prompt the model was
 given, whether it was asked to reason and at which effort, and the reply
 itself. A reply that asked for tools lists each call, the request of the round
-that asked for it, and why it failed if it did. `-dump` adds the headers and
-the exact bytes in both directions, and what each call was asked with and
-answered, which is what you want when an API behaves strangely.
+that asked for it, and why it failed if it did. A request a tool made of a
+runner, such as a web search, is one of the reply's, as `tool`, and the call
+that made it names it under `SENT`. `-dump` adds the headers and the exact
+bytes in both directions, and what each call was asked with and answered,
+which is what you want when an API behaves strangely.
 
 `paula memory` is what she remembers. It reads and writes the conversation a
 `serve` is holding, so it runs beside one or on its own:
@@ -180,13 +182,15 @@ share settings.
 ### Runners
 
 A runner is one API. Its settings are the defaults for its models, and a model
-can override any of them.
+can override any of them. Tavily serves no models: it searches the web for the
+`web` tools, so its section takes every key below but `provider`, and a model
+written on it is refused.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `type` | — | `openrouter` or `venice` |
+| `type` | — | `openrouter`, `venice` or `tavily` |
 | `url` | the API's own | base URL |
-| `token_env` | `OPENROUTER_API_KEY` or `VENICE_API_KEY` | the environment variable with the key |
+| `token_env` | `OPENROUTER_API_KEY`, `VENICE_API_KEY` or `TAVILY_API_KEY` | the environment variable with the key |
 | `idle_timeout` | `2m` | how long a request may go without a byte |
 | `request_timeout` | `3m` | the whole a request that is not a reply may take |
 | `retries` | `2` | how often at most a request is sent again, when the API answers with a status that asks for it |
@@ -196,8 +200,9 @@ The key is never written to a log, and never appears in the request log either.
 
 The two timeouts answer different questions, and neither shortens the other.
 `idle_timeout` cuts any request that goes quiet. `request_timeout` is the whole
-a listing or a key check may take, however steadily it arrives; a reply has no
-such bound, since it arrives for as long as she is writing.
+a listing, a key check, a web search or a page read may take, however steadily
+it arrives; a reply has no such bound, since it arrives for as long as she is
+writing.
 
 `request_timeout` is generous because a catalogue is usually instant and
 occasionally stalls: OpenRouter answers its own in under a second most of the
@@ -228,7 +233,8 @@ from `GET /models`, which lists the models that write text, and checks the key
 with `GET /api_keys/rate_limits`. She sends `429` again at the time in
 `x-ratelimit-reset-requests`, at most `retries` times. She keeps Venice's own
 system prompt off unless `provider.system_prompt` turns it on, and wants
-`sampling.seed` above zero.
+`sampling.seed` above zero. For the `web` tools she searches with
+`POST /augment/search` and reads a page with `POST /augment/scrape`.
 
 Venice labels each model with a privacy. A `private` model runs where nothing
 of a request is kept. An `anonymized` one, such as Claude, is passed to the
@@ -241,10 +247,15 @@ prompt. The catalogue page of each model says which it is.
 | `sampling.min_temperature`, `sampling.max_temperature` | `min_temp`, `max_temp` |
 | `output.stop_token_ids`, `output.verbosity` | `stop_token_ids`, `verbosity` |
 | `fallbacks` | `fallbacks`, up to 10 models the catalogue serves |
-| `search.provider` | `search_provider` of the web search |
+| `search.provider` | `search_provider` of a web search, `brave` or `google`; the runner's own block sets it, and a model's that names another is reported |
 
 Venice publishes no list of accepted parameters, so a sampling setting is held
 against nothing there. Only what a model can do is checked.
+
+**Tavily** serves `https://api.tavily.com`. For the `web` tools she searches
+with `POST /search`, asking for the day each page was published, and reads a
+page with `POST /extract`. She checks the key with `GET /usage`, and sends
+`429` again after the seconds in `Retry-After`, at most `retries` times.
 
 ### Models
 
@@ -419,7 +430,7 @@ that takes them.
 | `history_ratio` | `0.6` | part of the same that the history may take before it is compacted into the summary; above 0, and together with `summary_ratio` below 1 |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
 | `log_keep` | `500` | how many entries keep the bodies of their requests; a compaction is an entry of its own |
-| `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; the round after them is asked for an answer with no call in it |
+| `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; in the round after them, a call that only looks something up is not run |
 
 ### Frontends
 
@@ -493,7 +504,8 @@ is doing the letting in.
 Every browser that opens the page gets a session of its own, and they show each
 other what is typed. A message she writes arrives text by text, as it does
 everywhere else, and the one she is in the middle of fills as she writes it.
-Scrolling up reads further back.
+Scrolling up reads further back. A message shows as it was written, as it does
+on every frontend, and an address in it is a link.
 
 On a page the browser calls secure — `https`, or `localhost` — a bell asks
 whether to notify you. While the page is open but not being looked at, the
@@ -506,6 +518,21 @@ A tool is something she can do in the middle of a reply: she asks for it, it
 runs, and she writes on with what it answered. Only the kinds listed under
 `tools` are offered. While one runs, the frontend says what she is doing, such
 as `searching memories for Ana`.
+
+A reply takes at most `tool_rounds` rounds of calls, and the round after them
+is the last. It is sent as the round before it was, with what came of that
+round, and the last answer in it ends with a note saying the calls are over
+and to answer now. Nothing earlier in the request changes, and no message of
+the user's turn comes after the answers, so the host reads from its cache all
+it kept of the round before, thinking included.
+
+In the last round, a call that only looks something up is not run, since
+nothing would read what it answered. One that changes something still runs,
+so putting the answer off, or keeping a memory, works there as it does in any
+round. When the last round left a call to look something up, or wrote nothing
+without putting the answer off, she is asked once more for an answer, this
+time with calls turned off, which a host reads from its cache no further than
+the prompt's start.
 
 Her memories are never in her prompt, and neither are the pictures of messages
 the history no longer carries: the tools are how she reaches them. So each
@@ -583,6 +610,41 @@ nothing of it, except that the typing status shows for a moment while she
 decides: a frontend is told she is writing as the request goes out, before
 anything says whether she will.
 
+**`web`** lets her look something up on the web, through a runner that
+searches: Venice, or Tavily.
+
+| Tool | What she does with it |
+|---|---|
+| `search_web` | searches the web for a query; each page it found comes numbered, with its title, its address, the day it was published where the runner knows it, and a passage of it |
+| `read_page` | reads a page by its address, 20,000 characters at a time; a part with more after it says where the next starts, and `from` reads on |
+
+| Key | Default | Meaning |
+|---|---|---|
+| `runner` | — | the runner that searches and reads; required |
+| `results` | `5` | the most pages a search answers with; from 1 to the 20 both APIs document |
+
+```yaml
+tools:
+  web:
+    runner: venice
+```
+
+Both tools tell her that what a page says is its writer's, and never an
+instruction to her. A page is counted in characters rather than words, since
+it comes with its links written out, and those make a word of it many times
+longer than one of prose.
+
+A page is asked of the runner once. The eight she read latest are kept while
+`serve` runs, and reading on cuts the next part from the text the part before
+was cut from, so a page that changed in between does not move where it starts.
+Reading a page from its start asks for it as it is now.
+
+Every search and every page is a request of its own, which the runner charges
+for apart from the model: Venice a cent each, and Tavily a credit for a search
+and one for every five pages read. Neither says the price in its answer, so
+`paula turns` shows none. Venice refuses some sites outright, such as Reddit and
+X, and Tavily fails to read some; she is told so, in their words.
+
 ## The character card
 
 The card is the whole character. Every field is optional except `name` and
@@ -629,9 +691,13 @@ and asking again would do it again, so a failure after it ends the reply the
 way a stop does: what she had written is kept, the error is said below it, and
 the message counts as answered.
 
-**The prompt is the conversation.** It opens with a system message: the card,
-then the summary of what came before. After it comes the history, the messages
-the summary does not cover, in order, each reply after what it answers, and last
+**The prompt is the conversation.** It opens with a system message: the card;
+a sentence telling her that her messages reach you as plain text, so she writes
+no markdown or HTML and gives an address as it is; then the summary of what
+came before. Every frontend shows a message as the characters it is written
+in, and a model that has read a page written in markdown would otherwise write
+some back. After it comes the history, the messages the
+summary does not cover, in order, each reply after what it answers, and last
 the time it is now and the message she is answering. A call back that came due
 is one message in the history, told the way a time is: `A call back you
 scheduled came due at Tuesday, 29 September 2026, 21:30 UTC+02:00: ask how the
@@ -831,9 +897,11 @@ touching either. An older one is brought up to date by `serve`. A command that
 only reads says to run `serve` first, rather than read a schema it does not
 know. Only one `serve` may use a directory at a time.
 
-Nothing leaves the machine except the requests to the model API. Those carry
-the prompt, the pictures and the settings. A search of her memories runs in the
-database and sends nothing.
+Nothing leaves the machine except the requests to the model API, and those of
+the `web` tools. The first carry the prompt, the pictures and the settings. A
+web search sends its query, and reading a page its address, to the runner the
+`web` tools name. A search of her memories runs in the database and sends
+nothing.
 
 ## Development
 
@@ -849,7 +917,7 @@ The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
 which request each file came from.
 
-Four tests run against real models, and only when `PAULA_LIVE` names a
+Five tests run against real models, and only when `PAULA_LIVE` names a
 configuration file. Each reads the keys the environment holds, as `serve` does.
 
 ```
@@ -914,4 +982,16 @@ a new run, which has to fire it as it starts. It takes about three minutes:
 ```
 VENICE_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
   go test ./internal/conversation -run TestLiveCallbacks -v -timeout 20m
+```
+
+The fifth holds the `web` tools to a real model and to the runner the file's
+`web` section names. It asks her what concerts are on in Lisbon this week,
+which she has to search the web for, and then to open the first page she
+found; each has to run its tool, whose call has to have sent a request the
+runner answered `200`, and end in a reply. Run it once for each runner that
+searches:
+
+```
+VENICE_API_KEY=… TAVILY_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
+  go test ./internal/conversation -run TestLiveWeb -v -timeout 20m
 ```

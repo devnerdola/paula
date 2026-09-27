@@ -6,6 +6,7 @@ import (
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/openrouter"
+	"nerdola.dev/x/paula/internal/runners/tavily"
 	"nerdola.dev/x/paula/internal/runners/venice"
 )
 
@@ -17,6 +18,9 @@ type Factory func(name string, s config.Section, h Host) (Runner, error)
 var kinds = map[string]Factory{
 	openrouter.Kind: func(name string, s config.Section, h Host) (Runner, error) {
 		return openrouter.Open(name, s, h)
+	},
+	tavily.Kind: func(name string, s config.Section, h Host) (Runner, error) {
+		return tavily.Open(name, s, h)
 	},
 	venice.Kind: func(name string, s config.Section, h Host) (Runner, error) {
 		return venice.Open(name, s, h)

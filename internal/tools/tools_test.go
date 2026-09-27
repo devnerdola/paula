@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"nerdola.dev/x/paula/internal/config"
+	runnersapi "nerdola.dev/x/paula/internal/runners/api"
 )
 
 // load reads a configuration file with the tools section given.
@@ -37,13 +39,29 @@ func TestKinds(t *testing.T) {
 	}
 }
 
-// Every kind opens as it is written with nothing under it, and what a model is
-// offered of it is a tool of a name of its own with parameters that are JSON.
+// searcher is a runner that searches the web, which is all the web kind asks
+// of one to open.
+type searcher struct{}
+
+func (searcher) Name() string     { return "r" }
+func (searcher) MostResults() int { return 20 }
+
+func (searcher) Search(context.Context, runnersapi.SearchRequest) ([]runnersapi.SearchResult, error) {
+	return nil, nil
+}
+
+func (searcher) Read(context.Context, runnersapi.PageRequest) (string, error) { return "", nil }
+
+// Every kind opens as it is written with nothing under it but what it cannot
+// do without, and what a model is offered of it is a tool of a name of its own
+// with parameters that are JSON.
 func TestEveryKindOpens(t *testing.T) {
+	needs := map[string]string{"web": "    runner: r\n"}
+	host := Host{Searchers: map[string]runnersapi.Searcher{"r": searcher{}}}
 	for _, kind := range Kinds() {
 		t.Run(kind, func(t *testing.T) {
-			cfg := load(t, "  "+kind+":\n")
-			tools, err := Open(kind, cfg.Tools[0].Section, Host{})
+			cfg := load(t, "  "+kind+":\n"+needs[kind])
+			tools, err := Open(kind, cfg.Tools[0].Section, host)
 			if err != nil {
 				t.Fatal(err)
 			}

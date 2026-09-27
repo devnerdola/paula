@@ -2,34 +2,21 @@ package openai
 
 import (
 	"context"
-	"os"
 	"slices"
 	"sync"
 
 	"nerdola.dev/x/paula/internal/config"
-	"nerdola.dev/x/paula/internal/logs"
 	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/runners/transport"
 )
 
-// Config is what every OpenAI-compatible runner is configured with. A runner
-// decodes it with the defaults of its own API, and adds the keys only it takes.
+// Config is what every OpenAI-compatible runner is configured with: its
+// connection, and the settings its models take unless they say otherwise. A
+// runner adds the keys only it takes.
 type Config struct {
-	// Type is what the kind table read to know which runner to open. It is
-	// named here so that a section is decoded whole, since a section reports
-	// any key it does not know.
-	Type           string          `yaml:"type"`
-	URL            string          `yaml:"url"`
-	TokenEnv       string          `yaml:"token_env"`
-	IdleTimeout    config.Duration `yaml:"idle_timeout"`
-	RequestTimeout config.Duration `yaml:"request_timeout"`
-	// Retries is a pointer so that nothing tells zero retries from a file that
-	// asks for none. The defaults a runner passes set it.
-	Retries *int `yaml:"retries"`
-
-	api.Settings `yaml:",inline"`
-	Provider     config.Section `yaml:"provider"`
-
-	token string
+	transport.Connection `yaml:",inline"`
+	api.Settings         `yaml:",inline"`
+	Provider             config.Section `yaml:"provider"`
 }
 
 // Decode reads a runner section over the defaults it is given, and reports what
@@ -44,30 +31,7 @@ func Decode(s config.Section, defaults Config) (Config, *api.Problems) {
 	}
 
 	p.Add(cfg.Settings.Validate()...)
-	cfg.token = os.Getenv(cfg.TokenEnv)
-	switch {
-	case cfg.token == "":
-		p.Addf("token_env: environment variable %s is not set", cfg.TokenEnv)
-	case len(cfg.token) < logs.MinSecret:
-		// A value this short is no key, and it is too short to be redacted, so
-		// it would be written to the log as it is.
-		p.Addf("token_env: the value of %s is %d bytes, too short to be a key",
-			cfg.TokenEnv, len(cfg.token))
-	}
-	switch {
-	case cfg.Retries == nil:
-		// The defaults set it, so nothing here is a key written with nothing
-		// after it: a null takes the pointer away rather than leaving it be.
-		p.Addf("retries: no number is written")
-	case *cfg.Retries < 0:
-		p.Addf("retries: %d is below zero", *cfg.Retries)
-	}
-	if cfg.IdleTimeout <= 0 {
-		p.Addf("idle_timeout: %s is not above zero", cfg.IdleTimeout)
-	}
-	if cfg.RequestTimeout <= 0 {
-		p.Addf("request_timeout: %s is not above zero", cfg.RequestTimeout)
-	}
+	cfg.Check(p)
 	return cfg, p
 }
 
@@ -92,23 +56,6 @@ func DecodeProvider[T any, P interface {
 		}
 	}
 	return p, p.Validate()
-}
-
-// Client is the client the configuration describes. The token is registered as a
-// secret of the run, since from here on it is sent with every request.
-func (c Config) Client(name string, h api.Host, hooks Hooks) *Client {
-	h.Secrets.Add(c.token)
-	return &Client{
-		Runner:         name,
-		BaseURL:        c.URL,
-		Token:          c.token,
-		IdleTimeout:    c.IdleTimeout.Duration(),
-		RequestTimeout: c.RequestTimeout.Duration(),
-		Retries:        *c.Retries,
-		Hooks:          hooks,
-		Log:            h.Log,
-		Secrets:        h.Secrets,
-	}
 }
 
 // Catalogue is the listing a runner serves, read once per run. Nothing of it is

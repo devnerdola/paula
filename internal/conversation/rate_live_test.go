@@ -45,7 +45,7 @@ func TestLiveTheRate(t *testing.T) {
 	// rate is read from the messages it carried.
 	counted := &countedRounds{}
 	for _, m := range lv.set.Models {
-		m.Runner = &countingRunner{Runner: m.Runner, rounds: counted}
+		m.Runner = &countingRunner{Server: m.Runner, rounds: counted}
 	}
 	clock := &pastClock{}
 	clock.set(time.Now())
@@ -143,11 +143,6 @@ func (c countedRound) words(e *Engine) int {
 	return words + wordsIn(e.tools.text)
 }
 
-// rate is what a word of the round came to: the host's count over its words.
-func (c countedRound) rate(e *Engine) float64 {
-	return float64(c.tokens) / float64(c.words(e))
-}
-
 // pictures are how many pictures the round carried.
 func (c countedRound) pictures() int {
 	_, images := measure(c.messages)
@@ -175,12 +170,12 @@ func (c *countedRounds) since(n int) []countedRound {
 // what the host counted it at. A reply is the one request that says how much
 // of it the next sends again.
 type countingRunner struct {
-	runners.Runner
+	runners.Server
 	rounds *countedRounds
 }
 
 func (r *countingRunner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
-	res, err := r.Runner.Chat(ctx, req, fn)
+	res, err := r.Server.Chat(ctx, req, fn)
 	if res != nil && req.Standing > 0 {
 		r.rounds.mu.Lock()
 		r.rounds.rounds = append(r.rounds.rounds, countedRound{messages: req.Messages, tokens: res.Usage.PromptTokens})

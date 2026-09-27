@@ -189,7 +189,12 @@ func tokens(ctx context.Context, set *runners.Setup, m *runners.Configured) stri
 	return strconv.Itoa(budget)
 }
 
-func catalogue(ctx context.Context, w io.Writer, r runners.Runner) {
+func catalogue(ctx context.Context, w io.Writer, runner runners.Runner) {
+	r, ok := runner.(runners.Server)
+	if !ok {
+		fmt.Fprintf(w, "%s serves no models\n", runner.Name())
+		return
+	}
 	models, err := r.Models(ctx)
 	if err != nil {
 		fmt.Fprintf(w, "%s: %v\n", r.Name(), err)

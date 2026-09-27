@@ -50,6 +50,8 @@ func (t list) Definition() api.Definition {
 
 func (list) Note(json.RawMessage) string { return "listing call backs" }
 
+func (list) LooksUp() {}
+
 func (list) Call(ctx context.Context, env api.Env, _ json.RawMessage) (string, error) {
 	pending, err := env.Callbacks(ctx)
 	if err != nil {

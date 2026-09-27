@@ -1,7 +1,8 @@
 // Package api is the vocabulary a tool and the conversation running it share:
 // what a tool is, and what it reaches of the conversation while it runs. The
 // tools under internal/tools import it, so none of them has to import
-// internal/tools itself.
+// internal/tools itself. A tool can make a runner's request, so this package
+// takes internal/runners/api as well.
 package api
 
 import (
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"time"
 
+	runnersapi "nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -29,6 +31,12 @@ type Tool interface {
 // rather than the card's.
 type Instructor interface {
 	Instructions() string
+}
+
+// Lookup is a tool whose calls only look something up and change nothing, so
+// a call of one is worth running only when what it answers reaches a model.
+type Lookup interface {
+	LooksUp()
 }
 
 // Definition is what a model is told of a tool: what it is called, what it
@@ -74,6 +82,9 @@ type Env interface {
 	Schedule(ctx context.Context, at time.Time, reason string) (*store.Callback, error)
 	Move(ctx context.Context, id store.CallbackID, at time.Time) error
 	Cancel(ctx context.Context, id store.CallbackID) error
+	// Recorder keeps a request the call makes of a runner under the reply that
+	// asked for the call.
+	Recorder() runnersapi.Recorder
 }
 
 // Host is what the program around a tool gives it.
@@ -82,6 +93,8 @@ type Host struct {
 	// asks to be written in, as the character card has them.
 	Names    Names
 	Language string
+	// Searchers are the runners that search the web, by name.
+	Searchers map[string]runnersapi.Searcher
 }
 
 // Names are the two in the conversation, as the character card names them.

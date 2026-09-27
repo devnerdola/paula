@@ -27,6 +27,11 @@ var errNoRoom = errors.New("the prompt is past the context, and the history is c
 // not run it again.
 const tooLong = "error: the call ran, but what it answered is too long for the room left in the context, so it was not sent"
 
+// lastRound is what a model is told after the answers of the last round of
+// calls a reply may take, so it answers with what it has.
+const lastRound = "This reply has taken every round of calls it may, so write your answer now. " +
+	"A call that only looks something up is not run any more; one that changes something still runs."
+
 // model is a configured model and what its runner says it can do.
 type model struct {
 	*runners.Configured
@@ -119,10 +124,14 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		return nil, err
 	}
 	for round := 1; ; round++ {
-		// The round after the last a reply may take calls in is asked for an
-		// answer with none, so a model that keeps asking still answers.
+		// The round after the last a reply may take calls in is sent as the
+		// ones before it, so a host reads from its cache all it kept of them,
+		// with a note in the last answer saying it is the last. A model that
+		// asks to look something up there all the same is asked once more,
+		// for an answer with no call in it.
+		last := round == e.cfg.ToolRounds+1
 		choice := ""
-		if round > e.cfg.ToolRounds {
+		if round > e.cfg.ToolRounds+1 {
 			choice = api.ToolChoiceNone
 		}
 		rec := e.recorder(a, store.PurposeReply)
@@ -208,7 +217,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			// has its calls written down and left: what it wrote beside them
 			// is its answer.
 			for _, c := range res.ToolCalls {
-				e.call(ctx, a, rec.last, c, false, nil)
+				e.call(ctx, a, rec.last, c, errNotRun, nil)
 			}
 			break
 		}
@@ -228,14 +237,36 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		if over := e.excess(m, messages); over > 0 {
 			return past(over)
 		}
-		for _, c := range res.ToolCalls {
-			shown := pictures{sees: m.catalogue.Vision}
-			result := e.call(ctx, a, rec.last, c, true, &shown)
-			answer := api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, shown)}
+		// In the last round, a call that only looks something up is left:
+		// what it answered would not be read before the reply is asked for
+		// its answer. One that changes something runs, such as putting the
+		// answer off or keeping a memory, which is as good there as in any
+		// round.
+		lookedUp := false
+		for i, c := range res.ToolCalls {
+			var answer api.Message
+			if last && e.tools.looksUp(c.Name) {
+				lookedUp = true
+				result := e.call(ctx, a, rec.last, c, errLookup, nil)
+				answer = api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, pictures{})}
+			} else {
+				shown := pictures{sees: m.catalogue.Vision}
+				result := e.call(ctx, a, rec.last, c, nil, &shown)
+				answer = api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, shown)}
+			}
+			// The last answer of the last round that may run every call says
+			// the next round is the last. It is part of that answer rather than
+			// a message of its own, which a model reads as a new turn of the
+			// user's, and a host as the end of the calls it keeps the thinking of.
+			var note []api.Part
+			if round == e.cfg.ToolRounds && i == len(res.ToolCalls)-1 {
+				note = []api.Part{{Type: api.PartText, Text: lastRound}}
+			}
+			answer.Parts = append(answer.Parts, note...)
 			// An answer that takes the next round past the context would have
 			// the host refuse the round, so the model is told so in its place.
 			if e.excess(m, append(messages, answer)) > 0 {
-				answer.Parts = []api.Part{{Type: api.PartText, Text: tooLong}}
+				answer.Parts = append([]api.Part{{Type: api.PartText, Text: tooLong}}, note...)
 			}
 			messages = append(messages, answer)
 		}
@@ -247,6 +278,12 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		// that was all but full before its answers is still past the context.
 		if over := e.excess(m, messages); over > 0 {
 			return past(over)
+		}
+		// The last round is her answer when it wrote one and left nothing she
+		// asked to look up, or when it put the answer off. Otherwise she is
+		// asked once more, with what its calls answered.
+		if last && !lookedUp && (strings.TrimSpace(said.String()) != "" || a.putOff) {
+			break
 		}
 	}
 

@@ -248,8 +248,9 @@ func TestTurnsDump(t *testing.T) {
 }
 
 // A reply that asked for tools says which it asked for, from which of its
-// requests, and what came of each: what the model was sent back, and why a
-// call failed. The dump names each call by the id the bodies it shows give it.
+// requests, the requests each sent, and what came of each: what the model was
+// sent back, and why a call failed. The dump names each call by the id the
+// bodies it shows give it.
 func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 	dir, entry, _ := filled(t)
 	s, err := store.Open(dir)
@@ -261,12 +262,13 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 	if err != nil || len(requests) != 1 {
 		t.Fatalf("requests = %+v, %v", requests, err)
 	}
-	for _, c := range []*store.ToolCall{
-		{CallID: "call_1", Name: "search_memories", Arguments: `{"query":"Ana"}`,
-			Result: "Ana is coming over"},
+	calls := []*store.ToolCall{
+		{CallID: "call_1", Name: "search_web", Arguments: `{"query":"concertos em Lisboa"}`,
+			Result: "1. Os melhores concertos em Lisboa esta semana"},
 		{CallID: "call_2", Name: "read_minds", Arguments: `{}`,
 			Result: "error: no tool is called read_minds", Error: "no tool is called read_minds"},
-	} {
+	}
+	for _, c := range calls {
 		c.EntryID, c.RequestID, c.StartedAt = entry, requests[0].ID, when
 		if err := s.StartToolCall(ctx, c); err != nil {
 			t.Fatal(err)
@@ -276,6 +278,11 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	search := &store.Request{EntryID: entry, ToolCall: calls[0].ID, Purpose: store.PurposeTool, Runner: "tavily",
+		Method: "POST", URL: "https://api.tavily.com/search", StartedAt: when}
+	if err := s.AddRequest(ctx, search); err != nil {
+		t.Fatal(err)
+	}
 	s.Close()
 
 	id := strconv.FormatInt(int64(entry), 10)
@@ -284,10 +291,11 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
 	line(t, out, "TOOL CALL ")
-	if row := line(t, out, "1          1 "); !strings.Contains(row, "search_memories") || !strings.Contains(row, "30ms") {
-		t.Errorf("the first call reads %q", row)
+	if row := strings.Fields(line(t, out, "1          1 ")); len(row) < 5 || row[2] != "2" || row[3] != "search_web" || row[4] != "30ms" {
+		t.Errorf("the first call reads %q, want it to have sent request 2", row)
 	}
-	if row := line(t, out, "2          1 "); !strings.Contains(row, "read_minds") || !strings.Contains(row, "no tool is called") {
+	if row := line(t, out, "2          1 "); !strings.Contains(row, " - ") || !strings.Contains(row, "read_minds") ||
+		!strings.Contains(row, "no tool is called") {
 		t.Errorf("the second call reads %q", row)
 	}
 
@@ -296,9 +304,9 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
 	for _, want := range []string{
-		"== tool call 1  search_memories  call_1  asked by request 1",
-		`{"query":"Ana"}`,
-		"Ana is coming over",
+		"== tool call 1  search_web  call_1  asked by request 1  sent request 2",
+		`{"query":"concertos em Lisboa"}`,
+		"1. Os melhores concertos em Lisboa esta semana",
 		"== tool call 2  read_minds  call_2  asked by request 1",
 		"error\nno tool is called read_minds",
 	} {

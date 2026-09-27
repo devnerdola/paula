@@ -8,12 +8,17 @@ import (
 
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/runners/openai"
+	"nerdola.dev/x/paula/internal/runners/transport"
 )
 
-// hooks are the parts of a request and a stream only Venice documents.
+// hooks are the parts of a request and a stream only Venice documents, and
+// how it answers.
 type hooks struct{}
 
-var _ openai.Hooks = hooks{}
+var (
+	_ openai.Hooks      = hooks{}
+	_ transport.Answers = hooks{}
+)
 
 func (hooks) Body(out map[string]any, req api.ChatRequest) error {
 	prov, errs := decodeProvider(req.Settings.Provider)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
+	runnersapi "nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 	"nerdola.dev/x/paula/internal/tools/api"
 )
@@ -48,6 +49,8 @@ func (f *fakeEnv) Schedule(context.Context, time.Time, string) (*store.Callback,
 func (f *fakeEnv) Move(context.Context, store.CallbackID, time.Time) error { return nil }
 
 func (f *fakeEnv) Cancel(context.Context, store.CallbackID) error { return nil }
+
+func (f *fakeEnv) Recorder() runnersapi.Recorder { return nil }
 
 // Images are the test's pictures, which it gives newest first, from the one at
 // from on.

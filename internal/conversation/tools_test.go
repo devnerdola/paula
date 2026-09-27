@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 	toolsapi "nerdola.dev/x/paula/internal/tools/api"
+	"nerdola.dev/x/paula/internal/tools/callbacks"
 )
 
 // fakeTool is a tool a test offers. It answers what the test gives it, keeps
@@ -185,6 +187,64 @@ func TestAToolIsRunAndWhatItAnsweredGoesBack(t *testing.T) {
 	}
 }
 
+// requesting is a tool that makes a request of a runner before it answers, as
+// the web tools do.
+type requesting struct{ *fakeTool }
+
+func (t requesting) Call(ctx context.Context, env toolsapi.Env, args json.RawMessage) (string, error) {
+	rec := &api.Record{Runner: "tavily", Method: "POST", URL: "https://api.tavily.com/search", StartedAt: time.Now()}
+	kept := env.Recorder()
+	if err := kept.StartRequest(ctx, rec); err != nil {
+		return "", err
+	}
+	rec.Status, rec.EndedAt = 200, time.Now()
+	if err := kept.EndRequest(ctx, rec); err != nil {
+		return "", err
+	}
+	return t.fakeTool.Call(ctx, env, args)
+}
+
+// A request a call makes is kept under the reply that asked for it, as a
+// tool's, apart from the reply's rounds, and names the call that made it: the
+// call still names the round that asked for it.
+func TestARequestACallMakesIsKeptUnderTheReply(t *testing.T) {
+	look := requesting{&fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{text: "Ana lives in Lisbon, you told me"},
+	)}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "where does Ana live?")
+
+	reply, calls := stored(t, r)
+	requests, err := r.store.Requests(context.Background(), reply.EntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var purposes []string
+	for _, req := range requests {
+		purposes = append(purposes, req.Purpose)
+	}
+	if want := []string{store.PurposeReply, store.PurposeTool, store.PurposeReply}; !slices.Equal(purposes, want) {
+		t.Fatalf("the reply kept requests for %v, want %v", purposes, want)
+	}
+	if requests[1].URL != "https://api.tavily.com/search" {
+		t.Errorf("the tool's request was kept as %+v", requests[1])
+	}
+	if len(calls) != 1 || calls[0].RequestID != requests[0].ID {
+		t.Fatalf("the calls were written down as %+v, want one naming the round that asked, %d", calls, requests[0].ID)
+	}
+	for i, req := range requests {
+		want := int64(0)
+		if req.Purpose == store.PurposeTool {
+			want = calls[0].ID
+		}
+		if req.ToolCall != want {
+			t.Errorf("request %d names call %d, want %d", i+1, req.ToolCall, want)
+		}
+	}
+}
+
 // instructing is a tool with something to say in her system prompt.
 type instructing struct{ *fakeTool }
 
@@ -215,19 +275,85 @@ func TestAReplyOfferedNothingIsOneRound(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("%d rounds, want one", len(requests))
 	}
-	if requests[0].Tools != nil || requests[0].ToolChoice != "" {
-		t.Errorf("the request carries tools %+v and choice %q", requests[0].Tools, requests[0].ToolChoice)
+	if requests[0].Tools != nil {
+		t.Errorf("the request carries tools %+v", requests[0].Tools)
 	}
 }
 
-// A reply may take so many rounds of calls. The round after them is asked for
-// an answer with none in it, and what a model asks for there anyway is written
-// down and left, so a model that keeps asking still answers.
-func TestTheRoundAfterTheLastIsAskedForNoCall(t *testing.T) {
-	look := &fakeTool{name: "search_memories", answer: "nothing"}
+// lookingUp is a tool whose calls only look something up.
+type lookingUp struct{ *fakeTool }
+
+func (lookingUp) LooksUp() {}
+
+// noted is what a model is told after the answers of the last round of calls a
+// reply may take.
+const noted = "This reply has taken every round of calls it may, so write your answer now. " +
+	"A call that only looks something up is not run any more; one that changes something still runs."
+
+// A reply may take so many rounds of calls, and the round after them is the
+// last. It is sent as the round before it with what came of that round, the
+// last answer ending with the note that says so, whatever role the model's
+// family gives her notes: a message of its own after the answers would read
+// as a new turn of the user's. A call there that changes something runs, and
+// what the round wrote beside it is the reply.
+func TestTheLastRoundIsTheOneBeforeItWithANoteInItsLastAnswer(t *testing.T) {
+	remember := &fakeTool{name: "search_memories", answer: "remembered"}
 	f := &fakeRunner{model: chatModel(), chat: answering(
 		round{calls: []api.ToolCall{lookup("call_1", `{"query":"a"}`)}},
-		round{text: "I could not find it", calls: []api.ToolCall{lookup("call_2", `{"query":"b"}`)}},
+		round{text: "I will remember that", calls: []api.ToolCall{lookup("call_2", `{"query":"b"}`)}},
+	)}
+	set := setup(f)
+	set.Models[0].Settings.Extension = notesAsUser{}
+	cfg := config.DefaultEngine()
+	cfg.ToolRounds = 1
+	r := openReplyOffering(t, f, set, cfg, remember)
+	r.say(t, "remember that Ana moved to Porto")
+
+	requests := f.all()
+	if len(requests) != 2 {
+		t.Fatalf("%d rounds, want the round of calls and the last one", len(requests))
+	}
+	was, last := requests[0], requests[1]
+	if len(last.Messages) != len(was.Messages)+2 || !reflect.DeepEqual(last.Messages[:len(was.Messages)], was.Messages) ||
+		!reflect.DeepEqual(last.Tools, was.Tools) || last.ToolChoice != "" {
+		t.Errorf("the last round is not the round before it with the call and its answer, asked the same way")
+	}
+	answer := last.Messages[len(last.Messages)-1]
+	if answer.Role != api.RoleTool || text(answer) != "remembered"+noted {
+		t.Errorf("the last round ends with %s: %q, want the answer and then the note", answer.Role, text(answer))
+	}
+	if strings.Contains(text(last.Messages[0]), "last round") {
+		t.Errorf("the card names the last round's note: %q", text(last.Messages[0]))
+	}
+	if got := remember.calls(); len(got) != 2 {
+		t.Errorf("the tool ran %d times, want in both rounds", len(got))
+	}
+
+	reply, calls := stored(t, r)
+	if reply.Text() != "I will remember that" {
+		t.Errorf("the reply is %q, want what was written beside the last round's call", reply.Text())
+	}
+	kept, err := r.store.Requests(context.Background(), reply.EntryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 2 {
+		t.Fatalf("the reply kept %d requests, want its two rounds", len(kept))
+	}
+	if len(calls) != 2 || calls[1].Error != "" || calls[1].Result != "remembered" || calls[1].RequestID != kept[1].ID {
+		t.Errorf("the calls were written down as %+v, want the second run under the last round", calls)
+	}
+}
+
+// A call in the last round that only looks something up is not run, since
+// what it answered would not be read, and the reply is asked once more, for
+// an answer with no call in it: what the last round wrote was not its answer.
+func TestALastRoundThatLooksSomethingUpIsAskedForItsAnswer(t *testing.T) {
+	look := lookingUp{&fakeTool{name: "search_memories", answer: "nothing"}}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{calls: []api.ToolCall{lookup("call_1", `{"query":"a"}`)}},
+		round{text: "let me check", calls: []api.ToolCall{lookup("call_2", `{"query":"b"}`)}},
+		round{text: "I could not find it", calls: []api.ToolCall{lookup("call_3", `{"query":"c"}`)}},
 	)}
 	cfg := config.DefaultEngine()
 	cfg.ToolRounds = 1
@@ -235,22 +361,156 @@ func TestTheRoundAfterTheLastIsAskedForNoCall(t *testing.T) {
 	r.say(t, "do you remember?")
 
 	requests := f.all()
-	if len(requests) != 2 {
-		t.Fatalf("%d rounds, want the round of calls and the one after it", len(requests))
+	if len(requests) != 3 {
+		t.Fatalf("%d rounds, want the round of calls, the last and the one asked for an answer", len(requests))
 	}
-	if requests[0].ToolChoice != "" || requests[1].ToolChoice != api.ToolChoiceNone {
-		t.Errorf("the rounds were asked with %q and %q", requests[0].ToolChoice, requests[1].ToolChoice)
+	if requests[1].ToolChoice != "" || requests[2].ToolChoice != api.ToolChoiceNone {
+		t.Errorf("the rounds were asked with %q and %q", requests[1].ToolChoice, requests[2].ToolChoice)
 	}
 	if got := look.calls(); len(got) != 1 {
 		t.Errorf("the tool ran %d times, want only in the round calls were taken in", len(got))
 	}
+	msgs := requests[2].Messages
+	if left := msgs[len(msgs)-1]; left.Role != api.RoleTool || !strings.HasPrefix(text(left), "error: not run: it only looks something up") {
+		t.Errorf("the call left was answered %s: %q", left.Role, text(left))
+	}
 
 	reply, calls := stored(t, r)
-	if reply.Text() != "I could not find it" {
-		t.Errorf("the reply is %q, want what was written beside the call that was left", reply.Text())
+	if reply.Text() != "let me check\n\nI could not find it" {
+		t.Errorf("the reply is %q, want what the last round wrote and the answer after it", reply.Text())
 	}
-	if len(calls) != 2 || !strings.Contains(calls[1].Error, "not run") {
-		t.Errorf("the calls were written down as %+v, want the second left unrun", calls)
+	if len(calls) != 3 || !strings.Contains(calls[1].Error, "only looks something up") || !strings.Contains(calls[2].Error, "not run") {
+		t.Errorf("the calls were written down as %+v, want the last two left unrun", calls)
+	}
+}
+
+// A last round that wrote nothing and did not put the answer off has not
+// answered, so the reply is asked once more, with what its calls answered.
+func TestALastRoundThatWritesNothingIsAskedForItsAnswer(t *testing.T) {
+	remember := &fakeTool{name: "search_memories", answer: "remembered"}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{calls: []api.ToolCall{lookup("call_1", `{"query":"a"}`)}},
+		round{calls: []api.ToolCall{lookup("call_2", `{"query":"b"}`)}},
+		round{text: "done, I will remember"},
+	)}
+	cfg := config.DefaultEngine()
+	cfg.ToolRounds = 1
+	r := openReplyOffering(t, f, setup(f), cfg, remember)
+	r.say(t, "remember that Ana moved to Porto")
+
+	requests := f.all()
+	if len(requests) != 3 || requests[2].ToolChoice != api.ToolChoiceNone {
+		t.Fatalf("%d rounds, want the last one followed by one asked for an answer", len(requests))
+	}
+	msgs := requests[2].Messages
+	if answer := msgs[len(msgs)-1]; answer.Role != api.RoleTool || text(answer) != "remembered" {
+		t.Errorf("the round asked for an answer ends with %s: %q, want what the last round's call answered", answer.Role, text(answer))
+	}
+	if got := remember.calls(); len(got) != 2 {
+		t.Errorf("the tool ran %d times, want in both rounds", len(got))
+	}
+	if reply, _ := stored(t, r); reply.Text() != "done, I will remember" {
+		t.Errorf("the reply is %q, want the answer it was asked for", reply.Text())
+	}
+}
+
+// The last round's calls run for what they do, so a reply that puts the
+// answer off in it puts it off as in any other round.
+func TestTheLastRoundCanPutTheAnswerOff(t *testing.T) {
+	tools, err := callbacks.Open(config.Section{}, toolsapi.Host{Names: toolsapi.Names{Character: "Paula", User: "Caio"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := newClock().Now().Add(3 * time.Hour)
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{calls: []api.ToolCall{{ID: "call_1", Name: "list_callbacks", Arguments: `{}`}}},
+		round{calls: []api.ToolCall{{ID: "call_2", Name: "schedule_callback",
+			Arguments: fmt.Sprintf(`{"at":%q,"reason":"answer Caio, who asked whether I was up"}`, due.Format(time.RFC3339))}}},
+	)}
+	cfg := config.DefaultEngine()
+	cfg.ToolRounds = 1
+	r := openReplyOffering(t, f, setup(f), cfg, tools...)
+	ctx := context.Background()
+	r.say(t, "are you up?")
+
+	entries, err := r.store.Entries(ctx, 1)
+	if err != nil || len(entries) != 1 || entries[0].Status != store.StatusDone {
+		t.Fatalf("entries = %+v, %v, want the turn ended done", entries, err)
+	}
+	if reply, err := r.store.ReplyOfEntry(ctx, entries[0].ID); err == nil {
+		t.Errorf("the turn stored the reply %+v, want none", reply)
+	}
+	if pending, err := r.store.Callbacks(ctx); err != nil || len(pending) != 1 || !pending[0].DueAt.Equal(due) {
+		t.Errorf("pending = %+v, %v, want the call back the last round scheduled", pending, err)
+	}
+}
+
+// The last answer of the round before the last is held to the room left with
+// the note after it, which is part of it: one that fits alone, but not with
+// the note, is sent as the note that it was too long, with the note after it.
+func TestTheLastAnswerIsMeasuredWithItsNote(t *testing.T) {
+	// Every word of a request, the tools it offers among them, counts three
+	// tokens, so what a prompt takes is known to the token.
+	counted := func(chat chatFunc) chatFunc {
+		return func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+			res, err := chat(ctx, req, fn)
+			if res != nil {
+				words := wordsIn(toolsText(req.Tools))
+				for _, m := range req.Messages {
+					for _, p := range m.Parts {
+						words += wordsIn(p.Text)
+					}
+					for _, c := range m.ToolCalls {
+						words += wordsIn(c.Name) + wordsIn(c.Arguments)
+					}
+				}
+				res.Usage.PromptTokens = 3 * words
+			}
+			return res, err
+		}
+	}
+	const answered = 300
+	reply := func(context int) (*replyEngine, *fakeRunner) {
+		look := &fakeTool{name: "search_memories", answer: manyWords(answered)}
+		f := &fakeRunner{model: chatModel(), chat: counted(answering(
+			round{calls: []api.ToolCall{lookup("call_1", `{"query":"a"}`)}},
+			round{text: "found it"},
+		))}
+		cfg := config.DefaultEngine()
+		cfg.ToolRounds = 1
+		r := openReplyOffering(t, f, sized(f, context), cfg, look)
+		r.say(t, "do you remember?")
+		return r, f
+	}
+
+	// The prompt the answer joins, measured where the context holds it all.
+	_, f := reply(1_000_000)
+	if len(f.all()) != 2 {
+		t.Fatalf("%d rounds where the context holds it all, want two", len(f.all()))
+	}
+	sent := f.all()[1]
+	before := wordsIn(toolsText(sent.Tools))
+	for _, m := range sent.Messages[:len(sent.Messages)-1] {
+		for _, p := range m.Parts {
+			before += wordsIn(p.Text)
+		}
+		for _, c := range m.ToolCalls {
+			before += wordsIn(c.Name) + wordsIn(c.Arguments)
+		}
+	}
+	// Room for the answer and five words more, which the note is longer than.
+	r, f := reply(3 * (before + answered + 5))
+	requests := f.all()
+	if len(requests) != 2 {
+		t.Fatalf("%d rounds, want the round of calls and the last one: %s", len(requests), failure(r))
+	}
+	msgs := requests[1].Messages
+	if got := text(msgs[len(msgs)-1]); !strings.HasPrefix(got, "error: the call ran") || !strings.HasSuffix(got, noted) ||
+		strings.Contains(got, manyWords(10)) {
+		t.Errorf("the last answer went as %.80q…, want the note that it was too long and then the last round's", got)
+	}
+	if stored, _ := stored(t, r); stored.Text() != "found it" {
+		t.Errorf("the reply is %q, want the last round's", stored.Text())
 	}
 }
 

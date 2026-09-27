@@ -178,13 +178,14 @@ func showTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 		return err
 	}
 	if len(calls) > 0 {
-		// A call names the request of the round that asked for it, which is
-		// numbered here the way the table above numbers it.
-		request := numbered(requests)
+		// A call names the request of the round that asked for it, and the
+		// requests it sent, which are numbered here the way the table above
+		// numbers them.
+		request, sent := numbered(requests), sentBy(requests)
 		fmt.Fprintln(w)
-		table(w, []string{"TOOL CALL", "REQUEST", "NAME", "DURATION", "ERROR"}, func(row func(...string)) {
+		table(w, []string{"TOOL CALL", "REQUEST", "SENT", "NAME", "DURATION", "ERROR"}, func(row func(...string)) {
 			for i, c := range calls {
-				row(strconv.Itoa(i+1), request[c.RequestID], c.Name,
+				row(strconv.Itoa(i+1), request[c.RequestID], orDash(sent[c.ID]), c.Name,
 					since(c.StartedAt, c.EndedAt), orDash(c.Error))
 			}
 		})
@@ -377,10 +378,13 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 	if err != nil {
 		return err
 	}
-	request := numbered(requests)
+	request, sent := numbered(requests), sentBy(requests)
 	for i, c := range calls {
-		fmt.Fprintf(w, "\n== tool call %d  %s  %s  asked by request %s  started %s",
-			i+1, c.Name, c.CallID, request[c.RequestID], clock(c.StartedAt))
+		fmt.Fprintf(w, "\n== tool call %d  %s  %s  asked by request %s", i+1, c.Name, c.CallID, request[c.RequestID])
+		if sent[c.ID] != "" {
+			fmt.Fprintf(w, "  sent request %s", sent[c.ID])
+		}
+		fmt.Fprintf(w, "  started %s", clock(c.StartedAt))
 		if !c.EndedAt.IsZero() {
 			fmt.Fprintf(w, "  ended %s", clock(c.EndedAt))
 		}
@@ -409,6 +413,22 @@ func numbered(requests []store.Request) map[int64]string {
 	out := make(map[int64]string, len(requests))
 	for i, r := range requests {
 		out[r.ID] = strconv.Itoa(i + 1)
+	}
+	return out
+}
+
+// sentBy is the requests each tool call sent, by the call, numbered the way
+// numbered numbers them.
+func sentBy(requests []store.Request) map[int64]string {
+	out := map[int64]string{}
+	for i, r := range requests {
+		if r.ToolCall == 0 {
+			continue
+		}
+		if out[r.ToolCall] != "" {
+			out[r.ToolCall] += ","
+		}
+		out[r.ToolCall] += strconv.Itoa(i + 1)
 	}
 	return out
 }

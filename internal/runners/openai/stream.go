@@ -3,7 +3,6 @@ package openai
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -11,15 +10,8 @@ import (
 	"strings"
 
 	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/runners/transport"
 )
-
-// errNoEvents says an answer arrived with nothing in it, which the caller
-// reports with whatever the body held.
-var errNoEvents = errors.New("the answer carried no events")
-
-// errCallback says whoever asked for the reply stopped taking it, so what is
-// left of the stream is not read.
-var errCallback = errors.New("the answer was not taken")
 
 // lineLimit is the longest SSE line Paula reads. A chunk of a reply is a few
 // words, so a line this long is a host that is not sending an answer, and the
@@ -105,7 +97,10 @@ type streamUsage struct {
 	} `json:"completion_tokens_details"`
 }
 
-func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) error {
+// stream reads the answer to a chat request. A stream that carried no events
+// at all is the transport's to read as the error the API wrote in its body,
+// and one whose caller stopped taking it is left where it stopped.
+func stream(r io.Reader, res *api.Result, fn func(api.Chunk) error, hooks Hooks, answers transport.Answers) error {
 	var (
 		reasoning strings.Builder
 		asked     calls
@@ -123,20 +118,20 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 			// with a status of its own has, so it is read the same way, and
 			// the code it names is the status it would have had.
 			status, _ := strconv.Atoi(code(e.Code))
-			if err := c.Hooks.Error(status, data); err != nil {
+			if err := answers.Error(status, data); err != nil {
 				return err
 			}
 			return &api.APIError{Status: status, Code: code(e.Code), Type: e.Type, Message: e.Message}
 		}
 
-		text, err := c.Hooks.Chunk(data, res)
+		text, err := hooks.Chunk(data, res)
 		if err != nil {
 			return err
 		}
 		if text != "" {
 			reasoning.WriteString(text)
 			if err := fn(api.Chunk{Kind: api.ChunkReasoning, Text: text}); err != nil {
-				return fmt.Errorf("%w: %w", errCallback, err)
+				return fmt.Errorf("%w: %w", transport.ErrNotTaken, err)
 			}
 		}
 
@@ -157,7 +152,7 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 			}
 			if ch.Delta.Content != "" {
 				if err := fn(api.Chunk{Kind: api.ChunkText, Text: ch.Delta.Content}); err != nil {
-					return fmt.Errorf("%w: %w", errCallback, err)
+					return fmt.Errorf("%w: %w", transport.ErrNotTaken, err)
 				}
 			}
 			for _, d := range ch.Delta.ToolCalls {
@@ -170,12 +165,12 @@ func (c *Client) stream(r io.Reader, res *api.Result, fn func(api.Chunk) error) 
 		return err
 	}
 	if !arrived {
-		return errNoEvents
+		return transport.ErrNoAnswer
 	}
 
 	res.Reasoning = reasoning.String()
 	res.ToolCalls = asked.whole()
-	c.Hooks.End(res)
+	hooks.End(res)
 	return nil
 }
 

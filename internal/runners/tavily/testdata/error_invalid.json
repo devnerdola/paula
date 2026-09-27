@@ -1,0 +1,1 @@
+{"detail":[{"type":"literal_error","loc":["body","max_results","literal['auto']"],"msg":"Input should be 'auto'","input":"five","ctx":{"expected":"'auto'"}},{"type":"int_parsing","loc":["body","max_results","int"],"msg":"Input should be a valid integer, unable to parse string as an integer","input":"five"}]}

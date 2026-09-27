@@ -139,14 +139,6 @@ header h1 {
 
 .bubble.picture img { margin: 0; }
 
-.bubble code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .9em;
-  background: var(--shade);
-  border-radius: .25rem;
-  padding: 0 .2em;
-}
-
 .bubble a { color: inherit; }
 
 .choices {

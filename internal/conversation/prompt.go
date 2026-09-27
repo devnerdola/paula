@@ -106,14 +106,18 @@ func (m *model) notes() api.Notes {
 	return m.settings.Extension.Notes()
 }
 
-// card is the character card as a model reads it, with what the tools have
-// her told after it. A model told her notes as user messages is told whose
-// they are right after the card, where it stands as long as the card does,
-// naming the ones it is told.
+// card is the character card as a model reads it, with what the app and the
+// tools have her told after it. Every model is told that what she writes
+// arrives as plain text: every frontend shows markup as the characters it is
+// written in, and a model that has read a page written in markdown writes it
+// back. A model told her notes as user messages is told
+// whose they are, where it stands as long as the card does, naming the ones it
+// is told.
 func (e *Engine) card(m *model) string {
-	sections := []string{e.rendered}
+	user := e.persona.User.Name
+	sections := []string{e.rendered, "Your messages reach " + user + " as plain text, the way a text message " +
+		"does: write no markdown or HTML, and write an address as it is rather than as a link."}
 	if notes := m.notes(); notes.Role != api.RoleSystem {
-		user := e.persona.User.Name
 		told := "the one before each of " + user + "'s messages saying when it was sent"
 		if !notes.LastAsSent {
 			told += ", and the one saying what time it is now"

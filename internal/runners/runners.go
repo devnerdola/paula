@@ -1,6 +1,8 @@
-// Package runners talks to the hosted APIs that answer as Paula. It declares
-// what a runner can do and which kinds of runner there are. The vocabulary they
-// speak is internal/runners/api, which a caller imports beside this package.
+// Package runners talks to the hosted APIs Paula uses: the ones that serve the
+// models she answers with, and the ones she searches the web through. It
+// declares what a runner can do and which kinds of runner there are. The
+// vocabulary they speak is internal/runners/api, which a caller imports beside
+// this package.
 package runners
 
 import (
@@ -9,17 +11,22 @@ import (
 	"nerdola.dev/x/paula/internal/runners/api"
 )
 
-// Runner is a hosted API Paula talks to: what it is, what it serves, and how
-// it answers.
+// Runner is a hosted API Paula talks to: what it is, and whether the key may
+// use it.
 type Runner interface {
 	Name() string
 	Kind() string
 	URL() string
-	// Settings are the runner's own, which a model's settings are laid over.
-	Settings() api.Settings
 
 	// Health says whether the key is allowed to make requests.
 	Health(ctx context.Context) error
+}
+
+// Server is a runner that serves models: what it serves, and how they answer.
+type Server interface {
+	Runner
+	// Settings are the runner's own, which a model's settings are laid over.
+	Settings() api.Settings
 
 	// Models is everything the runner serves, and Model is one of them.
 	Models(ctx context.Context) ([]api.Model, error)

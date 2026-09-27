@@ -296,6 +296,11 @@ func TestAReplyIsStoredAndPublished(t *testing.T) {
 	}
 }
 
+// plain is what every model is told right after the card: every frontend shows
+// her messages as the characters they are written in.
+const plain = "Your messages reach Caio as plain text, the way a text message does: write no markdown or HTML, " +
+	"and write an address as it is rather than as a link."
+
 func TestThePromptOfAReply(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hello")}
 	r := openReply(t, f)
@@ -317,10 +322,11 @@ func TestThePromptOfAReply(t *testing.T) {
 	if !strings.HasPrefix(shape[0], "system: You are Paula, texting with Caio.") {
 		t.Errorf("the prompt opens with %q, want the card", shape[0])
 	}
-	// A model no family extension serves reads the times as system messages,
-	// which need no word on whose they are.
-	if strings.Contains(shape[0], "come from the app") {
-		t.Errorf("the card is followed by %q, want nothing on whose the times are", shape[0])
+	// Every model is told after the card that her messages arrive as plain
+	// text. A model no family extension serves reads the times as system
+	// messages, which need no word on whose they are.
+	if !strings.HasSuffix(shape[0], "\n\n"+plain) {
+		t.Errorf("the card is followed by %q, want %q and nothing on whose the times are", shape[0], plain)
 	}
 	// Then every message in order, with the time before each of mine: when an
 	// older one was sent, and what time it is now before the one she answers.

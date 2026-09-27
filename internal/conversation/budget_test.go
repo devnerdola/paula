@@ -243,8 +243,9 @@ func TestOnlyTheFirstRoundOfAReplySaysWhatAWordCosts(t *testing.T) {
 }
 
 // The summary and the history are reserved their ratios of what the context
-// leaves once the persona and the tools are written, counted at three tokens a
-// word until a host has counted a prompt of the model.
+// leaves once the persona, what she is told after it, and the tools are
+// written, counted at three tokens a word until a host has counted a prompt of
+// the model.
 func TestTheReservationsAreTheirRatiosOfWhatThePersonaAndToolsLeave(t *testing.T) {
 	ctx := context.Background()
 	look := &fakeTool{name: "search_memories", answer: "found"}
@@ -263,7 +264,8 @@ func TestTheReservationsAreTheirRatiosOfWhatThePersonaAndToolsLeave(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixed := int(math.Ceil(float64(len(strings.Fields(rendered))+len(strings.Fields(string(offered)))) * 3))
+	written := len(strings.Fields(rendered)) + len(strings.Fields(plain)) + len(strings.Fields(string(offered)))
+	fixed := int(math.Ceil(float64(written) * 3))
 	flexible := float64(10000 - fixed)
 
 	summary, history := r.reservations(m)

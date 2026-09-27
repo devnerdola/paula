@@ -51,12 +51,18 @@ about any one implementation: outside the kind table, no code in
 `internal/frontend` names the repl and none in `internal/runners` names a
 provider.
 
-Built for `internal/runners` (`api`, `openai`, `openrouter`, `venice`),
-`internal/frontend` (`api`, `repl`) and `internal/families` (`api`, and one
-extension per family under the runner kind that serves it). A family extension
-shapes a runner's request, so `internal/families/api` takes
+Built for `internal/runners` (`api`, `transport`, `openai`, `openrouter`,
+`tavily`, `venice`), `internal/frontend` (`api`, `repl`) and
+`internal/families` (`api`, and one extension per family under the runner kind
+that serves it). `transport` is how every runner makes a request, and `openai`
+the chat every runner that serves models speaks. A family
+extension shapes a runner's request, so `internal/families/api` takes
 `internal/runners/api` as well. The same shape applies to tools and to
-whatever comes next.
+whatever comes next. A tool can make a runner's request too, so
+`internal/tools/api` also takes `internal/runners/api`.
+
+A runner is a hosted API with a key. One that serves models is a
+`runners.Server`; `tavily` serves none, and only searches the web.
 
 ## What the design holds to
 

@@ -13,6 +13,7 @@ import (
 	"nerdola.dev/x/paula/internal/tools/callbacks"
 	"nerdola.dev/x/paula/internal/tools/images"
 	"nerdola.dev/x/paula/internal/tools/memory"
+	"nerdola.dev/x/paula/internal/tools/web"
 )
 
 // What the program around a tool gives it, which is what Open takes, and the
@@ -32,6 +33,7 @@ var kinds = map[string]Factory{
 	callbacks.Kind: callbacks.Open,
 	images.Kind:    images.Open,
 	memory.Kind:    memory.Open,
+	web.Kind:       web.Open,
 }
 
 // Kinds are the tool kinds a configuration file may name.

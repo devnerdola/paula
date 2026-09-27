@@ -83,6 +83,8 @@ type listArgs struct {
 
 func (list) Note(json.RawMessage) string { return "listing memories" }
 
+func (list) LooksUp() {}
+
 func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a listArgs
 	if len(args) > 0 {
@@ -147,6 +149,8 @@ func (search) Note(args json.RawMessage) string {
 	json.Unmarshal(args, &a)
 	return strings.TrimSpace("searching memories for " + a.Query)
 }
+
+func (search) LooksUp() {}
 
 func (t search) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a searchArgs

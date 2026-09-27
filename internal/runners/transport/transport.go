@@ -1,6 +1,7 @@
-// Package openai speaks the OpenAI-compatible HTTP API the hosted runners
-// serve, and records everything it sends and receives.
-package openai
+// Package transport is how a runner makes its requests: sent with its key,
+// held to its timeouts, sent again when the API asks for it, and recorded
+// whole. What one API alone documents of its answers is the runner's to say.
+package transport
 
 import (
 	"bytes"
@@ -40,21 +41,20 @@ const (
 	maxDelay = 2 * time.Minute
 )
 
-// Hooks are the parts of a request and a stream only one API documents. Every
-// runner answers all four, so the client never asks whether it has them.
-type Hooks interface {
-	// Body adds the runner's own fields to a chat request body.
-	Body(body map[string]any, req api.ChatRequest) error
-	// Message adds the runner's own fields to one message of a chat request.
-	// It is where an assistant message hands back the reasoning it came with,
-	// in the field each API documents for it.
-	Message(out map[string]any, m api.Message)
-	// Chunk reads the runner's own fields of a stream chunk. The reasoning
-	// text it returns is passed on, and it fills in what it knows of the
-	// result.
-	Chunk(raw []byte, res *api.Result) (string, error)
-	// End finishes what Chunk made of the result, once the stream is done.
-	End(res *api.Result)
+// What a reader of an answer tells the client of how it ended.
+var (
+	// ErrNotTaken says whoever asked stopped taking the answer, so what is left
+	// of it is not read.
+	ErrNotTaken = errors.New("the answer was not taken")
+	// ErrNoAnswer says a 200 carried nothing where the answer belongs, so its
+	// body is read as the error the API wrote there.
+	ErrNoAnswer = errors.New("the answer carried nothing")
+)
+
+// Answers are how one API answers any request: when it is worth sending
+// again, and the shape it reports errors in. Every runner answers both, so the
+// client never asks whether it has them.
+type Answers interface {
 	// Retry says whether a status is worth sending again, and after how long,
 	// counted from the time it is given.
 	Retry(now time.Time, status int, h http.Header) (time.Duration, bool)
@@ -75,7 +75,7 @@ type Client struct {
 	IdleTimeout    time.Duration
 	RequestTimeout time.Duration
 	Retries        int
-	Hooks          Hooks
+	Answers        Answers
 	HTTP           *http.Client
 	Log            *slog.Logger
 	// Secrets keeps the token out of what is recorded of a request.
@@ -121,27 +121,45 @@ func (c *Client) log() *slog.Logger {
 	return slog.New(slog.DiscardHandler)
 }
 
-// ask is what a caller wants sent: the method and path, the body when there is
+// Ask is what a caller wants sent: the method and path, the body when there is
 // one, the model it is about, the header only this request carries, how the
 // answer is read, and what keeps a record of it.
-type ask struct {
-	method   string
-	path     string
-	model    string
-	body     []byte
-	header   http.Header
-	read     func(io.Reader, *api.Record) error
-	recorder api.Recorder
+type Ask struct {
+	Method   string
+	Path     string
+	Model    string
+	Body     []byte
+	Header   http.Header
+	Read     func(io.Reader, *api.Record) error
+	Recorder api.Recorder
 }
 
 // Get asks a JSON endpoint and decodes the answer into out.
 func (c *Client) Get(ctx context.Context, path string, out any) error {
 	ctx, cancel := c.limited(ctx)
 	defer cancel()
-	return c.send(ctx, ask{
-		method: http.MethodGet,
-		path:   path,
-		read:   func(r io.Reader, _ *api.Record) error { return decode(r, out) },
+	return c.Send(ctx, Ask{
+		Method: http.MethodGet,
+		Path:   path,
+		Read:   func(r io.Reader, _ *api.Record) error { return decode(r, out) },
+	})
+}
+
+// Post sends in to a JSON endpoint and decodes the answer into out. It belongs
+// to a turn, like a chat, so it is kept by the recorder it is given.
+func (c *Client) Post(ctx context.Context, path string, in, out any, rec api.Recorder) error {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := c.limited(ctx)
+	defer cancel()
+	return c.Send(ctx, Ask{
+		Method:   http.MethodPost,
+		Path:     path,
+		Body:     body,
+		Recorder: rec,
+		Read:     func(r io.Reader, _ *api.Record) error { return decode(r, out) },
 	})
 }
 
@@ -153,48 +171,19 @@ func (c *Client) limited(ctx context.Context) (context.Context, context.CancelFu
 	if wait <= 0 {
 		wait = DefaultRequestTimeout
 	}
-	return context.WithTimeoutCause(ctx, wait, fmt.Errorf("%w (%s)", ErrSlow, wait))
+	return context.WithTimeoutCause(ctx, wait, fmt.Errorf("%w (%s)", api.ErrSlow, wait))
 }
 
-// Chat sends a chat request and passes every chunk of the stream to fn.
-func (c *Client) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
-	body, err := chatBody(req, c.Hooks)
-	if err != nil {
-		return nil, err
-	}
-	b, err := encode(body)
-	if err != nil {
-		return nil, err
-	}
-	res := new(api.Result)
-	err = c.send(ctx, ask{
-		method:   http.MethodPost,
-		path:     "/chat/completions",
-		model:    req.Model,
-		body:     b,
-		recorder: req.Recorder,
-		read: func(r io.Reader, rec *api.Record) error {
-			err := c.stream(r, res, fn)
-			record(rec, res.Provider, res.FinishReason, res.Usage)
-			return err
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-// send makes a request, retrying the statuses the runner names, and records
+// Send makes a request, retrying the statuses the runner names, and records
 // everything it sent and received.
-func (c *Client) send(ctx context.Context, a ask) error {
-	url, err := endpoint(c.BaseURL, a.path)
+func (c *Client) Send(ctx context.Context, a Ask) error {
+	url, err := endpoint(c.BaseURL, a.Path)
 	if err != nil {
 		return err
 	}
 	header := http.Header{"Accept": {"application/json"}}
-	maps.Copy(header, a.header)
-	if a.body != nil {
+	maps.Copy(header, a.Header)
+	if a.Body != nil {
 		header.Set("Content-Type", "application/json")
 	}
 	if c.Token != "" {
@@ -203,19 +192,19 @@ func (c *Client) send(ctx context.Context, a ask) error {
 
 	rec := &api.Record{
 		Runner:         c.Runner,
-		Model:          a.model,
-		Method:         a.method,
+		Model:          a.Model,
+		Method:         a.Method,
 		URL:            url,
 		RequestHeaders: c.redacted(header),
-		RequestBody:    a.body,
+		RequestBody:    a.Body,
 		StartedAt:      c.now(),
 	}
-	recorder := api.Recording(a.recorder)
+	recorder := api.Recording(a.Recorder)
 	if err := recorder.StartRequest(ctx, rec); err != nil {
 		return err
 	}
 
-	a.header = header
+	a.Header = header
 	err = c.attempts(ctx, a, rec)
 	rec.EndedAt = c.now()
 	if err != nil {
@@ -229,7 +218,7 @@ func (c *Client) send(ctx context.Context, a ask) error {
 
 // attempts sends the request until it is answered or is not worth sending
 // again, and keeps every try on the record.
-func (c *Client) attempts(ctx context.Context, a ask, rec *api.Record) error {
+func (c *Client) attempts(ctx context.Context, a Ask, rec *api.Record) error {
 	for sent := 0; ; sent++ {
 		attempt := api.Attempt{StartedAt: c.now()}
 		status, err := c.attempt(ctx, a, rec, &attempt)
@@ -262,7 +251,7 @@ func (c *Client) retry(sent, status int, at time.Time, h http.Header) (time.Dura
 	if status == 0 || status == http.StatusOK || sent >= c.Retries {
 		return 0, false
 	}
-	wait, ok := c.Hooks.Retry(at, status, h)
+	wait, ok := c.Answers.Retry(at, status, h)
 	if !ok {
 		return 0, false
 	}
@@ -304,19 +293,19 @@ func backoff(sent int) time.Duration {
 
 // attempt makes one try of a request, and reports the status it came back
 // with.
-func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *api.Attempt) (int, error) {
+func (c *Client) attempt(ctx context.Context, a Ask, rec *api.Record, attempt *api.Attempt) (int, error) {
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 
 	var reader io.Reader
-	if a.body != nil {
-		reader = bytes.NewReader(a.body)
+	if a.Body != nil {
+		reader = bytes.NewReader(a.Body)
 	}
 	req, err := http.NewRequestWithContext(ctx, rec.Method, rec.URL, reader)
 	if err != nil {
 		return 0, err
 	}
-	req.Header = a.header.Clone()
+	req.Header = a.Header.Clone()
 	// What the record says of the answer is this try's: one whose connection
 	// went got no status, no body and no first byte, not the ones of the try
 	// before it.
@@ -326,7 +315,7 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 	// request and says nothing is given up on.
 	idle := &idleReader{
 		timeout: c.IdleTimeout,
-		cancel:  func() { cancel(ErrIdle) },
+		cancel:  func() { cancel(api.ErrIdle) },
 		now:     c.now,
 		onFirst: func(t time.Time) {
 			attempt.FirstByteAt, rec.FirstByteAt = t, t
@@ -367,17 +356,17 @@ func (c *Client) attempt(ctx context.Context, a ask, rec *api.Record, attempt *a
 		return resp.StatusCode, c.apiError(resp.StatusCode, seen.Bytes())
 	}
 
-	err = cut(ctx, a.read(tee, rec))
-	if !errors.Is(err, errCallback) && !errors.Is(err, ErrIdle) {
+	err = cut(ctx, a.Read(tee, rec))
+	if !errors.Is(err, ErrNotTaken) && !errors.Is(err, api.ErrIdle) {
 		// What is left of a stream is read so the whole answer is recorded,
 		// unless the caller has stopped taking it or the host went quiet.
 		_, _ = io.Copy(io.Discard, tee)
 	}
 	rec.ResponseBody = seen.Bytes()
 	idle.arrived(headers)
-	if errors.Is(err, errNoEvents) {
-		// A 200 that streamed nothing at all carries the answer in its body,
-		// which is an error the API wrote where the events belong.
+	if errors.Is(err, ErrNoAnswer) {
+		// A 200 that carried nothing where the answer belongs carries the
+		// answer in its body, which is an error the API wrote there.
 		err = c.apiError(resp.StatusCode, seen.Bytes())
 	}
 	return resp.StatusCode, err
@@ -406,23 +395,8 @@ func endpoint(base, path string) (string, error) {
 	return out.String(), nil
 }
 
-// record keeps what the answer said about itself: the host that served it, how
-// it finished, and what it cost. paula turns reads them back.
-func record(rec *api.Record, provider, finish string, usage api.Usage) {
-	if rec == nil {
-		return
-	}
-	rec.Provider = provider
-	rec.FinishReason = finish
-	// An answer that said nothing about what it cost is not one that cost
-	// nothing, and paula turns adds these up.
-	if usage != (api.Usage{}) {
-		rec.Usage = &usage
-	}
-}
-
 func (c *Client) apiError(status int, body []byte) error {
-	if e := c.Hooks.Error(status, body); e != nil {
+	if e := c.Answers.Error(status, body); e != nil {
 		return e
 	}
 	message := strings.TrimSpace(string(body))
@@ -457,13 +431,6 @@ func (c *Client) redacted(h http.Header) http.Header {
 	}
 	return out
 }
-
-// Why a request was cut off is vocabulary a caller reads, so it is the shared
-// one: a conversation tells a host that refused from a connection that went.
-var (
-	ErrIdle = api.ErrIdle
-	ErrSlow = api.ErrSlow
-)
 
 // cut names why a request was cut off here, since a cancelled context reads
 // the same however it was cancelled.

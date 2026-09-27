@@ -2,6 +2,7 @@ package runners
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,7 +64,7 @@ func TestKinds(t *testing.T) {
 	if !slices.IsSorted(got) {
 		t.Errorf("Kinds = %v, want them sorted", got)
 	}
-	for _, want := range []string{"openrouter", "venice"} {
+	for _, want := range []string{"openrouter", "tavily", "venice"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("Kinds = %v, want %q in it", got, want)
 		}
@@ -73,6 +74,7 @@ func TestKinds(t *testing.T) {
 func TestEveryKindOpens(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
 	t.Setenv("VENICE_API_KEY", "test-token-abcdefgh")
+	t.Setenv("TAVILY_API_KEY", "test-token-abcdefgh")
 	for _, kind := range Kinds() {
 		t.Run(kind, func(t *testing.T) {
 			cfg := load(t, "runners:\n  r:\n    type: "+kind+
@@ -101,6 +103,44 @@ func TestUnknownKind(t *testing.T) {
 		if !strings.Contains(err.Error(), kind) {
 			t.Errorf("error = %v, want %q named", err, kind)
 		}
+	}
+}
+
+// A runner that serves no models is named under the model written on it, and
+// the runners that search the web are the ones a web tool can be given.
+func TestOnlyARunnerThatServesModelsTakesOne(t *testing.T) {
+	t.Setenv("TAVILY_API_KEY", "test-token-abcdefgh")
+	cfg := load(t, `
+runners:
+  openrouter:
+    type: openrouter
+  venice:
+    type: venice
+  tavily:
+    type: tavily
+models:
+  chat:
+    runner: openrouter
+    id: a
+  search:
+    runner: tavily
+    id: b
+default_models:
+  chat: chat
+`)
+	_, err := Configure(cfg, Host{})
+	if err == nil || err.Error() != "models.search.runner: tavily serves no models" {
+		t.Errorf("a model on tavily = %v, want it refused under its runner key", err)
+	}
+
+	cfg = load(t, "runners:\n  openrouter:\n    type: openrouter\n  venice:\n    type: venice\n  tavily:\n    type: tavily\n"+
+		"models:\n  chat:\n    runner: openrouter\n    id: a\ndefault_models:\n  chat: chat\n")
+	s, err := Configure(cfg, Host{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Sorted(maps.Keys(s.Searchers())); !slices.Equal(got, []string{"tavily", "venice"}) {
+		t.Errorf("the runners that search are %v, want tavily and venice", got)
 	}
 }
 

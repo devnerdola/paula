@@ -7,13 +7,15 @@ import (
 	"nerdola.dev/x/paula/internal/store"
 )
 
-// recorder keeps the requests of one purpose under the entry that made them.
-// last is the request it kept most recently, which is what a tool call names
-// as the round that asked for it.
+// recorder keeps the requests of one purpose under the entry that made them,
+// and under the tool call that made them when a call did. last is the request
+// it kept most recently, which is what a tool call names as the round that
+// asked for it.
 type recorder struct {
 	store   *store.Store
 	entry   store.EntryID
 	purpose string
+	call    int64
 	last    int64
 }
 
@@ -25,6 +27,7 @@ func (e *Engine) recorder(a *attempt, purpose string) *recorder {
 func (r *recorder) StartRequest(ctx context.Context, rec *api.Record) error {
 	req := &store.Request{
 		EntryID:        r.entry,
+		ToolCall:       r.call,
 		Purpose:        r.purpose,
 		Runner:         rec.Runner,
 		Model:          rec.Model,

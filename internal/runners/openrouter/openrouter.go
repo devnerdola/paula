@@ -12,6 +12,7 @@ import (
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/runners/openai"
+	"nerdola.dev/x/paula/internal/runners/transport"
 )
 
 // Kind is the type written in the configuration file.
@@ -30,7 +31,7 @@ const defaultIdleTimeout = config.Duration(2 * time.Minute)
 
 type Runner struct {
 	name     string
-	client   *openai.Client
+	client   *transport.Client
 	settings api.Settings
 	serves   openai.Catalogue
 }
@@ -38,13 +39,13 @@ type Runner struct {
 // Open reads a runner section and builds the runner it describes.
 func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 	retries := defaultRetries
-	cfg, p := openai.Decode(s, openai.Config{
+	cfg, p := openai.Decode(s, openai.Config{Connection: transport.Connection{
 		URL:            defaultURL,
 		TokenEnv:       defaultTokenEnv,
 		IdleTimeout:    defaultIdleTimeout,
-		RequestTimeout: config.Duration(openai.DefaultRequestTimeout),
+		RequestTimeout: config.Duration(transport.DefaultRequestTimeout),
 		Retries:        &retries,
-	})
+	}})
 	// The block is read to hold it against what the API takes. What reaches a
 	// request is the section, which every model's own settings are merged over.
 	_, errs := decodeProvider(cfg.Provider)
@@ -84,7 +85,7 @@ func (r *Runner) Health(ctx context.Context) error {
 
 // Chat sends a chat request and passes every chunk of the stream to fn.
 func (r *Runner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
-	return r.client.Chat(ctx, req, fn)
+	return openai.Chat(ctx, r.client, hooks{}, req, fn)
 }
 
 // Models is everything OpenRouter serves.

@@ -1,5 +1,5 @@
 // Package venice talks to Venice, which serves models behind an
-// OpenAI-compatible API.
+// OpenAI-compatible API, and searches the web and reads pages beside them.
 package venice
 
 import (
@@ -10,6 +10,7 @@ import (
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/runners/openai"
+	"nerdola.dev/x/paula/internal/runners/transport"
 )
 
 // Kind is the type written in the configuration file.
@@ -26,26 +27,29 @@ const defaultIdleTimeout = config.Duration(2 * time.Minute)
 
 type Runner struct {
 	name     string
-	client   *openai.Client
+	client   *transport.Client
 	settings api.Settings
 	serves   openai.Catalogue
+	// searcher is the engine a web search goes to, or empty for the one
+	// Venice chooses.
+	searcher string
 }
 
 // Open reads a runner section and builds the runner it describes.
 func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 	retries := defaultRetries
-	cfg, p := openai.Decode(s, openai.Config{
+	cfg, p := openai.Decode(s, openai.Config{Connection: transport.Connection{
 		URL:            defaultURL,
 		TokenEnv:       defaultTokenEnv,
 		IdleTimeout:    defaultIdleTimeout,
-		RequestTimeout: config.Duration(openai.DefaultRequestTimeout),
+		RequestTimeout: config.Duration(transport.DefaultRequestTimeout),
 		Retries:        &retries,
-	})
+	}})
 	// Venice takes a seed, which the keys every runner takes do not cover.
 	if v := cfg.Settings.Sampling.Seed; v != nil && *v <= 0 {
 		p.Addf("sampling.seed: %d is not above zero", *v)
 	}
-	_, errs := decodeProvider(cfg.Provider)
+	prov, errs := decodeProvider(cfg.Provider)
 	p.Add(errs...)
 	if err := p.Err(); err != nil {
 		return nil, err
@@ -54,6 +58,7 @@ func Open(name string, s config.Section, h api.Host) (*Runner, error) {
 	r := &Runner{
 		name:     name,
 		settings: cfg.Settings,
+		searcher: prov.Search.Provider,
 	}
 	r.settings.Provider = cfg.Provider
 	r.serves.Read = r.listing
@@ -88,7 +93,47 @@ func (r *Runner) Health(ctx context.Context) error {
 
 // Chat sends a chat request and passes every chunk of the stream to fn.
 func (r *Runner) Chat(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
-	return r.client.Chat(ctx, req, fn)
+	return openai.Chat(ctx, r.client, hooks{}, req, fn)
+}
+
+// mostResults is the most results Venice documents a search answering with.
+const mostResults = 20
+
+func (r *Runner) MostResults() int { return mostResults }
+
+// Search asks Venice what a query finds on the web.
+func (r *Runner) Search(ctx context.Context, req api.SearchRequest) ([]api.SearchResult, error) {
+	var out struct {
+		Results []struct {
+			Title   string `json:"title"`
+			URL     string `json:"url"`
+			Content string `json:"content"`
+			Date    string `json:"date"`
+		} `json:"results"`
+	}
+	in := map[string]any{"query": req.Query, "limit": req.Limit}
+	if r.searcher != "" {
+		in["search_provider"] = r.searcher
+	}
+	if err := r.client.Post(ctx, "/augment/search", in, &out, req.Recorder); err != nil {
+		return nil, err
+	}
+	found := make([]api.SearchResult, len(out.Results))
+	for i, res := range out.Results {
+		found[i] = api.SearchResult{Title: res.Title, URL: res.URL, Content: res.Content, Date: res.Date}
+	}
+	return found, nil
+}
+
+// Read asks Venice for the text of a page, which it gives as markdown.
+func (r *Runner) Read(ctx context.Context, req api.PageRequest) (string, error) {
+	var out struct {
+		Content string `json:"content"`
+	}
+	if err := r.client.Post(ctx, "/augment/scrape", map[string]any{"url": req.URL}, &out, req.Recorder); err != nil {
+		return "", err
+	}
+	return out.Content, nil
 }
 
 // Models is everything Venice serves Paula.
@@ -178,6 +223,13 @@ func (r *Runner) Check(ctx context.Context, m api.Checked) []error {
 	}
 	p.Add(errs...)
 	p.Add(r.checkFallbacks(ctx, prov)...)
+	// A web search goes through the runner rather than a model, so the engine
+	// it goes to is the runner's block's alone. A model's block that names
+	// another would change nothing, and says so.
+	if prov.Search.Provider != r.searcher {
+		p.Addf("provider.search.provider: %q is the runner's to set, since a web search goes through the runner, not a model",
+			prov.Search.Provider)
+	}
 	// Venice lists no request parameters, so a sampling setting is not held
 	// against a list.
 	return p.All()

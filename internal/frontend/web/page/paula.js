@@ -166,37 +166,27 @@ function offered(choices) {
   return row
 }
 
-// words writes a text into a bubble as nodes. Nothing the conversation says is
-// ever read as markup: what is bold, in code or a link is built here.
-const marks = /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*\n]+)\*|(https?:\/\/[^\s<>"]+)/g
+// words writes a text into a bubble as nodes. A text shows as it was written,
+// as it does on every frontend, since she is told her messages arrive as
+// plain text: nothing in it is read as markup, and an address is a link.
+const addresses = /https?:\/\/[^\s<>"]+/g
 
 function words(el, text, keep) {
   const from = keep ? el.querySelector('.from') : null
   el.replaceChildren()
   if (from) el.append(from)
   let at = 0
-  for (const m of text.matchAll(marks)) {
+  for (const m of text.matchAll(addresses)) {
     if (m.index > at) el.append(text.slice(at, m.index))
-    if (m[1] !== undefined) el.append(tag('code', m[1]))
-    else if (m[2] !== undefined) el.append(tag('strong', m[2]))
-    else if (m[3] !== undefined) el.append(tag('em', m[3]))
-    else {
-      const a = document.createElement('a')
-      a.href = m[4]
-      a.textContent = m[4]
-      a.target = '_blank'
-      a.rel = 'noreferrer noopener'
-      el.append(a)
-    }
+    const a = document.createElement('a')
+    a.href = m[0]
+    a.textContent = m[0]
+    a.target = '_blank'
+    a.rel = 'noreferrer noopener'
+    el.append(a)
     at = m.index + m[0].length
   }
   if (at < text.length) el.append(text.slice(at))
-}
-
-function tag(name, text) {
-  const el = document.createElement(name)
-  el.textContent = text
-  return el
 }
 
 // shows puts something at the end of the conversation, and keeps the screen

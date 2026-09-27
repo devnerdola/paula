@@ -15,6 +15,11 @@ runners:
   venice:
     type: venice
 
+  # A search API for the web tools, with the key in TAVILY_API_KEY. It serves
+  # no models. Venice searches too, so leave it out to search through Venice.
+  # tavily:
+  #   type: tavily
+
 # Every model caches its prompt the way the host of its family caches best.
 # cache: false on a model turns that off, where its host allows it.
 models:
@@ -49,10 +54,13 @@ frontends:
   #   listen: 127.0.0.1:8484
 
 # What she can do in the middle of a reply: list, search, keep and forget
-# memories; list the pictures you sent and look at one again; and schedule a
-# time to write to you on her own. None of it is ever in her prompt, so these
-# are how she reaches them.
+# memories; list the pictures you sent and look at one again; schedule a time
+# to write to you on her own; and search the web and read a page, through the
+# runner web names. None of it is ever in her prompt, so these are how she
+# reaches them.
 tools:
   memory:
   images:
   callbacks:
+  web:
+    runner: venice

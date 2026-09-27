@@ -43,16 +43,31 @@ func toolsOf(list []toolsapi.Tool) (tools, error) {
 	return t, nil
 }
 
-// errNotRun is a call a reply asked for after it had taken every round it may.
-// The round it came in was asked for an answer with no call in it.
-var errNotRun = errors.New("not run: the reply had taken every round of calls it may")
+// looksUp says a tool of that name only looks something up.
+func (t tools) looksUp(name string) bool {
+	_, ok := t.byName[name].(toolsapi.Lookup)
+	return ok
+}
+
+// A call a reply asked for is left unrun, and answered with why, once running
+// it would come to nothing.
+var (
+	// errLookup is a call that only looks something up, asked for in the last
+	// round a reply may take calls in: nothing it answered would be read
+	// before the reply is asked for its answer.
+	errLookup = errors.New("not run: it only looks something up, and the reply had taken every round of calls it may")
+	// errNotRun is a call asked for in the round after the last, which was
+	// asked for an answer with no call in it.
+	errNotRun = errors.New("not run: the reply had taken every round of calls it may")
+)
 
 // call runs one tool a model asked for, and is what it answered, which is what
-// the model is sent back unless it is too long for the room the round has.
-// Whatever came of it is written down under the reply's entry and the request
-// that asked, a call that could not run among them. The pictures it shows are
+// the model is sent back unless it is too long for the room the round has. A
+// call given why it is left is not run, and is answered with that. Whatever
+// came of it is written down under the reply's entry and the request that
+// asked, a call that could not run among them. The pictures it shows are
 // added to shown, which is nil for a call that is not run.
-func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.ToolCall, run bool, shown *pictures) string {
+func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.ToolCall, left error, shown *pictures) string {
 	rec := &store.ToolCall{
 		EntryID:   a.entry.ID,
 		RequestID: request,
@@ -68,7 +83,10 @@ func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.Tool
 		e.log.Error("keeping a tool call", "entry", a.entry.ID, "error", err)
 	}
 
-	result, err := e.run(ctx, a, c, run, shown)
+	result, err := "", left
+	if left == nil {
+		result, err = e.run(ctx, a, c, rec.ID, shown)
+	}
 	if err != nil {
 		rec.Error = err.Error()
 		result = "error: " + rec.Error
@@ -83,11 +101,10 @@ func (e *Engine) call(ctx context.Context, a *attempt, request int64, c api.Tool
 	return result
 }
 
-// run is a call itself: the tool it names, held to the arguments it gives.
-func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool, shown *pictures) (string, error) {
-	if !run {
-		return "", errNotRun
-	}
+// run is a call itself: the tool it names, held to the arguments it gives. The
+// requests the tool makes name the call, by the number it was written down
+// under.
+func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, call int64, shown *pictures) (string, error) {
 	tool, ok := e.tools.byName[c.Name]
 	if !ok {
 		return "", fmt.Errorf("no tool is called %s", c.Name)
@@ -102,7 +119,7 @@ func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, run bool, 
 	// From here the reply has done something, whatever the tool answers: a
 	// call that named no tool, or gave no arguments one could read, did not.
 	a.acted = true
-	return tool.Call(ctx, env{e: e, a: a, shown: shown}, args)
+	return tool.Call(ctx, env{e: e, a: a, call: call, shown: shown}, args)
 }
 
 // pictures are the pictures a call showed, which go to the model in its
@@ -123,10 +140,12 @@ func (e *Engine) answered(result string, p pictures) []api.Part {
 }
 
 // env is what a call reaches of the conversation: the engine, the reply that
-// asked for it, and the pictures the call shows.
+// asked for it, the number the call was written down under, and the pictures
+// the call shows.
 type env struct {
 	e     *Engine
 	a     *attempt
+	call  int64
 	shown *pictures
 }
 
@@ -212,4 +231,13 @@ func (v env) Cancel(ctx context.Context, id store.CallbackID) error {
 	}
 	v.e.rearm()
 	return nil
+}
+
+// Recorder keeps a call's requests under the call, and apart from the rounds
+// of the reply, whose recorder names the last of them as the round that asked
+// for a call.
+func (v env) Recorder() api.Recorder {
+	rec := v.e.recorder(v.a, store.PurposeTool)
+	rec.call = v.call
+	return rec
 }

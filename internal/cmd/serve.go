@@ -58,8 +58,9 @@ func serve(g *globals) error {
 	var offered []tools.Tool
 	for _, t := range cfg.Tools {
 		opened, err := tools.Open(t.Name, t.Section, tools.Host{
-			Names:    tools.Names{Character: card.Name, User: card.User.Name},
-			Language: card.Language,
+			Names:     tools.Names{Character: card.Name, User: card.User.Name},
+			Language:  card.Language,
+			Searchers: set.Searchers(),
 		})
 		if err != nil {
 			return err
