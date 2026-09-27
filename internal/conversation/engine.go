@@ -724,6 +724,9 @@ func (l *loop) post(ctx context.Context, m NewMessage, parts []store.Part) error
 	e := l.e
 	// The conversation is stamped by one clock, which is this one: a frontend
 	// says what was sent, not when.
+	if err := e.holds(ctx, parts); err != nil {
+		return err
+	}
 	msg := &store.Message{
 		Role:      store.RoleUser,
 		Channel:   m.Channel,

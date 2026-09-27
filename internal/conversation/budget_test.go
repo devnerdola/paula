@@ -349,12 +349,19 @@ func TestATurnPastTheContextWaitsForTheHistoryToMakeRoom(t *testing.T) {
 }
 
 // A turn whose messages are past the context once the history has made room
-// fails, saying why, and sends nothing.
+// fails, saying why, and sends nothing. The room the history makes is what
+// the summary leaves, which here fills its reservation, as one written to
+// does.
 func TestATurnPastTheContextOnceTheHistoryMadeRoomFails(t *testing.T) {
-	f, r := talkedAndCounted(t)
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(keeping)}
+	r := openReplyWith(t, f, sized(f, 20000))
+	for i := range 5 {
+		r.say(t, fmt.Sprintf("message %d: %s", i, manyWords(400)))
+		settle(t, r)
+	}
 	replies := len(f.sentFor(store.PurposeReply))
 
-	r.say(t, "and this: "+manyWords(7000))
+	r.say(t, "and this: "+manyWords(5000))
 	if n := len(f.sentFor(store.PurposeReply)); n != replies {
 		t.Errorf("%d replies went out past the context, want none", n-replies)
 	}
@@ -382,6 +389,36 @@ func TestAPromptGoesOutUntilAHostHasCountedOne(t *testing.T) {
 	r.say(t, "hello: "+manyWords(7000))
 	if n := len(f.sentFor(store.PurposeReply)); n != 1 || seen(r.Engine, ReplyFailed) {
 		t.Errorf("%d replies went out, and one failed: %v, want the one", n, seen(r.Engine, ReplyFailed))
+	}
+}
+
+// A message the model's context cannot hold even once the history is
+// compacted away could never be answered, and stored it would fail every turn
+// after it: it is refused as it is sent, and nothing of it is stored. It is
+// measured at a token a word, the least a word comes to, until a host has
+// counted a prompt of the model, and at what the host counted after.
+func TestAMessageTooLongForTheContextIsRefusedAsItIsSent(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: countedAtThree(compacting("ok", "they said things"))}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+
+	err := r.Post(ctx, NewMessage{Channel: "repl", Text: "read this: " + manyWords(2000)})
+	if err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Fatalf("a message of more words than the context = %v, want it refused", err)
+	}
+	if history, _ := r.History(ctx, 0, 10); len(history) != 0 {
+		t.Errorf("history = %+v, want nothing of the message stored", history)
+	}
+
+	// Before a host has counted, a message that fits at a token a word goes
+	// out. The host counts three a word, so one that fit at one no longer does.
+	r.say(t, "hello: "+manyWords(1000))
+	if seen(r.Engine, ReplyFailed) {
+		t.Fatal("a message that fits at a token a word failed")
+	}
+	err = r.Post(ctx, NewMessage{Channel: "repl", Text: "and this: " + manyWords(1000)})
+	if err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Errorf("a message past the context at what the host counted = %v, want it refused", err)
 	}
 }
 

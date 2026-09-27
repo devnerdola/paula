@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
+	"nerdola.dev/x/paula/internal/store"
 )
 
 const (
@@ -241,6 +243,39 @@ func (e *Engine) excess(m *model, messages []api.Message) int {
 	}
 	n := size(messages, c.rate, c.image) + size([]api.Message{api.Text(api.RoleSystem, e.tools.text)}, c.rate, 0)
 	return max(0, n-m.limit())
+}
+
+// holds refuses a message the chat model's context cannot hold beside the
+// card and the tools alone, the least a prompt comes to: such a message could
+// never be answered, and stored it would fail every turn after it. It is
+// measured at what a host counted a word of the model at, and at a token a
+// word, the least a word comes to, until one has. A model that cannot be
+// looked up holds nothing back: the turn says what is wrong with it.
+func (e *Engine) holds(ctx context.Context, parts []store.Part) error {
+	m, err := e.roleModel(ctx, config.RoleChat)
+	if err != nil || m.limit() <= 0 {
+		return nil
+	}
+	msg := api.Message{Role: api.RoleUser}
+	for _, p := range parts {
+		switch p.Type {
+		case store.PartText:
+			msg.Parts = append(msg.Parts, api.Part{Type: api.PartText, Text: p.Text})
+		case store.PartImage:
+			msg.Parts = append(msg.Parts, api.Part{Type: api.PartImage})
+		}
+	}
+	c := e.costs.at(m.Name)
+	rate := c.rate
+	if !c.counted {
+		rate = 1
+	}
+	fixed := size([]api.Message{api.Text(api.RoleSystem, e.card(m)), api.Text(api.RoleSystem, e.tools.text)}, rate, 0)
+	room := m.limit() - fixed
+	if n := size([]api.Message{msg}, rate, c.image); n > room {
+		return fmt.Errorf("the message is too long: about %d tokens, and the model's context holds about %d beside the card and the tools", n, room)
+	}
+	return nil
 }
 
 // limit is the context a prompt is held to: what the file sets for the model,

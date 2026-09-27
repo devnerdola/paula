@@ -704,6 +704,12 @@ and asking again would do it again, so a failure after it ends the reply the
 way a stop does: what she had written is kept, the error is said below it, and
 the message counts as answered.
 
+A message the model's context could never hold, beside the card and the tools
+alone, is refused as you send it, and the frontend says so. Nothing of it is
+stored: it could not be answered, and every turn after it would fail. It is
+measured at what the host has counted a word of the model at, and at a token a
+word until it has counted one.
+
 **The prompt is the conversation.** It opens with a system message: the card;
 a sentence telling her that her messages reach you as plain text, so she writes
 no markdown or HTML and gives an address as it is; then the summary of what
