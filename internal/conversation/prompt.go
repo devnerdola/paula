@@ -34,6 +34,15 @@ func (e *Engine) now() string {
 	return "It is now " + timeText(at.Location(), at) + "."
 }
 
+// cameDue says a call back she scheduled came due, when, and why: the whole
+// of what she answers, told the way a time is, since none of it is from the
+// user. It reads the same in every prompt after it, so what a host cached
+// stands.
+func (e *Engine) cameDue(msg store.Message) string {
+	return "A call back you scheduled came due at " + timeText(e.clock.Now().Location(), msg.CreatedAt) +
+		": " + msg.Text() + "."
+}
+
 // prompt builds the messages of a reply: the persona with the summary, the
 // history with the time before every message she was sent, and then the user
 // input, after the time it is now. standing is how many of its first messages
@@ -97,21 +106,25 @@ func (m *model) notes() api.Notes {
 	return m.settings.Extension.Notes()
 }
 
-// card is the character card as a model reads it. A model told her notes as
-// user messages is told whose they are right after the card, where it stands
-// as long as the card does, naming the ones it is told.
+// card is the character card as a model reads it, with what the tools have
+// her told after it. A model told her notes as user messages is told whose
+// they are right after the card, where it stands as long as the card does,
+// naming the ones it is told.
 func (e *Engine) card(m *model) string {
-	notes := m.notes()
-	if notes.Role == api.RoleSystem {
-		return e.rendered
+	sections := []string{e.rendered}
+	if notes := m.notes(); notes.Role != api.RoleSystem {
+		user := e.persona.User.Name
+		told := "the one before each of " + user + "'s messages saying when it was sent"
+		if !notes.LastAsSent {
+			told += ", and the one saying what time it is now"
+		}
+		sections = append(sections, "Some messages come from the app you and "+user+
+			" text through, not from "+user+": "+told+". They are for you to know, never to answer.")
 	}
-	user := e.persona.User.Name
-	told := "the one before each of " + user + "'s messages saying when it was sent"
-	if !notes.LastAsSent {
-		told += ", and the one saying what time it is now"
+	if e.tools.prompt != "" {
+		sections = append(sections, e.tools.prompt)
 	}
-	return e.rendered + "\n\nSome messages come from the app you and " + user +
-		" text through, not from " + user + ": " + told + ". They are for you to know, never to answer."
+	return strings.Join(sections, "\n\n")
 }
 
 // summary is the summary that counts, and nil while the conversation has never
@@ -145,6 +158,13 @@ func (e *Engine) render(messages []store.Message, sees bool, last store.MessageI
 	out = make([]api.Message, 0, 2*len(messages))
 	at = -1
 	for _, msg := range messages {
+		if msg.Role == store.RoleCallback {
+			if msg.ID == last {
+				at = len(out)
+			}
+			out = append(out, api.Text(notes.Role, e.cameDue(msg)))
+			continue
+		}
 		if msg.Role == store.RoleUser {
 			when := e.sentAt(msg.CreatedAt)
 			if msg.ID == last {

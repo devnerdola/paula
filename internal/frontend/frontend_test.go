@@ -756,6 +756,43 @@ func TestWhatWasSaidBefore(t *testing.T) {
 	waitFor(t, "the prompt", sawLine(base, "prompt"))
 }
 
+// A call back that came due is the app's message, not part of the chat: a
+// frontend is shown neither the one that fires nor one read back with what
+// was said before. What it shows is her reply.
+func TestACallbackThatCameDueIsNotShown(t *testing.T) {
+	base := newScreen(api.Features{Channel: "repl"})
+	base.history = 10
+	s := &struct {
+		*screen
+		*showing
+		*prompting
+	}{}
+	s.screen, s.showing, s.prompting = base, &showing{base}, &prompting{base}
+
+	tk := newTalk()
+	tk.history = []store.Message{
+		{ID: 1, Role: store.RoleUser, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "talk later"}}},
+		{ID: 2, Role: store.RoleCallback, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "say good night"}}},
+		{ID: 3, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartText, Text: "good night, love"}}},
+	}
+	run(t, s, tk)
+	waitFor(t, "the prompt", sawLine(base, "prompt"))
+
+	due := &store.Message{ID: 4, Role: store.RoleCallback, Channel: "repl",
+		Parts: []store.Part{{Type: store.PartText, Text: "say good morning"}}}
+	tk.publish(conversation.Event{Kind: conversation.MessageStored, Channel: "repl", Message: due})
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 2})
+	reply := &store.Message{ID: 5, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartText, Text: "morning, love"}}}
+	tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 2, Message: reply})
+	waitFor(t, "her reply", sawLine(base, "send morning, love"))
+
+	for _, line := range base.log() {
+		if strings.Contains(line, "say good night") || strings.Contains(line, "say good morning") {
+			t.Errorf("the screen shows %q, want no call back on it", line)
+		}
+	}
+}
+
 // opening asks for what was said before only once a test says so, which is
 // where a frontend that takes a moment to open finds the conversation: a
 // message may be stored between where the session starts and the read.
@@ -991,6 +1028,18 @@ func TestAFrontendIsToldWhenSheIsWriting(t *testing.T) {
 	waitFor(t, "the word that she has stopped", func() bool {
 		return slices.Contains(s.log()[3:], "stopped writing")
 	})
+
+	// A reply she put off until a call back ends with nothing to show: she
+	// was said to be writing while she decided, and is said to have stopped.
+	before := len(s.log())
+	tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 3})
+	tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 3})
+	waitFor(t, "the word that she has stopped", func() bool {
+		return slices.Contains(s.log()[before:], "stopped writing")
+	})
+	if got := s.log()[before:]; !slices.Equal(got, []string{"writing", "stopped writing"}) {
+		t.Errorf("wrote %v, want only the writing status", got)
+	}
 }
 
 // A session says what can be picked and what picking it means. A frontend that

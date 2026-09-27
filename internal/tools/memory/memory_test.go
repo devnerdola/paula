@@ -55,6 +55,18 @@ func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return n
 
 func (f *fakeEnv) Show(store.Image) bool { return false }
 
+func (f *fakeEnv) Now() time.Time { return time.Time{} }
+
+func (f *fakeEnv) Callbacks(context.Context) ([]store.Callback, error) { return nil, nil }
+
+func (f *fakeEnv) Schedule(context.Context, time.Time, string) (*store.Callback, error) {
+	return nil, nil
+}
+
+func (f *fakeEnv) Move(context.Context, store.CallbackID, time.Time) error { return nil }
+
+func (f *fakeEnv) Cancel(context.Context, store.CallbackID) error { return nil }
+
 func (f *fakeEnv) Remember(_ context.Context, content string, replaces []store.MemoryID) (*store.Memory, error) {
 	f.kept, f.replaces = content, replaces
 	return &store.Memory{ID: 12, Content: content}, nil

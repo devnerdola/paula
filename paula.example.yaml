@@ -49,8 +49,10 @@ frontends:
   #   listen: 127.0.0.1:8484
 
 # What she can do in the middle of a reply: list, search, keep and forget
-# memories, and list the pictures you sent and look at one again. Her memories
-# are never in her prompt, so these are how she reaches them.
+# memories; list the pictures you sent and look at one again; and schedule a
+# time to write to you on her own. None of it is ever in her prompt, so these
+# are how she reaches them.
 tools:
   memory:
   images:
+  callbacks:

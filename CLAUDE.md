@@ -97,7 +97,9 @@ whatever comes next.
   told as the model's family extension says: in the role it gives them, where
   a user role comes with a sentence after the card saying whose they are, and
   with the time before the message she answers told as when it was sent for a
-  host that caches where it chooses rather than where a request marks.
+  host that caches where it chooses rather than where a request marks. A call
+  back that came due is told the same way, as one message that says when and
+  why, with nothing after it: none of it is from the user.
 - **What changes goes last.** A host caches the longest matching prefix of a
   prompt, so anything that changes every turn belongs at the end, after
   everything that does not.

@@ -185,6 +185,25 @@ func TestAToolIsRunAndWhatItAnsweredGoesBack(t *testing.T) {
 	}
 }
 
+// instructing is a tool with something to say in her system prompt.
+type instructing struct{ *fakeTool }
+
+func (instructing) Instructions() string { return "Look things up before you guess." }
+
+// What a tool has to say about when she uses it goes in her system prompt,
+// after the card, as a rule of hers rather than the card's.
+func TestWhatAToolInstructsIsInTheSystemPrompt(t *testing.T) {
+	look := instructing{&fakeTool{name: "search_memories", answer: "found"}}
+	f := &fakeRunner{model: chatModel(), chat: says("hi")}
+	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+	r.say(t, "hey")
+
+	card := text(f.replied().Messages[0])
+	if !strings.HasPrefix(card, "You are Paula") || !strings.HasSuffix(card, "\n\nLook things up before you guess.") {
+		t.Errorf("the system message is %q, want the card and then what the tool instructs", card)
+	}
+}
+
 // A reply offered nothing is one round, and a request that carries no tools
 // is the request it always was.
 func TestAReplyOfferedNothingIsOneRound(t *testing.T) {

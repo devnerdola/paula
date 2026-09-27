@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"nerdola.dev/x/paula/internal/media"
@@ -13,16 +14,18 @@ import (
 	toolsapi "nerdola.dev/x/paula/internal/tools/api"
 )
 
-// tools are the tools a conversation offers, what each is called, and the text
-// a model reads of them.
+// tools are the tools a conversation offers, what each is called, the text a
+// model reads of them, and what they have her told in her system prompt.
 type tools struct {
 	defs   []api.ToolDef
 	byName map[string]toolsapi.Tool
 	text   string
+	prompt string
 }
 
 func toolsOf(list []toolsapi.Tool) (tools, error) {
 	t := tools{byName: make(map[string]toolsapi.Tool, len(list))}
+	var prompt []string
 	for _, tool := range list {
 		// What a tool says of itself is what a runner offers a model.
 		def := api.ToolDef(tool.Definition())
@@ -31,8 +34,12 @@ func toolsOf(list []toolsapi.Tool) (tools, error) {
 		}
 		t.byName[def.Name] = tool
 		t.defs = append(t.defs, def)
+		if i, ok := tool.(toolsapi.Instructor); ok {
+			prompt = append(prompt, i.Instructions())
+		}
 	}
 	t.text = toolsText(t.defs)
+	t.prompt = strings.Join(prompt, "\n\n")
 	return t, nil
 }
 
@@ -171,4 +178,38 @@ func (v env) Remember(ctx context.Context, content string, replaces []store.Memo
 
 func (v env) Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error) {
 	return v.e.Forget(ctx, id)
+}
+
+func (v env) Now() time.Time { return v.e.clock.Now() }
+
+func (v env) Callbacks(ctx context.Context) ([]store.Callback, error) {
+	return v.e.store.Callbacks(ctx)
+}
+
+// Schedule keeps a call back under the reply that asked for it, and has the
+// loop look at when the soonest is due again.
+func (v env) Schedule(ctx context.Context, at time.Time, reason string) (*store.Callback, error) {
+	c := &store.Callback{DueAt: at, Reason: reason, Entry: v.a.entry.ID}
+	if err := v.e.store.Schedule(ctx, c); err != nil {
+		return nil, err
+	}
+	v.a.putOff = true
+	v.e.rearm()
+	return c, nil
+}
+
+func (v env) Move(ctx context.Context, id store.CallbackID, at time.Time) error {
+	if err := v.e.store.MoveCallback(ctx, id, at); err != nil {
+		return err
+	}
+	v.e.rearm()
+	return nil
+}
+
+func (v env) Cancel(ctx context.Context, id store.CallbackID) error {
+	if err := v.e.store.CancelCallback(ctx, id); err != nil {
+		return err
+	}
+	v.e.rearm()
+	return nil
 }

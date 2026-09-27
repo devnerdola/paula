@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/media"
@@ -53,8 +54,10 @@ type attempt struct {
 	entry *store.Entry
 	// acted says the reply has run a tool, which stands whatever becomes of
 	// the reply. The goroutine writing it sets it; the loop reads it once the
-	// attempt is done.
-	acted bool
+	// attempt is done. putOff says a call back was scheduled in it, so a
+	// reply of no text is her putting the answer off until then.
+	acted  bool
+	putOff bool
 
 	cancel context.CancelFunc
 	state  atomic.Int32
@@ -171,6 +174,9 @@ type Engine struct {
 	standings chan standingRequest
 	done      chan doneRequest
 	worked    chan error
+	// due says the call backs changed, so the loop looks again at when the
+	// soonest is due.
+	due chan struct{}
 
 	closing sync.Once
 	closed  chan struct{}
@@ -263,6 +269,7 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 		standings: make(chan standingRequest),
 		done:      make(chan doneRequest),
 		worked:    make(chan error),
+		due:       make(chan struct{}, 1),
 		closed:    make(chan struct{}),
 		ended:     make(chan struct{}),
 	}
@@ -276,13 +283,29 @@ func newEngine(ctx context.Context, o Options) (*Engine, *loop, error) {
 
 	// The loop's state is built before the loop runs, so a caller that posts
 	// or waits as soon as Open returns finds it ready.
-	l := &loop{e: e, debounce: e.clock.NewTimer(e.cfg.Debounce.Duration())}
+	l := &loop{e: e, debounce: e.clock.NewTimer(e.cfg.Debounce.Duration()), due: e.clock.NewTimer(0)}
 	l.debounce.Stop()
+	l.due.Stop()
 	if err := l.start(ctx); err != nil {
 		return nil, nil, err
 	}
 	return e, l, nil
 }
+
+// rearm has the loop look again at when the soonest call back is due. A tool
+// runs beside the loop, so it says the call backs changed rather than touch
+// the timer.
+func (e *Engine) rearm() {
+	select {
+	case e.due <- struct{}{}:
+	default:
+	}
+}
+
+// dueCheck is how long at most the loop waits before looking at the soonest
+// call back again: a timer lags after the machine sleeps, and a call back due
+// meanwhile is found within this.
+const dueCheck = time.Minute
 
 // runEnded is what an entry ends with when the run stopped before the reply
 // did, and workEnded the same of an entry that answers no message: a
@@ -455,6 +478,9 @@ type loop struct {
 	debounce Timer
 	pending  bool
 	waiters  []chan Seq
+	// due goes off when the soonest call back is due, and at least every
+	// dueCheck while one is pending.
+	due Timer
 
 	// compacting says the history is being measured against its reservation,
 	// and compacted when it has passed it, beside the loop; cancel cuts that
@@ -527,7 +553,76 @@ func (l *loop) run() {
 
 		case err := <-e.worked:
 			l.compacted(ctx, err)
+
+		case <-l.due.Chan():
+			l.fire(ctx)
+
+		case <-e.due:
+			l.arm(ctx)
 		}
+	}
+}
+
+// arm sets the timer for the soonest pending call back, and stops it when
+// none is pending.
+func (l *loop) arm(ctx context.Context) {
+	e := l.e
+	pending, err := e.store.Callbacks(ctx)
+	if err != nil {
+		e.log.Error("reading the call backs", "error", err)
+		l.due.Reset(dueCheck)
+		return
+	}
+	if len(pending) == 0 {
+		l.due.Stop()
+		return
+	}
+	l.due.Reset(max(0, min(pending[0].DueAt.Sub(e.clock.Now()), dueCheck)))
+}
+
+// fire stores the soonest call back as the message she answers, once it is
+// due and no reply is being written or waiting to be: one that comes due
+// meanwhile fires when that turn ends. The turn starts at once, since nothing
+// more is coming for it to wait for.
+func (l *loop) fire(ctx context.Context) {
+	e := l.e
+	pending, err := e.store.Callbacks(ctx)
+	if err != nil {
+		e.log.Error("reading the call backs", "error", err)
+		l.due.Reset(dueCheck)
+		return
+	}
+	if len(pending) == 0 {
+		return
+	}
+	c := pending[0]
+	if now := e.clock.Now(); c.DueAt.After(now) {
+		l.due.Reset(min(c.DueAt.Sub(now), dueCheck))
+		return
+	}
+	// The turn that is on arms the timer again as it ends. Until then the
+	// call back is looked at every dueCheck, not at once: a timer reset to
+	// nothing fires straight back.
+	if l.running != nil || l.waiting {
+		l.due.Reset(dueCheck)
+		return
+	}
+	msg := &store.Message{
+		Role:      store.RoleCallback,
+		Channel:   l.channel,
+		Parts:     []store.Part{{Type: store.PartText, Text: c.Reason}},
+		CreatedAt: e.clock.Now(),
+	}
+	if err := e.store.Fire(ctx, c.ID, msg); err != nil {
+		e.log.Error("firing a call back", "callback", c.ID, "error", err)
+		l.due.Reset(dueCheck)
+		return
+	}
+	l.last, l.latest = msg.ID, msg.ID
+	e.log.Info("a call back came due", "callback", c.ID, "message", msg.ID)
+	e.events.publish(Event{Kind: MessageStored, Channel: msg.Channel, Message: msg})
+	if !l.pending {
+		l.begin(ctx)
 	}
 }
 
@@ -560,6 +655,9 @@ func (l *loop) compact(ctx context.Context, room bool) {
 func (l *loop) compacted(ctx context.Context, err error) {
 	e := l.e
 	l.compacting, l.cancel = false, nil
+	// A call back held while a turn waited on the compaction fires once it
+	// is over.
+	defer l.arm(ctx)
 	if err != nil {
 		l.unchecked = true
 		e.log.Warn("compacting the history", "error", err)
@@ -600,7 +698,7 @@ func (l *loop) start(ctx context.Context) error {
 		l.latest = newest.ID
 	}
 
-	last, err := e.store.LastMessage(ctx, store.RoleUser)
+	last, err := e.store.LastAsked(ctx)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return err
 	}
@@ -615,6 +713,8 @@ func (l *loop) start(ctx context.Context) error {
 	// A run starts with the history as the last one left it, which nothing has
 	// measured against this run's reservation.
 	l.unchecked = true
+	// A call back that came due while no run was on fires now.
+	l.arm(ctx)
 	return nil
 }
 
@@ -735,6 +835,9 @@ func (l *loop) finish(ctx context.Context, r doneRequest) {
 	e := l.e
 	a := r.attempt
 	l.running = nil
+	// A call back that came due while the reply was written fires once the
+	// turn is over.
+	defer l.arm(ctx)
 
 	status := a.status(r.err)
 	// A message is stored before the event carrying it goes out.

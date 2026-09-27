@@ -252,8 +252,14 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 
 	// What she wrote in any round is what she said: a model often puts the
 	// whole of its answer beside the call it makes, and has nothing to add
-	// once the call is answered.
+	// once the call is answered. Nothing at all is her putting the answer off
+	// when she scheduled a call back for it: the messages are answered, and
+	// stay in the history for when it comes due.
 	if strings.TrimSpace(written.String()) == "" {
+		if a.putOff {
+			a.finished()
+			return nil, nil
+		}
 		return nil, fmt.Errorf("the model returned no text (finish reason %s)", reason(res))
 	}
 	a.finished()

@@ -260,10 +260,22 @@ func (s *Session) open(ctx context.Context) error {
 		s.entries = max(s.entries, m.EntryID)
 		s.shown = max(s.shown, m.ID)
 	}
-	if err := shower.ShowHistory(ctx, messages); err != nil {
+	if err := shower.ShowHistory(ctx, spoken(messages)); err != nil {
 		return err
 	}
 	return s.prompt(ctx)
+}
+
+// spoken is what a frontend shows of stored messages: what the user and she
+// said. A call back that came due is the app's, and stays out of the chat.
+func spoken(messages []store.Message) []store.Message {
+	out := make([]store.Message, 0, len(messages))
+	for _, m := range messages {
+		if m.Role != store.RoleCallback {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // older shows what was said before a message that is on the screen already.
@@ -282,7 +294,7 @@ func (s *Session) older(ctx context.Context, before store.MessageID) error {
 			return err
 		}
 	}
-	return shower.ShowOlder(ctx, before, messages)
+	return shower.ShowOlder(ctx, before, spoken(messages))
 }
 
 // prompt asks a frontend that shows one for the next line. One that shows none
@@ -415,7 +427,9 @@ func (s *Session) userMessage(ctx context.Context, e conversation.Event) error {
 		return nil
 	}
 	s.shown = e.Message.ID
-	if e.From == s.from {
+	// A call back that came due is the app's message, not part of the chat:
+	// what shows is her reply to it.
+	if e.From == s.from || e.Message.Role == store.RoleCallback {
 		return nil
 	}
 	if other, ok := s.adapter.(api.OtherChannels); ok {
@@ -584,6 +598,9 @@ func (s *Session) catchUp(ctx context.Context) error {
 
 // showMessage puts one message a session missed on the screen.
 func (s *Session) showMessage(ctx context.Context, m store.Message) error {
+	if m.Role == store.RoleCallback {
+		return nil
+	}
 	if m.Role == store.RoleUser {
 		// Which frontend a message came from is not kept, so a session catching
 		// up shows every one it has not shown.

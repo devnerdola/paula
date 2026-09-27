@@ -37,6 +37,18 @@ func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Me
 
 func (f *fakeEnv) Forget(context.Context, store.MemoryID) ([]store.Memory, error) { return nil, nil }
 
+func (f *fakeEnv) Now() time.Time { return time.Time{} }
+
+func (f *fakeEnv) Callbacks(context.Context) ([]store.Callback, error) { return nil, nil }
+
+func (f *fakeEnv) Schedule(context.Context, time.Time, string) (*store.Callback, error) {
+	return nil, nil
+}
+
+func (f *fakeEnv) Move(context.Context, store.CallbackID, time.Time) error { return nil }
+
+func (f *fakeEnv) Cancel(context.Context, store.CallbackID) error { return nil }
+
 // Images are the test's pictures, which it gives newest first, from the one at
 // from on.
 func (f *fakeEnv) Images(_ context.Context, from, limit int) ([]store.Image, error) {

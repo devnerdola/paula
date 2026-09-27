@@ -9,11 +9,18 @@ import (
 	"time"
 )
 
-// Roles and kinds a message can have.
+// Roles a message can have. A call back is a message she answers the way she
+// answers one of the user's: the time she scheduled to write on her own, and
+// why, stored as its text when it fires.
 const (
 	RoleUser      = "user"
 	RoleAssistant = "assistant"
+	RoleCallback  = "callback"
 )
+
+// Asked reports whether a message is one she answers: one the user sent, or a
+// call back that fired.
+func (m *Message) Asked() bool { return m.Role == RoleUser || m.Role == RoleCallback }
 
 // Part types a message is made of.
 const (
@@ -74,6 +81,15 @@ const messageColumns = `id, role, channel, parts_json, reasoning,
 
 // AddMessage stores a message and fills in its id.
 func (s *Store) AddMessage(ctx context.Context, m *Message) error {
+	return addMessage(ctx, s.db, m)
+}
+
+// execer runs a statement on the database or within a transaction of it.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func addMessage(ctx context.Context, db execer, m *Message) error {
 	parts, err := json.Marshal(m.Parts)
 	if err != nil {
 		return err
@@ -85,7 +101,7 @@ func (s *Store) AddMessage(ctx context.Context, m *Message) error {
 	if m.ReasoningDetails == nil {
 		details = []byte("[]")
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO messages
+	res, err := db.ExecContext(ctx, `INSERT INTO messages
 		(role, channel, parts_json, reasoning, reasoning_details, interrupted,
 		 reply_to, entry_id, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -144,6 +160,20 @@ func (s *Store) LastMessage(ctx context.Context, role string) (*Message, error) 
 		`SELECT `+messageColumns+` FROM messages
 		  WHERE ? = '' OR role = ?
 		  ORDER BY id DESC LIMIT 1`, role, role)
+	m, err := scanMessage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return m, err
+}
+
+// LastAsked returns the newest message she answers: the user's, or a call
+// back that fired.
+func (s *Store) LastAsked(ctx context.Context) (*Message, error) {
+	row := s.ro.QueryRowContext(ctx,
+		`SELECT `+messageColumns+` FROM messages
+		  WHERE role IN (?, ?)
+		  ORDER BY id DESC LIMIT 1`, RoleUser, RoleCallback)
 	m, err := scanMessage(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound

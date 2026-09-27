@@ -549,6 +549,40 @@ tools:
   images:
 ```
 
+**`callbacks`** lets her write to you on her own. It takes no settings.
+
+| Tool | What she does with it |
+|---|---|
+| `schedule_callback` | picks a time to write to you, and why: when she said she would get back to you, or wants to check how something went; a time that has passed is refused |
+| `list_callbacks` | lists the call backs she scheduled that have not come yet, soonest first, each with its number, when it is due and why |
+| `move_callback` | moves one to another time, by its number |
+| `cancel_callback` | cancels one, by its number |
+
+```yaml
+tools:
+  memory:
+  images:
+  callbacks:
+```
+
+When a call back comes due, and she is not writing, it is stored as a message
+of its own on the frontend you last wrote from, and she answers it at once, the
+way she answers a message of yours. That message is the app's, not part of the
+chat: no frontend shows it, and what you see is her reply arriving on its own.
+`paula turns` shows the message and the turn that answered it. One that comes
+due while she is writing fires once that reply is done, and one that came due
+while `serve` was not running fires when it starts, oldest first. Her call
+backs are never in her prompt: the tools are how she reaches them.
+
+With the tool, she need not answer a message the moment it arrives. Her system
+prompt tells her that when the person she is would not be writing then, asleep
+at that hour, at work or out, she may write nothing and schedule a call back
+for when she would: the message counts as answered, stays in the history, and
+when the call back comes due she reads it again and writes. Until then you see
+nothing of it, except that the typing status shows for a moment while she
+decides: a frontend is told she is writing as the request goes out, before
+anything says whether she will.
+
 ## The character card
 
 The card is the whole character. Every field is optional except `name` and
@@ -598,8 +632,11 @@ the message counts as answered.
 **The prompt is the conversation.** It opens with a system message: the card,
 then the summary of what came before. After it comes the history, the messages
 the summary does not cover, in order, each reply after what it answers, and last
-the time it is now and the message she is answering. Her memories are not in
-it: she reaches them with her tools.
+the time it is now and the message she is answering. A call back that came due
+is one message in the history, told the way a time is: `A call back you
+scheduled came due at Tuesday, 29 September 2026, 21:30 UTC+02:00: ask how the
+interview went.`, with her reply after it. Her memories and her call backs are
+not in it: she reaches them with her tools.
 
 Within a reply, each round that asked for tools goes back with what she
 thought in it, as the API sent it. Earlier replies go back as what she said,
@@ -736,9 +773,10 @@ a message of its own it is read rather than copied, it needs no notation to
 explain, and since only the one before your latest message ever changes, what a
 host has cached of everything earlier still stands. It is a system message, or
 a user message for a model whose host moves system messages ahead of the
-conversation. A model whose host caches where it chooses, rather than where a
-request marks, is told when your latest message was sent rather than what time
-it is now (see [Model families](#model-families)).
+conversation, and so is the message saying a call back came due. A model whose
+host caches where it chooses, rather than where a request marks, is told when
+your latest message was sent rather than what time it is now (see [Model
+families](#model-families)).
 
 A host keeps a prompt on the machine that read it, so the requests of one
 conversation name it, in the field the model's family extension sends. The
@@ -811,7 +849,7 @@ The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
 which request each file came from.
 
-Three tests run against real models, and only when `PAULA_LIVE` names a
+Four tests run against real models, and only when `PAULA_LIVE` names a
 configuration file. Each reads the keys the environment holds, as `serve` does.
 
 ```
@@ -865,4 +903,15 @@ was counted at:
 ```
 OPENROUTER_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
   go test ./internal/conversation -run TestLiveTheRate -v -timeout 20m
+```
+
+The fourth holds her call backs to a real model and the machine's clock. It
+asks her to ping in two minutes, to make it four, to cancel, and to ping in a
+minute, which has to fire as a message she answers with the note that it came
+due; then it asks for one more, closes the run, waits past its time, and opens
+a new run, which has to fire it as it starts. It takes about three minutes:
+
+```
+VENICE_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
+  go test ./internal/conversation -run TestLiveCallbacks -v -timeout 20m
 ```

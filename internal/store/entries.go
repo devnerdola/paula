@@ -376,10 +376,10 @@ func (s *Store) MessagesAnsweredBy(ctx context.Context, entryID EntryID) ([]Mess
 	rows, err := s.ro.QueryContext(ctx, `SELECT `+prefixed("m", messageColumns)+`
 		  FROM messages m, entries e
 		 WHERE e.id = ?
-		   AND m.role = ?
+		   AND m.role IN (?, ?)
 		   AND m.id > coalesce(e.after_message_id, 0)
 		   AND m.id <= e.upto_message_id
-		 ORDER BY m.id`, entryID, RoleUser)
+		 ORDER BY m.id`, entryID, RoleUser, RoleCallback)
 	if err != nil {
 		return nil, err
 	}

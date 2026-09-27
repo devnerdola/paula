@@ -40,7 +40,7 @@ func (e *Engine) history(ctx context.Context) (summary *store.Summary, said, res
 		return nil, nil, nil, err
 	}
 	for _, msg := range messages {
-		if msg.Role == store.RoleUser && msg.ID > answered {
+		if msg.Asked() && msg.ID > answered {
 			rest = append(rest, msg)
 			continue
 		}
@@ -244,6 +244,11 @@ func (e *Engine) pieces(ctx context.Context, summary *store.Summary, said []stor
 	}
 	loc := e.clock.Now().Location()
 	for _, msg := range said {
+		at := msg.CreatedAt.In(loc).Format("15:04 ")
+		if msg.Role == store.RoleCallback {
+			out = append(out, piece{day: dateText(loc, msg.CreatedAt), text: at + "(call back due: " + msg.Text() + ")"})
+			continue
+		}
 		name := e.persona.User.Name
 		if msg.Role == store.RoleAssistant {
 			name = e.persona.Name
@@ -257,7 +262,7 @@ func (e *Engine) pieces(ctx context.Context, summary *store.Summary, said []stor
 		}
 		out = append(out, piece{
 			day:  dateText(loc, msg.CreatedAt),
-			text: msg.CreatedAt.In(loc).Format("15:04 ") + name + ": " + strings.Join(lines, "\n"),
+			text: at + name + ": " + strings.Join(lines, "\n"),
 		})
 	}
 	return out

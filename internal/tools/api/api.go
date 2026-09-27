@@ -24,6 +24,13 @@ type Tool interface {
 	Call(ctx context.Context, env Env, args json.RawMessage) (string, error)
 }
 
+// Instructor is a tool that has something to say in her system prompt beyond
+// what the tool says of itself: when she is to use it, as a rule of hers
+// rather than the card's.
+type Instructor interface {
+	Instructions() string
+}
+
 // Definition is what a model is told of a tool: what it is called, what it
 // does, and the JSON schema of what it takes.
 type Definition struct {
@@ -58,6 +65,15 @@ type Env interface {
 	// whether it will be: a model that sees images is sent it, and any other
 	// is not, since it can read what the picture showed.
 	Show(img store.Image) bool
+	// Now is what time it is, by the conversation's clock.
+	Now() time.Time
+	// Callbacks are the call backs she scheduled that have not fired, soonest
+	// first. Schedule keeps one, under the reply that asked for it; Move gives
+	// one another time; Cancel takes one away.
+	Callbacks(ctx context.Context) ([]store.Callback, error)
+	Schedule(ctx context.Context, at time.Time, reason string) (*store.Callback, error)
+	Move(ctx context.Context, id store.CallbackID, at time.Time) error
+	Cancel(ctx context.Context, id store.CallbackID) error
 }
 
 // Host is what the program around a tool gives it.
