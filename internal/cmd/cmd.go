@@ -66,6 +66,7 @@ func commands() []*command {
 		memoryCommand(),
 		callbacksCommand(),
 		personaCheckCommand(),
+		versionCommand(),
 		helpCommand(),
 	}
 }
