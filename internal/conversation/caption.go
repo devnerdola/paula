@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"nerdola.dev/x/paula/internal/config"
@@ -100,15 +101,16 @@ func (e *Engine) ask(ctx context.Context, a *attempt, sha256 string) (string, er
 
 	// What was learned has to outlive a context a stop cancelled.
 	keep := context.WithoutCancel(ctx)
-	if err == nil && strings.TrimSpace(text.String()) == "" {
+	empty := err == nil && strings.TrimSpace(text.String()) == ""
+	if empty {
 		err = errors.New("the model described nothing")
 	}
 	if err != nil {
-		// A look that was cut short says nothing about the image, so nothing is
-		// kept of it and the next reply asks again. A stop, a run that ended and
-		// a connection that went are all of them: what a host said is what is
-		// worth keeping.
-		if api.Gone(err) {
+		// What is kept is what the host said of the picture: nothing, or a
+		// refusal of the request itself. A look that was cut short, a host that
+		// was busy or down and a connection that went say nothing about the
+		// image, so nothing is kept of them and the next reply asks again.
+		if !empty && !settled(err) {
 			return "", err
 		}
 		if serr := e.store.SetCaptionError(keep, sha256, err.Error()); serr != nil {
@@ -122,4 +124,16 @@ func (e *Engine) ask(ctx context.Context, a *attempt, sha256 string) (string, er
 		return "", err
 	}
 	return caption, nil
+}
+
+// settled reports whether an error is the host refusing the request itself: a
+// status in the 400s, but for the two that ask for the request again later, a
+// request timeout and a rate limit.
+func settled(err error) bool {
+	var e *api.APIError
+	if !errors.As(err, &e) {
+		return false
+	}
+	return e.Status >= 400 && e.Status < 500 &&
+		e.Status != http.StatusRequestTimeout && e.Status != http.StatusTooManyRequests
 }

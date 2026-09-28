@@ -66,8 +66,8 @@ func (s *Store) SetCaption(ctx context.Context, sha256, caption string) error {
 	return err
 }
 
-// SetCaptionError records that describing an image failed, so it is not sent
-// again to be described. There is no second try after a while.
+// SetCaptionError records why the host refused to describe an image, so it is
+// not sent again to be described. There is no second try after a while.
 func (s *Store) SetCaptionError(ctx context.Context, sha256, reason string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE media SET caption_error = ? WHERE sha256 = ?`, reason, sha256)

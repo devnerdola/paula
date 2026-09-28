@@ -86,7 +86,7 @@ func TestAnImageThatCannotBeDescribed(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("nice one")}
 	eyes := &fakeRunner{model: visionModel()}
 	eyes.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
-		return nil, &api.APIError{Status: 429, Message: "slow down"}
+		return nil, &api.APIError{Status: 400, Message: "the image could not be decoded"}
 	}
 	r := openSeeing(t, f, eyes)
 
@@ -99,49 +99,62 @@ func TestAnImageThatCannotBeDescribed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(m.CaptionError, "slow down") {
+	if !strings.Contains(m.CaptionError, "could not be decoded") {
 		t.Errorf("why it failed = %q", m.CaptionError)
 	}
 }
 
-// A look that was cut off says nothing about the image: the connection went,
-// which is not the model saying it cannot describe it.
-func TestALookThatWasCutOffIsAskedAgain(t *testing.T) {
-	f := &fakeRunner{model: chatModel(), chat: says("nice one")}
-	eyes := &fakeRunner{model: visionModel()}
-	eyes.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
-		return nil, api.ErrIdle
-	}
-	r := openSeeing(t, f, eyes)
+// A look the host did not make says nothing about the image: the connection
+// went, the host was busy or down, or asked for the request again later, none
+// of which is the model saying it cannot describe it.
+func TestALookThatWasNotMadeIsAskedAgain(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		err  error
+	}{
+		{"the connection went", api.ErrIdle},
+		{"a rate limit", &api.APIError{Status: 429, Message: "slow down"}},
+		{"a request timeout", &api.APIError{Status: 408, Message: "too slow"}},
+		{"a host that is down", &api.APIError{Status: 503, Message: "over capacity"}},
+		{"a connection refused", errors.New("the host went away")},
+	} {
+		f := &fakeRunner{model: chatModel(), chat: says("nice one")}
+		eyes := &fakeRunner{model: visionModel()}
+		eyes.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
+			return nil, c.err
+		}
+		r := openSeeing(t, f, eyes)
 
-	sha := sendPhoto(t, r, "look at this", photo(t))
+		sha := sendPhoto(t, r, "look at this", photo(t))
 
-	m, err := r.store.Media(context.Background(), sha)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.CaptionError != "" {
-		t.Errorf("why it failed = %q, want nothing kept of a look that was cut off", m.CaptionError)
-	}
+		m, err := r.store.Media(context.Background(), sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.CaptionError != "" {
+			t.Errorf("%s: why it failed = %q, want nothing kept of a look that was not made", c.what, m.CaptionError)
+		}
 
-	// The next reply asks again, and this time it is answered.
-	eyes.chat = says("a red square")
-	r.say(t, "and now?")
-	m, err = r.store.Media(context.Background(), sha)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m.Caption != "a red square" {
-		t.Errorf("caption = %q, want the image described on the next try", m.Caption)
+		// The next reply asks again, and this time it is answered.
+		eyes.chat = says("a red square")
+		r.say(t, "and now?")
+		m, err = r.store.Media(context.Background(), sha)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m.Caption != "a red square" {
+			t.Errorf("%s: caption = %q, want the image described on the next try", c.what, m.Caption)
+		}
 	}
 }
 
-// An image which could not be described is answered without a description.
+// An image the host refused to look at is answered without a description, and
+// not sent again.
 func TestAnImageThatFailedIsNotTriedAgain(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("nice one")}
 	eyes := &fakeRunner{model: visionModel()}
 	eyes.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
-		return nil, errors.New("the host went away")
+		return nil, &api.APIError{Status: 400, Message: "the image could not be decoded"}
 	}
 	r := openSeeing(t, f, eyes)
 
