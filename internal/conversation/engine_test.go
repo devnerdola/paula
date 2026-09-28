@@ -653,6 +653,47 @@ func TestAFailedReplyIsTriedAgainWithTheNextMessage(t *testing.T) {
 	}
 }
 
+// A message a failed reply left is tried again with the next message, and one
+// no reply could ever answer would fail every turn after it. A stop answers it
+// with nothing, the way it answers a message still waiting for its reply, so
+// the next message is answered on its own.
+func TestAStopAnswersTheMessagesAFailedReplyLeft(t *testing.T) {
+	st := newStore(t)
+	c := newClock()
+	a := &replies{failures: 1}
+	e := open(t, st, c, a.chat)
+	ctx := context.Background()
+
+	post(t, e, "one")
+	c.Advance(config.DefaultEngine().Debounce.Duration())
+	waitFor(t, "the failure", func() bool { return seen(e, ReplyFailed) })
+	if _, err := e.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if stopped, err := e.Stop(ctx); err != nil || !stopped {
+		t.Fatalf("Stop = %v, %v, want the message a failed reply left answered with nothing", stopped, err)
+	}
+	if answered, err := st.AnsweredUpto(ctx); err != nil || answered != 1 {
+		t.Errorf("answered up to %d, %v, want the message the stop answered", answered, err)
+	}
+	if stopped, err := e.Stop(ctx); err != nil || stopped {
+		t.Errorf("a second Stop = %v, %v, want nothing left to stop", stopped, err)
+	}
+
+	post(t, e, "two")
+	c.Advance(config.DefaultEngine().Debounce.Duration())
+	if _, err := e.Wait(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.count() != 2 {
+		t.Errorf("replies = %d, want one more for the message after the stop", a.count())
+	}
+	if got := replyTo(t, st); got != 2 {
+		t.Errorf("answered up to %d, want the message after the stop", got)
+	}
+}
+
 // The next run ends the entry with the reply a killed run had already stored,
 // and answers nothing a second time.
 func TestAReplyStoredByARunThatEndedIsNotWrittenAgain(t *testing.T) {

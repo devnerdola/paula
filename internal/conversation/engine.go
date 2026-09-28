@@ -773,13 +773,15 @@ func (l *loop) post(ctx context.Context, m NewMessage, parts []store.Part) error
 	return nil
 }
 
-// stop ends the reply being written, or the wait before one.
+// stop ends the reply being written, or the wait before one, or answers with
+// nothing the messages a failed reply left: a message no reply could answer
+// would fail every turn after it, and this is how it is put behind her.
 func (l *loop) stop(ctx context.Context) stopResult {
 	if l.running != nil {
 		l.running.end(stopped)
 		return stopResult{stopped: true}
 	}
-	if !l.pending && !l.waiting {
+	if !l.pending && !l.waiting && l.last <= l.answered {
 		return stopResult{}
 	}
 

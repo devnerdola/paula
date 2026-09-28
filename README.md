@@ -94,7 +94,7 @@ seconds before she starts, so several quick messages become one reply.
 | `/summary` | what she was told of the conversation before the messages she still carries |
 | `/memory [QUERY]` | the ten newest memories, or the ten a question is about |
 | `/forget ID` | takes a memory away, and the ones it replaced |
-| `/stop` | stops the reply she is writing |
+| `/stop` | stops the reply she is writing, or answers with nothing the messages a failed reply left |
 | `/help` | lists all of this |
 | `/quit` | closes the terminal |
 | Ctrl-C | stops the reply; press it twice to close the terminal |
@@ -897,8 +897,10 @@ said. Nothing is thrown away: the conversation itself keeps every message, and
 **A prompt past the context is not sent.** A message longer than the user
 input's reservation can take a prompt past the model's context, and the host
 refuses that. A turn measured past it waits for the history to be compacted to
-make room, and a turn still past it fails, saying so. Each round of tool calls
-adds the calls and what they answered. A round past the context before its
+make room, and a turn still past it fails, saying so. A message no reply could
+answer would fail every turn after it, since every prompt carries it: `/stop`
+answers it with nothing, and it goes into the history behind her. Each round
+of tool calls adds the calls and what they answered. A round past the context before its
 answers are in runs none of its calls, since what they did would never reach
 her, and the reply fails, saying so. An answer that would take the round past
 the context is not sent: she is told the call ran and its answer did not fit.
