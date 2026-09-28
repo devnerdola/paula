@@ -52,7 +52,13 @@ func serve(ctx context.Context, conn io.ReadWriter, names api.Names, pictures *m
 		stop:     stop,
 	}
 	code := 0
-	if err := session(ctx, a); err != nil {
+	err = session(ctx, a)
+	// A session that never started reading leaves the reader parked after the
+	// hello, and nothing else would stop it.
+	if !a.started {
+		a.stop()
+	}
+	if err != nil {
 		code = 1
 		if !gone(err) {
 			_ = w.write("error: " + err.Error() + "\n")
@@ -84,6 +90,8 @@ type adapter struct {
 	history int
 	next    func() (fromClient, error, bool)
 	stop    func()
+	// started says the goroutine Start began owns next and stop from then on.
+	started bool
 }
 
 func (a *adapter) Features() api.Features {
@@ -104,6 +112,7 @@ func (a *adapter) History() int { return a.history }
 // Start reads what is typed until the connection ends.
 func (a *adapter) Start(ctx context.Context) (<-chan api.Input, error) {
 	inputs := make(chan api.Input)
+	a.started = true
 	go func() {
 		defer close(inputs)
 		defer a.stop()

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -985,4 +987,35 @@ func TestALineTheTerminalAnsweredIsAskedForAgain(t *testing.T) {
 			return false
 		}
 	})
+}
+
+// readers is how many goroutines are reading frames, on either side of a
+// socket.
+func readers() int {
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	return strings.Count(string(buf[:n]), "repl.frames[")
+}
+
+// A session that ends before it starts reading, as one does when the
+// conversation is closing, leaves no reader behind: the goroutine parked on
+// the terminal's next frame ends with it.
+func TestASessionThatNeverStartsReadingLeavesNoReader(t *testing.T) {
+	f := open(t, dir(t), "")
+	serving(t, f, func(context.Context, api.Adapter) error {
+		return errors.New("the conversation is closed")
+	})
+	before := readers()
+	term := dial(t, f, true)
+
+	select {
+	case code := <-term.code:
+		if code != 1 {
+			t.Errorf("exit = %d, want 1", code)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the terminal never ended")
+	}
+	term.waitFor(t, "the error", "the conversation is closed")
+	waitFor(t, "the reader to end", func() bool { return readers() <= before })
 }
