@@ -552,7 +552,7 @@ to install and nothing is fetched from anywhere.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `listen` | `:8484` | the address to listen on |
+| `listen` | `127.0.0.1:8484` | the address to listen on |
 | `token_env` | `PAULA_WEB_TOKEN` | the environment variable with the token |
 
 ```yaml
@@ -564,8 +564,9 @@ frontends:
 The token is asked for as an ordinary sign-in and goes in either box, so a
 browser remembers it. Make it long: at least eight characters, and without a
 colon or a space. Anyone who reaches the address and has the token reads the
-whole conversation, so listen on `127.0.0.1` unless something in front of it
-is doing the letting in.
+whole conversation, and the page is served over plain HTTP, so it listens on
+this machine alone unless something in front of it does the letting in, over
+TLS.
 
 Every browser that opens the page gets a session of its own, and they show each
 other what is typed. A message she writes arrives text by text, as it does

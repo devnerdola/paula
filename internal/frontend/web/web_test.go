@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1065,3 +1066,54 @@ func TestAPageThatWentAwayEndsItsSession(t *testing.T) {
 type closed struct{ http.ResponseWriter }
 
 func (closed) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+// A file that names no address has the page served to this machine alone: the
+// token is all that stands between the address and the conversation.
+func TestTheDefaultAddressIsThisMachineAlone(t *testing.T) {
+	f := running(t, t.TempDir())
+	if f.listen != "127.0.0.1:8484" {
+		t.Errorf("listen = %q, want the loopback address", f.listen)
+	}
+}
+
+// A connection that never sends the headers of a request is closed, rather
+// than held open for as long as whoever opened it likes.
+func TestAConnectionThatSendsNoHeadersIsClosed(t *testing.T) {
+	// A port nothing listens on, for the run to take.
+	free, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := free.Addr().String()
+	free.Close()
+
+	f := running(t, t.TempDir())
+	f.listen = address
+	f.headerWait = 50 * time.Millisecond
+	ctx, stop := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- f.Run(ctx, func(context.Context, api.Adapter) error { return nil })
+	}()
+	t.Cleanup(func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+
+	var conn net.Conn
+	for start := time.Now(); conn == nil; {
+		if conn, err = net.Dial("tcp", address); err != nil {
+			if time.Since(start) > wait {
+				t.Fatal(err)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(wait))
+	if _, err := conn.Read(make([]byte, 1)); err != io.EOF {
+		t.Errorf("reading a connection that sent nothing = %v, want it closed", err)
+	}
+}

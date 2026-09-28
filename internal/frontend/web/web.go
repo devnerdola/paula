@@ -35,8 +35,15 @@ import (
 const Kind = "web"
 
 const (
-	// defaultListen is where the server listens when the file says nothing.
-	defaultListen = ":8484"
+	// defaultListen is where the server listens when the file says nothing:
+	// this machine alone, since the token is all that stands between the
+	// address and the conversation.
+	defaultListen = "127.0.0.1:8484"
+	// headerWait is how long a connection has to send the headers of a
+	// request, and idleWait how long one is kept between requests, so a peer
+	// that opens connections and leaves them does not hold them for good.
+	headerWait = 10 * time.Second
+	idleWait   = 2 * time.Minute
 	// defaultTokenEnv is where the token is read from.
 	defaultTokenEnv = "PAULA_WEB_TOKEN"
 	// shown is how much of the conversation a page opens on, and how much more
@@ -63,9 +70,12 @@ type settings struct {
 type Frontend struct {
 	listen string
 	token  string
-	log    *slog.Logger
-	names  api.Names
-	files  *media.Files
+	// headerWait and idleWait are the server's timeouts: the constants
+	// above, unless a test shortens them.
+	headerWait, idleWait time.Duration
+	log                  *slog.Logger
+	names                api.Names
+	files                *media.Files
 	// avatar is the file of her picture, and empty when there is none.
 	avatar string
 
@@ -126,10 +136,12 @@ func Open(s config.Section, h api.Host) (*Frontend, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	return &Frontend{
-		listen: cfg.Listen,
-		token:  token,
-		log:    log,
-		names:  h.Names,
+		listen:     cfg.Listen,
+		token:      token,
+		headerWait: headerWait,
+		idleWait:   idleWait,
+		log:        log,
+		names:      h.Names,
 		// The pictures are read back as they were kept, so nothing here says
 		// how large one may be.
 		files:  media.New(h.DataDir, 0),
@@ -157,7 +169,11 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 	}
 	f.log.Info("web listening", "address", l.Addr().String())
 
-	srv := &http.Server{Handler: f.handler(ctx, session)}
+	srv := &http.Server{
+		Handler:           f.handler(ctx, session),
+		ReadHeaderTimeout: f.headerWait,
+		IdleTimeout:       f.idleWait,
+	}
 	go func() {
 		<-ctx.Done()
 		// The streams are open for as long as a browser is, so there is nothing
