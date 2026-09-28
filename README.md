@@ -13,7 +13,10 @@ the model API charges.
 
 You need Go 1.26 or later on macOS or Linux, and an API key for OpenRouter or
 Venice. The terminal talks to `serve` over a Unix socket, and `serve` holds
-its data directory with a Unix lock, so nothing here runs on Windows.
+its data directory with a Unix lock, so nothing here runs on Windows. A build
+for Linux on amd64 is on the `rolling` release of the repository on GitHub,
+made from the latest commit: it is not a release, and changes with every
+commit.
 
 ```
 go build
@@ -1046,7 +1049,10 @@ go fix ./... && go build ./... && go vet ./... && gofmt -l . && go mod tidy -dif
 
 `go fix` is the one that writes rather than reports: it says what the standard
 library now has a shorter way of saying, and applies it, so what it changes
-belongs to the commit it ran in.
+belongs to the commit it ran in. The same six run on every push to `main` and
+every pull request, in `.github/workflows/build.yml`, where a change `go fix`
+would make fails the run. A push to `main` that passes them builds the Linux
+binary and puts it on the `rolling` release.
 
 The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says

@@ -1,0 +1,52 @@
+# The six checks a commit passes before it is made, run on every push to main
+# and every pull request. go fix writes, so a change it would make fails the
+# run: it belongs in the commit. A push to main that passes them builds the
+# Linux binary and puts it on the rolling release, which is not a release but
+# the latest commit, built.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go fix ./... && git diff --exit-code
+      - run: go build ./...
+      - run: go vet ./...
+      - run: test -z "$(gofmt -l .)"
+      - run: go mod tidy -diff
+      - run: go test -race ./...
+
+  rolling:
+    needs: checks
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # SQLite is pure Go here, so the binary needs nothing of the machine.
+      - run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o paula-linux-amd64 .
+      - run: ./paula-linux-amd64 version
+      # The tag moves to this commit, and the release, which is found by the
+      # tag's name, moves with it; the binary replaces the one before it.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f rolling
+          git push -f origin rolling
+          gh release view rolling >/dev/null 2>&1 ||
+            gh release create rolling --prerelease --title rolling \
+              --notes "The latest commit on main, built for Linux on amd64. Not a release: it changes with every commit."
+          gh release upload rolling paula-linux-amd64 --clobber
