@@ -231,7 +231,7 @@ func (c *Client) attempts(ctx context.Context, a Ask, rec *api.Record) error {
 			attempt.Error = c.Secrets.Redact(err.Error())
 		}
 
-		wait, again := c.retry(sent, status, attempt.EndedAt, rec.ResponseHeaders)
+		wait, again := c.retry(sent, rec.Method, status, err, attempt.EndedAt, rec.ResponseHeaders)
 		attempt.RetryAfter = wait
 		rec.Attempts = append(rec.Attempts, attempt)
 		c.logAttempt(ctx, rec, attempt, again)
@@ -247,12 +247,20 @@ func (c *Client) attempts(ctx context.Context, a Ask, rec *api.Record) error {
 
 // retry says how long to wait before sending a request again, and whether it
 // is worth it. An API that asks to be left alone for longer than maxDelay is
-// reported instead, rather than holding a reply in silence. Only a status the
-// API answered is sent again: a request that never got one, because the
-// connection went, is reported, since nothing says the host did not take it.
-func (c *Client) retry(sent, status int, at time.Time, h http.Header) (time.Duration, bool) {
-	if status == 0 || status == http.StatusOK || sent >= c.Retries {
+// reported instead, rather than holding a reply in silence. A request that
+// never got a status because the connection went is sent again only when it
+// is a GET, which asks the host to do nothing: a POST is reported, since
+// nothing says the host did not take it. One that never got a status because
+// it was given up on, by a timeout or a cancel, is not sent again either way.
+func (c *Client) retry(sent int, method string, status int, err error, at time.Time, h http.Header) (time.Duration, bool) {
+	if status == http.StatusOK || sent >= c.Retries {
 		return 0, false
+	}
+	if status == 0 {
+		if method != http.MethodGet || api.Gone(err) {
+			return 0, false
+		}
+		return backoff(sent), true
 	}
 	wait, ok := c.Answers.Retry(at, status, h)
 	if !ok {

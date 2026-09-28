@@ -208,7 +208,7 @@ written on it is refused.
 | `token_env` | `OPENROUTER_API_KEY`, `VENICE_API_KEY` or `TAVILY_API_KEY` | the environment variable with the key |
 | `idle_timeout` | `2m` | how long a request may go without a byte |
 | `request_timeout` | `3m` | the whole a request that is not a reply may take |
-| `retries` | `2` | how often at most a request is sent again, when the API answers with a status that asks for it |
+| `retries` | `2` | how often at most a request is sent again, when the API answers with a status that asks for it, or when the connection of a listing or a check went before any status |
 | `provider` | none | settings that only this API documents |
 
 The key is never written to a log, and never appears in the request log either.
@@ -225,8 +225,10 @@ occasionally stalls: OpenRouter answers its own in under a second most of the
 time, and now and then takes minutes. Waiting costs nothing while an API is
 healthy, and a run that cannot read a listing has no host to talk to anyway.
 
-A request whose connection drops before any status arrives is reported, not
-sent again: nothing says the host did not take it.
+A request whose connection drops before any status arrives is sent again when
+it asks the host to do nothing, as a listing and a key check do. One that asks
+for something, a reply or a picture, is reported: nothing says the host did
+not take it.
 
 **OpenRouter** serves `https://openrouter.ai/api/v1`. Paula reads its catalogue
 from `GET /models`, and from `GET /images/models`, which alone says which

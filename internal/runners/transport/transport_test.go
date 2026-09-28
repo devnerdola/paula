@@ -654,3 +654,34 @@ func TestATryWhoseConnectionWentLeavesNoStatus(t *testing.T) {
 		t.Error("the record kept no error")
 	}
 }
+
+// A listing whose connection went before any status is asked for again, since
+// asking does nothing on the host, with the wait a status that says nothing
+// gets; and it is given up on after the retries, like any other.
+func TestAGetWhoseConnectionWentIsSentAgain(t *testing.T) {
+	dropped := func(w http.ResponseWriter, r *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}
+	ts, srv := newServer(t, dropped, answer(http.StatusOK, `{"content":"hey"}`))
+	c, slept := client(t, ts.URL, answers{})
+	if err := c.Get(context.Background(), "/models", new(struct{})); err != nil {
+		t.Fatalf("the listing failed: %v", err)
+	}
+	if srv.requests.Load() != 2 || len(*slept) != 1 || (*slept)[0] != time.Second {
+		t.Errorf("requests = %d, waits = %v, want the listing asked for again after a second",
+			srv.requests.Load(), *slept)
+	}
+
+	ts, srv = newServer(t, dropped, dropped, dropped)
+	c, slept = client(t, ts.URL, answers{})
+	if err := c.Get(context.Background(), "/models", new(struct{})); err == nil {
+		t.Fatal("a listing whose connection went every time succeeded")
+	}
+	if srv.requests.Load() != 3 || len(*slept) != 2 {
+		t.Errorf("requests = %d, waits = %v, want the first and two retries", srv.requests.Load(), *slept)
+	}
+}
