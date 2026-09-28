@@ -876,8 +876,8 @@ few parts as fit a request together with what the model writes back, and no
 part asks for more than the model writes in one answer: what its catalogue
 says, or `output.max_tokens` when that is less. A part the model stops writing
 at that limit has lost the end of what it summarises, so the compaction fails.
-The parts are sent at once, so a compaction takes as long as its slowest part,
-and what they wrote, in order, is the new summary. A model does not keep to the
+The parts are sent one after another, so a key held to a rate is never asked
+for all of them at once, and what they wrote, in order, is the new summary. A model does not keep to the
 words it is asked for, and a summary it wrote past its reservation is written
 again on its own. The summary so far is compressed again with each compaction,
 so what is older ends compressed more than what is recent.

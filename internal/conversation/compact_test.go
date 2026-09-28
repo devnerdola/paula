@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -291,8 +290,7 @@ func partOf(req api.ChatRequest) (part, parts int) {
 }
 
 // partsOfTheLast is the summary requests of the latest compaction, in the
-// order of its parts. They are sent at once, so the order they came in says
-// nothing.
+// order of its parts.
 func partsOfTheLast(f *fakeRunner) []api.ChatRequest {
 	var out []api.ChatRequest
 	for _, req := range f.all() {
@@ -405,40 +403,25 @@ func TestAPartIsNoMoreThanTheModelWritesAtOnce(t *testing.T) {
 	}
 }
 
-// The parts of a compaction are sent at once, so it takes as long as the
-// slowest of them and not all of them one after another. The model answers a
-// part only once every part has reached it, and a part sent on its own waits
-// for others that never come.
-func TestThePartsOfACompactionAreSentAtOnce(t *testing.T) {
-	var (
-		mu      sync.Mutex
-		waiting []chan struct{}
-	)
-	together := func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+// The parts of a compaction go one after another, so a key held to a rate is
+// never asked for all of them at once: a part reaches the model only once the
+// one before it has been answered, and a part that fails ends the compaction
+// with the rest unsent.
+func TestThePartsOfACompactionGoOneAfterAnother(t *testing.T) {
+	var inFlight atomic.Int32
+	var overlapped atomic.Bool
+	oneAtATime := func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
 		if purpose(req) == store.PurposeSummary {
-			_, parts := partOf(req)
-			here := make(chan struct{})
-			mu.Lock()
-			waiting = append(waiting, here)
-			if len(waiting) == parts {
-				for _, w := range waiting {
-					close(w)
-				}
-				waiting = nil
+			if inFlight.Add(1) > 1 {
+				overlapped.Store(true)
 			}
-			mu.Unlock()
-			select {
-			case <-here:
-			case <-time.After(time.Second):
-				mu.Lock()
-				waiting = slices.DeleteFunc(waiting, func(w chan struct{}) bool { return w == here })
-				mu.Unlock()
-				return nil, errors.New("the part was sent on its own")
-			}
+			defer inFlight.Add(-1)
+			// Long enough for parts sent at once to be in flight together.
+			time.Sleep(20 * time.Millisecond)
 		}
 		return keeping(ctx, req, fn)
 	}
-	f := &fakeRunner{model: chatModel(), chat: together}
+	f := &fakeRunner{model: chatModel(), chat: oneAtATime}
 	f.model.Output = 100
 	r := openReplyWith(t, f, sized(f, 2000))
 
@@ -452,8 +435,42 @@ func TestThePartsOfACompactionAreSentAtOnce(t *testing.T) {
 	if _, err := r.store.LatestSummary(context.Background()); err != nil {
 		t.Fatalf("the compaction left no summary: %v", err)
 	}
-	if parts := partsOfTheLast(f); len(parts) < 2 {
-		t.Errorf("the compaction was %d request, want it in parts", len(parts))
+	parts := partsOfTheLast(f)
+	if len(parts) < 2 {
+		t.Fatalf("the compaction was %d request, want it in parts", len(parts))
+	}
+	if overlapped.Load() {
+		t.Error("two parts were in flight at once, want them one after another")
+	}
+	var order []int
+	for _, req := range f.sentFor(store.PurposeSummary) {
+		part, _ := partOf(req)
+		order = append(order, part)
+	}
+	for i, part := range order {
+		if part != i+1 {
+			t.Errorf("the parts came in as %v, want them in order", order)
+			break
+		}
+	}
+
+	// A part that fails leaves the ones after it unsent.
+	sent := len(f.sentFor(store.PurposeSummary))
+	f.chat = func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		if part, _ := partOf(req); part == 1 {
+			return nil, errors.New("the host is away")
+		}
+		return keeping(ctx, req, fn)
+	}
+	for i := 0; len(f.sentFor(store.PurposeSummary)) == sent; i++ {
+		if i == 30 {
+			t.Fatal("the history was never compacted again")
+		}
+		r.say(t, fmt.Sprintf("again %d: %s", i, long))
+		settle(t, r)
+	}
+	if n := len(f.sentFor(store.PurposeSummary)) - sent; n != 1 {
+		t.Errorf("%d parts were sent after the first failed, want none", n-1)
 	}
 }
 

@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
@@ -154,34 +153,28 @@ func coversUpto(said, rest []store.Message) store.MessageID {
 // a third when it is three times as long. The text is cut into parts, in
 // order, and each part is asked back at that fraction of its words, rounded
 // down, so the parts together fill the reservation and are never asked for
-// more than it holds. The parts are sent at once, so the compaction takes as
-// long as the slowest of them. A text shorter than the reservation is asked
-// back at its own length, since a summary longer than what it is written from
-// is made up. A history of pictures is one: it is measured by what a host
-// bills for them, and carried by what they showed.
+// more than it holds. The parts are sent one after another: a key held to a
+// rate is never asked for all of them at once, and a part that fails ends the
+// compaction before the rest are paid for. A text shorter than the reservation
+// is asked back at its own length, since a summary longer than what it is
+// written from is made up. A history of pictures is one: it is measured by
+// what a host bills for them, and carried by what they showed.
 func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *store.Summary, said []store.Message, room int) (string, error) {
 	pieces := e.pieces(ctx, summary, said)
 	share := min(1, float64(room)/e.costs.rate(m.Name)/float64(wordsOf(pieces)))
 	parts := e.cut(m, pieces, share)
 
 	out := make([]string, len(parts))
-	errs := make([]error, len(parts))
-	var wg sync.WaitGroup
 	for i, part := range parts {
-		wg.Go(func() {
-			words := int(share * float64(wordsOf(part)))
-			got, err := e.answer(ctx, a, m, store.PurposeSummary, e.fill(i+1, len(parts), words), written(part))
-			if err == nil && strings.TrimSpace(got) == "" {
-				err = errors.New("the summary came back empty")
-			}
-			out[i], errs[i] = strings.TrimSpace(got), err
-		})
-	}
-	wg.Wait()
-	for _, err := range errs {
+		words := int(share * float64(wordsOf(part)))
+		got, err := e.answer(ctx, a, m, store.PurposeSummary, e.fill(i+1, len(parts), words), written(part))
+		if err == nil && strings.TrimSpace(got) == "" {
+			err = errors.New("the summary came back empty")
+		}
 		if err != nil {
 			return "", err
 		}
+		out[i] = strings.TrimSpace(got)
 	}
 	return strings.Join(out, "\n\n"), nil
 }
