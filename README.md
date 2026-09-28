@@ -1041,6 +1041,23 @@ what the card says of her appearance. A web search sends its query, and
 reading a page its address, to the runner the `web` tools name. A search of
 her memories runs in the database and sends nothing.
 
+## Keeping it running
+
+`serve` runs until it is stopped. It ends with an error when a frontend stops
+serving, and at start when a listing cannot be read even after its retries, so
+run it under something that starts it again: a systemd unit on Linux, or a
+launchd job on macOS, with the keys in its environment and its working
+directory where `paula.yaml` is. `paula version` says what the running binary
+was built from, as Go stamps it: a tag when it was built at one, and otherwise
+the time and the commit, as `v0.0.0-20260928090838-f3c89d3f3ffa`, with
+`+dirty` after it when the checkout had changes not committed.
+
+A copy of `data_dir` is a copy of everything: the database is `paula.db` with
+its `-wal` and `-shm` files, and the pictures are `media/`. Copy them while
+`serve` is stopped, or take the database with `sqlite3 paula.db ".backup
+paula-copy.db"` while it runs, which is the one way to copy a database in WAL
+mode that is being written to, and copy `media/` beside it.
+
 ## Development
 
 ```
