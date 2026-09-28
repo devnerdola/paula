@@ -11,7 +11,9 @@ the model API charges.
 
 ## Getting started
 
-You need Go 1.26 or later and an API key for OpenRouter or Venice.
+You need Go 1.26 or later on macOS or Linux, and an API key for OpenRouter or
+Venice. The terminal talks to `serve` over a Unix socket, and `serve` holds
+its data directory with a Unix lock, so nothing here runs on Windows.
 
 ```
 go build
