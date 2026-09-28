@@ -51,14 +51,14 @@ type past struct {
 	Days    [][]message `json:"days"`
 }
 
-const planPrompt = `Here is the character card of Paula, who texts with her boyfriend Caio:
+const planPrompt = `Here is the character card of Paula, who texts with her partner Caio:
 
 %s
-Invent Caio: his job, his routine, his friends and what he cares about. Do not give any of his relatives a name. Then plan %d consecutive days of their lives: work, plans, small events, moods, a trip, a cold, a fight and making up, and the ordinary things a couple texts about. Never name a weekday, a month or a date.
+Invent Caio: a job, a routine, friends and what Caio cares about. Do not give any of Caio's relatives a name. Then plan %d consecutive days of their lives: work, plans, small events, moods, a trip, a cold, a fight and making up, and the ordinary things a couple texts about. Never name a weekday, a month or a date.
 
 Write everything in the third person. First one line, "Who Caio is: ...", and then one line per day, "Day N: what happens that day".`
 
-const dayPrompt = `Here is the character card of Paula, who texts with her boyfriend Caio:
+const dayPrompt = `Here is the character card of Paula, who texts with her partner Caio:
 
 %s
 %s
@@ -67,7 +67,7 @@ Day %d of their story: %s
 The day before: %s
 The day after: %s
 
-Write every text message Caio and Paula send each other on day %d, between 100 and 150 messages, the way a couple really texts through a day: a few conversations, when he wakes up, around lunch, after work and at night, each of them messages a minute or a few apart, with hours of silence between the conversations. Caio texts first, and every message of Paula's answers something he sent. Either of them sometimes sends two or three messages in a row. Paula texts the way her card says. Messages are short and casual, like real texts. Never name a weekday, a month or a date.
+Write every text message Caio and Paula send each other on day %d, between 100 and 150 messages, the way a couple really texts through a day: a few conversations, when Caio wakes up, around lunch, after work and at night, each of them messages a minute or a few apart, with hours of silence between the conversations. Caio texts first, and every message of Paula's answers something Caio sent. Either of them sometimes sends two or three messages in a row. Paula texts the way her card says. Messages are short and casual, like real texts. Never name a weekday, a month or a date.
 
 Write one message per line, as HH:MM Name: text, and nothing else. The times are between 06:00 and 23:59, and each is the same as the one before it or later.`
 
