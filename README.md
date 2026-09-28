@@ -1066,8 +1066,11 @@ go fix ./... && go build ./... && go vet ./... && gofmt -l . && go mod tidy -dif
 
 `go fix` is the one that writes rather than reports: it says what the standard
 library now has a shorter way of saying, and applies it, so what it changes
-belongs to the commit it ran in. The same six run on every push to `main` and
-every pull request, in `.github/workflows/build.yml`, where a change `go fix`
+belongs to the commit it ran in. What it changes depends on the Go it comes
+with, so the checks run with the toolchain the `toolchain` line of `go.mod`
+names, which is raised with `go get toolchain@goX.Y.Z` when the Go you build
+with is. The same six run on every push to `main` and every pull request, in
+`.github/workflows/build.yml`, with that toolchain, where a change `go fix`
 would make fails the run. A push to `main` that passes them builds the Linux
 binary and puts it on the `rolling` release.
 
