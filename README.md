@@ -651,7 +651,7 @@ it without either, saying which.
 
 | Tool | What she does with it |
 |---|---|
-| `take_photo` | takes a photo of herself, as its camera sees it: where she is, what she is doing and wearing, the light, and where the camera is, in the shape she asks for, `portrait`, `landscape` or `square`; she is told its number and what it shows, and is sent the photo in the call's answer as `get_image` sends a picture |
+| `take_photo` | takes a photo of herself, as its camera sees it: where she is, what she is doing and wearing, the light, and where the camera is, in the shape she asks for, `portrait`, `landscape` or `square`; she is told its number, and is sent the photo in the call's answer, or told what it shows, as `get_image` sends a picture |
 | `send_photo` | puts a photo she took in her reply, by its number, after what she writes |
 
 ```yaml

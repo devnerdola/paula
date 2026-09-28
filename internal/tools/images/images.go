@@ -105,8 +105,8 @@ func (t get) Definition() api.Definition {
 	return api.Definition{
 		Name: "get_image",
 		Description: "Look at a picture " + n.User + " sent, or a photo you sent, by the number list_images gives it. " +
-			arrangement(n) + " You are told what it showed, and the answer carries the picture itself when it " +
-			"can, and says so.",
+			arrangement(n) + " The answer carries the picture itself when it can, and says so; when it cannot, " +
+			"it says what the picture showed.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"number":{"type":"integer","description":"the number of the picture"}},` +
 			`"required":["number"]}`),
@@ -137,23 +137,27 @@ func (t get) Call(ctx context.Context, env api.Env, args json.RawMessage) (strin
 	if err != nil {
 		return "", err
 	}
-	out := line(env, t.h.Names, *img)
 	if env.Show(*img) {
-		out += "\nThe picture itself is with this answer."
+		return sent(env, t.h.Names, *img) + "\nThe picture itself is with this answer.", nil
 	}
-	return out, nil
+	return line(env, t.h.Names, *img), nil
 }
 
-// line is a picture as a model reads it: its number, when it was sent and by
-// whom, and what it showed.
+// line is a picture as a model reads it when it is not shown the picture: its
+// number, when it was sent and by whom, and what it showed.
 func line(env api.Env, n api.Names, img store.Image) string {
 	caption := img.Caption
 	if caption == "" {
 		caption = "nothing was said of what it shows"
 	}
+	return sent(env, n, img) + " " + caption
+}
+
+// sent is a picture's number, when it was sent and by whom.
+func sent(env api.Env, n api.Names, img store.Image) string {
 	by := n.User
 	if img.Role == store.RoleAssistant {
 		by = "you"
 	}
-	return fmt.Sprintf("#%d (sent %s by %s) %s", img.ID, env.Time(img.SentAt), by, caption)
+	return fmt.Sprintf("#%d (sent %s by %s)", img.ID, env.Time(img.SentAt), by)
 }

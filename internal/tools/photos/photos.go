@@ -50,8 +50,8 @@ func (t take) Definition() api.Definition {
 		Name: "take_photo",
 		Description: "Take a photo of yourself, as your phone would. It is made from your avatar, the " +
 			"picture that says how you look, and from what your prompt says of the photo. You are told its " +
-			"number and what it shows, and the answer carries the photo itself when it can, and says so. It is " +
-			"not sent: send_photo puts it in your reply.",
+			"number, and the answer carries the photo itself when it can, and says so; when it cannot, it says " +
+			"what the photo shows. It is not sent: send_photo puts it in your reply.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"prompt":{"type":"string","description":"the photo as its camera sees it: where you are, what you are ` +
 			`doing and wearing, the light, and where the camera is, such as held at arm's length or propped on a ` +
@@ -114,15 +114,14 @@ func (t take) Call(ctx context.Context, env api.Env, args json.RawMessage) (stri
 	if err != nil {
 		return "", err
 	}
+	if env.Show(*photo) {
+		return fmt.Sprintf("#%d\nThe photo itself is with this answer.", photo.ID), nil
+	}
 	caption := photo.Caption
 	if caption == "" {
 		caption = "nothing was said of what it shows"
 	}
-	out := fmt.Sprintf("#%d %s", photo.ID, caption)
-	if env.Show(*photo) {
-		out += "\nThe photo itself is with this answer."
-	}
-	return out, nil
+	return fmt.Sprintf("#%d %s", photo.ID, caption), nil
 }
 
 type send struct{ h api.Host }

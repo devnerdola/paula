@@ -172,8 +172,9 @@ func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
 	}
 }
 
-// A model that sees images is shown the picture with the answer, which says so;
-// any other is told what it showed, and shown nothing.
+// A model that sees images is shown the picture with the answer, which says so
+// in place of what it showed; any other is told what it showed, and shown
+// nothing.
 func TestAPictureIsShownToAModelThatSees(t *testing.T) {
 	line := "#1 (sent 21 Sep 19:44 by Caio) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
 
@@ -183,7 +184,7 @@ func TestAPictureIsShownToAModelThatSees(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != line+"\nThe picture itself is with this answer." {
+	if got != "#1 (sent 21 Sep 19:44 by Caio)\nThe picture itself is with this answer." {
 		t.Errorf("a model that sees was answered %q", got)
 	}
 	if len(e.shown) != 1 || e.shown[0].SHA256 != "sha-a" {

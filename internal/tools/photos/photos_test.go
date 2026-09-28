@@ -65,10 +65,11 @@ func call(t *testing.T, name string, e *fakeEnv, args string) (string, error) {
 
 // A photo is made from her avatar and what the prompt says, in the shape
 // asked for, and answered with its number and what it shows; a model that
-// sees images is told the photo itself is with the answer. The image model is
-// told the avatar is how she looks, and the photo a new one seen by its
-// camera: told only of a place, a model made the avatar again over another
-// background, and told of a selfie, it drew her holding a phone.
+// sees images is told the photo itself is with the answer, in place of what it
+// shows. The image model is told the avatar is how she looks, and the photo a
+// new one seen by its camera: told only of a place, a model made the avatar
+// again over another background, and told of a selfie, it drew her holding a
+// phone.
 func TestAPhotoIsMadeFromTheAvatarAndThePrompt(t *testing.T) {
 	want, err := os.ReadFile(avatar)
 	if err != nil {
@@ -94,7 +95,7 @@ func TestAPhotoIsMadeFromTheAvatarAndThePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(got, "\nThe photo itself is with this answer.") || e.shape != "" {
+	if got != "#7\nThe photo itself is with this answer." || e.shape != "" {
 		t.Errorf("the tool answered %q in the shape %q, want the photo with it in the model's own shape", got, e.shape)
 	}
 }
