@@ -887,9 +887,12 @@ write again while it runs. A message that arrives while the history is being
 compacted waits for it, since its prompt needs the compacted history, and
 `/stop` ends that wait while the compaction goes on. A compaction that fails is
 said the way a failed reply is, with the host's error, and the history stays as
-it was; your next message has it compacted again before its turn. Nothing is
-thrown away: the conversation itself keeps every message, and `paula turns`
-shows every compaction and what it asked.
+it was; your next message has it compacted again before its turn, and when
+that fails too the turn goes out as it is, with the history past its
+reservation, so a summary model that is down does not silence her. Only a turn
+whose prompt is past the context needs the room, and that one is dropped and
+said. Nothing is thrown away: the conversation itself keeps every message, and
+`paula turns` shows every compaction and what it asked.
 
 **A prompt past the context is not sent.** A message longer than the user
 input's reservation can take a prompt past the model's context, and the host

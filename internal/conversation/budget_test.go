@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -376,6 +377,34 @@ func TestATurnPastTheContextOnceTheHistoryMadeRoomFails(t *testing.T) {
 	}
 	if !strings.Contains(failure, "context") {
 		t.Errorf("the failure was said as %q, want it to say the prompt is past the context", failure)
+	}
+}
+
+// A turn whose prompt is past the context needs the room a compaction makes,
+// so when that compaction fails the turn is dropped and the failure is said
+// the way a failed reply is: sent as it is, its prompt would be refused again.
+func TestATurnThatNeedsRoomACompactionCannotMakeIsDropped(t *testing.T) {
+	f, r := talkedAndCounted(t)
+	f.chat = countedAtThree(func(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		if purpose(req) == store.PurposeSummary {
+			return nil, errors.New("the host is away")
+		}
+		return compacting("hm", "they said things")(ctx, req, fn)
+	})
+	replies := len(f.sentFor(store.PurposeReply))
+
+	r.say(t, "and this: "+manyWords(5000))
+	if n := len(f.sentFor(store.PurposeReply)); n != replies {
+		t.Errorf("%d replies went out past the context, want none", n-replies)
+	}
+	var failure string
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyFailed {
+			failure = ev.Text
+		}
+	}
+	if !strings.Contains(failure, "the host is away") {
+		t.Errorf("the failure was said as %q, want the host's error", failure)
 	}
 }
 

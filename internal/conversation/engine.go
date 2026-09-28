@@ -487,11 +487,14 @@ type loop struct {
 
 	// compacting says the history is being measured against its reservation,
 	// and compacted when it has passed it, beside the loop; cancel cuts that
-	// short. waiting says a turn is due and waits for it to end. unchecked
-	// says the history has not been measured since the run started or since a
-	// compaction or a reply failed, so the next turn has it measured first.
+	// short. needed says the turn that waits for it needs the room it makes,
+	// since its prompt is past the context. waiting says a turn is due and
+	// waits for it to end. unchecked says the history has not been measured
+	// since the run started or since a compaction or a reply failed, so the
+	// next turn has it measured first.
 	compacting bool
 	cancel     context.CancelFunc
+	needed     bool
 	waiting    bool
 	unchecked  bool
 }
@@ -635,7 +638,7 @@ func (l *loop) fire(ctx context.Context) {
 func (l *loop) compact(ctx context.Context, room bool) {
 	e := l.e
 	ctx, cancel := context.WithCancel(ctx)
-	l.compacting, l.cancel = true, cancel
+	l.compacting, l.needed, l.cancel = true, room, cancel
 	go func() {
 		defer cancel()
 		m, err := e.roleModel(ctx, config.RoleChat)
@@ -652,9 +655,11 @@ func (l *loop) compact(ctx context.Context, room bool) {
 	}()
 }
 
-// compacted takes what a compaction came to. A turn that waited for it starts;
-// one that failed is said the way a failed reply is, and the turn it held is
-// left to the next input, which has the history measured again first.
+// compacted takes what a compaction came to. A turn that waited for it starts,
+// whether it went through or not, unless the turn needed the room it was to
+// make: that turn is dropped, and the failure is said the way a failed reply
+// is. A failure no turn waited for is said as well, and the next input has the
+// history measured again first.
 func (l *loop) compacted(ctx context.Context, err error) {
 	e := l.e
 	l.compacting, l.cancel = false, nil
@@ -662,8 +667,21 @@ func (l *loop) compacted(ctx context.Context, err error) {
 	// is over.
 	defer l.arm(ctx)
 	if err != nil {
-		l.unchecked = true
 		e.log.Warn("compacting the history", "error", err)
+		if l.waiting && !l.needed {
+			// A turn that waited only for the history to be measured goes out
+			// as it is: its prompt is held to the context as every prompt is,
+			// and the history is measured again after it, which says the
+			// failure then if it fails again.
+			l.waiting = false
+			if !l.pending {
+				l.turn(ctx)
+			}
+			return
+		}
+		// A turn that needed the room is dropped: sent as it is, its prompt
+		// would be refused again.
+		l.unchecked = true
 		e.events.publish(Event{Kind: ReplyFailed, Channel: l.channel, Text: err.Error()})
 		l.waiting = false
 		l.wake()
@@ -791,12 +809,11 @@ func (l *loop) stop(ctx context.Context) stopResult {
 	return stopResult{stopped: true}
 }
 
-// begin starts an entry for the messages that have no reply yet. Its prompt
-// needs the history within its reservation, so a turn waits for a compaction
+// begin starts the turn for the messages that have no reply yet. Its prompt
+// wants the history within its reservation, so a turn waits for a compaction
 // that is running, and has the history measured first when nothing has since
 // the run started or since a compaction failed.
 func (l *loop) begin(ctx context.Context) {
-	e := l.e
 	if l.compacting {
 		l.waiting = true
 		return
@@ -806,6 +823,13 @@ func (l *loop) begin(ctx context.Context) {
 		l.compact(ctx, false)
 		return
 	}
+	l.turn(ctx)
+}
+
+// turn begins the entry for the messages that have no reply yet, and writes
+// the reply beside the loop.
+func (l *loop) turn(ctx context.Context) {
+	e := l.e
 	entry := &store.Entry{
 		Channel:        l.channel,
 		AfterMessageID: l.answered,

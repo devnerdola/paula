@@ -715,8 +715,10 @@ func TestAStopEndsATurnThatWaitsForACompaction(t *testing.T) {
 
 // A compaction that fails is said the way a failed reply is, and the message
 // waiting on it is left unanswered. The next input has the history measured
-// and compacted again before its turn, which answers both.
-func TestACompactionThatFailsIsSaidAndTriedAgainOnTheNextInput(t *testing.T) {
+// and compacted again before its turn; when that fails too, the turn goes out
+// as it is, with the history past its reservation, and the history is
+// compacted once the host is back.
+func TestACompactionThatFailsIsSaidAndTheNextTurnGoesOutAsItIs(t *testing.T) {
 	var failing atomic.Bool
 	failing.Store(true)
 	answer := compacting("hm", "they said things")
@@ -750,15 +752,30 @@ func TestACompactionThatFailsIsSaidAndTriedAgainOnTheNextInput(t *testing.T) {
 		t.Errorf("the failure was said as %q, want the host's error", failure)
 	}
 
-	// A message after the failure waits on the history being measured again,
-	// and that fails too: it is left unanswered.
+	// A message after the failure waits on the history being measured again.
+	// That fails too, and its turn goes out as it is, with the whole history.
 	replies := len(f.sentFor(store.PurposeReply))
 	r.say(t, "hello?")
-	if n := len(f.sentFor(store.PurposeReply)); n != replies {
-		t.Errorf("%d replies went out on a history past its reservation, want none", n-replies)
+	if n := len(f.sentFor(store.PurposeReply)); n != replies+1 {
+		t.Errorf("%d replies went out after the compaction failed again, want the one turn", n-replies)
 	}
-	if len(f.sentFor(store.PurposeSummary)) != 2 {
-		t.Errorf("the compaction was tried %d times, want again on the input after it failed", len(f.sentFor(store.PurposeSummary)))
+	if got := said(f.replied(), api.RoleUser); len(got) < 2 || got[len(got)-1] != "hello?" {
+		t.Errorf("the turn sent %q, want its message after the history the compaction left", got)
+	}
+	// The history is measured after the turn, as after every turn, and that
+	// fails as well, and is said.
+	failures := func() int {
+		var n int
+		for _, ev := range published(r.Engine) {
+			if ev.Kind == ReplyFailed {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor(t, "the compaction after the turn", func() bool { return failures() == 2 })
+	if n := len(f.sentFor(store.PurposeSummary)); n != 3 {
+		t.Errorf("the compaction was tried %d times, want before the turn and after it", n)
 	}
 
 	failing.Store(false)
@@ -766,8 +783,8 @@ func TestACompactionThatFailsIsSaidAndTriedAgainOnTheNextInput(t *testing.T) {
 	if _, err := r.store.LatestSummary(ctx); err != nil {
 		t.Fatalf("no summary after the compaction went through: %v", err)
 	}
-	if got := said(f.replied(), api.RoleUser); !reflect.DeepEqual(got, []string{"hello?", "hello again"}) {
-		t.Errorf("the turn after it went through sent %q, want both messages that waited", got)
+	if got := said(f.replied(), api.RoleUser); !reflect.DeepEqual(got, []string{"hello again"}) {
+		t.Errorf("the turn after it went through sent %q, want its message alone after the summary", got)
 	}
 }
 
