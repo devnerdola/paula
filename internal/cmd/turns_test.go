@@ -75,7 +75,10 @@ func filled(t *testing.T) (string, store.EntryID, store.EntryID) {
 
 	reply := &store.Message{
 		Role: store.RoleAssistant, Channel: "repl",
-		Parts:     []store.Part{{Type: store.PartText, Text: "she said she is coming over"}},
+		Parts: []store.Part{
+			{Type: store.PartText, Text: "she said she is coming over"},
+			{Type: store.PartImage, SHA256: "def456", MIME: "image/jpeg"},
+		},
 		Reasoning: "she asked about Ana",
 		ReplyTo:   mine.ID, EntryID: entry.ID, CreatedAt: when.Add(2 * time.Second),
 	}
@@ -182,6 +185,7 @@ func TestTurnsSummary(t *testing.T) {
 		"she asked about Ana",
 		"--- reply, message 2",
 		"she said she is coming over",
+		"image def456 image/jpeg",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output has no %q:\n%s", want, out)
@@ -240,6 +244,7 @@ func TestTurnsDump(t *testing.T) {
 		"reasoning",
 		"text",
 		"she said she is coming over",
+		"image def456 image/jpeg",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output has no %q:\n%s", want, out)
@@ -313,6 +318,41 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("output has no %q:\n%s", want, out)
 		}
+	}
+}
+
+// A picture a host answered with is kept whole and printed as how big it is.
+func TestTurnsNamesAPictureBySize(t *testing.T) {
+	dir, entry, _ := filled(t)
+	picture, err := os.ReadFile(filepath.Join("..", "runners", "venice", "testdata", "image_edit.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	photo := &store.Request{EntryID: entry, Purpose: store.PurposeTool, Runner: "venice", Model: "muse-image-edit",
+		Method: "POST", URL: "https://api.venice.ai/api/v1/image/edit", StartedAt: when}
+	if err := s.AddRequest(ctx, photo); err != nil {
+		t.Fatal(err)
+	}
+	photo.Status = 200
+	photo.ResponseHeaders = map[string][]string{"Content-Type": {"image/jpeg"}}
+	photo.ResponseBody = picture
+	if err := s.EndRequest(ctx, photo); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	id := strconv.FormatInt(int64(entry), 10)
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "-dump", id)
+	if code != 0 {
+		t.Fatalf("code = %d, stderr %s", code, errOut)
+	}
+	if !strings.Contains(out, "response body\n<106617 bytes image/jpeg>") || strings.Contains(out, string(picture[:16])) {
+		t.Errorf("the picture is not printed by its size:\n%.2000s", out)
 	}
 }
 

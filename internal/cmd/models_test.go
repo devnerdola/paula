@@ -48,6 +48,9 @@ func openrouterCatalogueWhile(t *testing.T, listing *atomic.Bool) *httptest.Serv
 			}
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(read("models.json"))
+		case "/v1/images/models":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(read("images_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (runners/openrouter/testdata/SOURCES.md). Health
@@ -316,11 +319,19 @@ func TestModelsAvailable(t *testing.T) {
 		t.Errorf("the catalogue does not hold %s:\n%s", other, out)
 	}
 
+	// A model that makes pictures has no context to show.
+	if context := strings.Fields(line(t, out, "bytedance-seed/seedream-5-0-lite "))[1]; context != "-" {
+		t.Errorf("a model that makes pictures shows the context %q", context)
+	}
+
 	// A model whose reasoning cannot be turned off says so in the one entry
 	// of the list that is its reasoning, and one whose reasoning can does not.
+	// A model that makes pictures says which it makes.
 	for _, tc := range []struct{ id, want string }{
 		{"~openai/gpt-astra-latest", ",always-reasoning("},
 		{"~deepseek/deepseek-flash-latest", ",reasoning("},
+		{"bytedance-seed/seedream-5-0-lite", "paint,edit"},
+		{"inclusionai/ming-image-0.1-design-layer", "edit"},
 	} {
 		row := line(t, out, tc.id+" ")
 		capabilities := strings.Fields(row)[2]

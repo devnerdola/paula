@@ -1,10 +1,14 @@
 // Package openrouter talks to OpenRouter, which serves many models behind one
-// OpenAI-compatible API and routes each request to a host.
+// OpenAI-compatible API and routes each request to a host, and makes pictures.
 package openrouter
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -133,7 +137,26 @@ type listing struct {
 	} `json:"data"`
 }
 
-// read is the listing as the models Paula speaks of.
+// pictures is the listing of the models that make pictures, whose parameters
+// are described rather than named.
+type pictures struct {
+	Data []struct {
+		ID                  string `json:"id"`
+		SupportedParameters struct {
+			InputReferences *struct {
+				Min int `json:"min"`
+				Max int `json:"max"`
+			} `json:"input_references"`
+			AspectRatio struct {
+				Values []string `json:"values"`
+			} `json:"aspect_ratio"`
+		} `json:"supported_parameters"`
+	} `json:"data"`
+}
+
+// read is the listing as the models Paula speaks of: the models listing, and
+// the image models listing, which alone says what makes a picture. A model on
+// both is one model.
 func (r *Runner) read(ctx context.Context) ([]api.Model, error) {
 	var chat listing
 	if err := r.client.Get(ctx, "/models", &chat); err != nil {
@@ -157,7 +180,104 @@ func (r *Runner) read(ctx context.Context) ([]api.Model, error) {
 			model.Mandatory = m.Reasoning.Mandatory
 			model.Efforts = api.Order(m.Reasoning.SupportedEfforts)
 		}
+		// OpenRouter hands a picture in the answer of a call to the model as a
+		// picture: Claude and GPT were counted a hundred tokens or so for one
+		// there, and said what it showed.
+		model.AnswerVision = model.Vision
 		out = append(out, model)
+	}
+
+	var images pictures
+	if err := r.client.Get(ctx, "/images/models", &images); err != nil {
+		return nil, err
+	}
+	at := make(map[string]int, len(out))
+	for i, m := range out {
+		at[m.ID] = i
+	}
+	for _, m := range images.Data {
+		i, ok := at[m.ID]
+		if !ok {
+			out = append(out, api.Model{ID: m.ID})
+			i = len(out) - 1
+		}
+		// A model that takes a picture as a reference makes one from another,
+		// and one that must be given one does nothing else.
+		refs := m.SupportedParameters.InputReferences
+		out[i].Paint = refs == nil || refs.Min == 0
+		out[i].Edit = refs != nil && refs.Max > 0
+		out[i].Ratios = m.SupportedParameters.AspectRatio.Values
+	}
+	return out, nil
+}
+
+// Paint asks OpenRouter for a picture of what a prompt describes.
+func (r *Runner) Paint(ctx context.Context, req api.PaintRequest) ([]byte, error) {
+	in := map[string]any{"model": req.Model, "prompt": req.Prompt}
+	return r.picture(ctx, in, req.Model, req.Shape, req.Recorder)
+}
+
+// Edit asks OpenRouter for a picture made from another, which goes as the one
+// reference of the request.
+func (r *Runner) Edit(ctx context.Context, req api.EditRequest) ([]byte, error) {
+	url := "data:" + http.DetectContentType(req.Picture) + ";base64," + base64.StdEncoding.EncodeToString(req.Picture)
+	in := map[string]any{
+		"model":  req.Model,
+		"prompt": req.Prompt,
+		"input_references": []map[string]any{
+			{"type": "image_url", "image_url": map[string]any{"url": url}},
+		},
+	}
+	return r.picture(ctx, in, req.Model, req.Shape, req.Recorder)
+}
+
+// picture posts a request for a picture, in the aspect ratio of its shape
+// among the ones the model lists. The picture comes back as base64, beside
+// what it cost.
+func (r *Runner) picture(ctx context.Context, in map[string]any, id, shape string, rec api.Recorder) ([]byte, error) {
+	m, err := r.Model(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if ratio := m.Ratio(shape); ratio != "" {
+		in["aspect_ratio"] = ratio
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	err = r.client.Call(ctx, transport.Ask{
+		Method:   http.MethodPost,
+		Path:     "/images",
+		Model:    id,
+		Body:     body,
+		Recorder: rec,
+		Read: func(body io.Reader, rec *api.Record) error {
+			var answer struct {
+				Data []struct {
+					B64JSON string `json:"b64_json"`
+				} `json:"data"`
+				Usage *struct {
+					Cost float64 `json:"cost"`
+				} `json:"usage"`
+			}
+			if err := json.NewDecoder(body).Decode(&answer); err != nil {
+				return err
+			}
+			if answer.Usage != nil {
+				rec.Usage = &api.Usage{Cost: answer.Usage.Cost}
+			}
+			if len(answer.Data) == 0 {
+				return transport.ErrNoAnswer
+			}
+			var err error
+			out, err = base64.StdEncoding.DecodeString(answer.Data[0].B64JSON)
+			return err
+		},
+	})
+	if err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -169,6 +289,13 @@ func (r *Runner) Check(ctx context.Context, m api.Checked) []error {
 	model, err := r.Model(ctx, m.ID)
 	if err != nil {
 		return []error{err}
+	}
+	// A model that only makes pictures is sent none of what a chat is, and
+	// nothing of the provider block, so none of it is held against it: the
+	// runner's settings are every model's defaults, a picture's as well.
+	if !model.Chat {
+		_, errs := decodeProvider(m.Settings.Provider)
+		return errs
 	}
 
 	p := &api.Problems{}

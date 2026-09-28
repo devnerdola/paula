@@ -14,6 +14,8 @@ const stop = document.getElementById('stop')
 const pill = document.getElementById('pill')
 const bell = document.getElementById('bell')
 const who = document.getElementById('who')
+const face = document.getElementById('face')
+const icon = document.querySelector('link[rel=icon]')
 
 const page = {
   // id is the number this browser was given, which says where what it sends
@@ -84,6 +86,14 @@ function synced(s) {
     who.textContent = s.character
     document.title = s.character
   }
+  // Her avatar is her face wherever one goes: beside her name, as the page's
+  // icon, and on what she is told about.
+  if (s.avatar) {
+    face.src = 'api/avatar'
+    face.hidden = false
+    icon.removeAttribute('type')
+    icon.href = 'api/avatar'
+  }
   if (s.caught) return
   chat.replaceChildren()
   page.oldest = null
@@ -112,20 +122,33 @@ function stored(m) {
     words(el, text, true)
     out.push(el)
   })
-  const last = out.at(-1) || bubble(hers ? 'hers' : 'mine', 'm' + m.id + '-0', m.at)
-  if (out.length === 0) out.push(last)
-  for (const sha of m.pictures || []) {
+  // Her photos arrived after what she wrote, in a bubble of their own, and are
+  // read back that way; a picture sent to her is part of what was sent.
+  let last = out.at(-1)
+  if (!last || (hers && m.pictures)) {
+    last = bubble(hers ? 'hers' : 'mine', 'm' + m.id + '-' + out.length, m.at)
+    out.push(last)
+  }
+  pictured(last, m.pictures)
+  return out
+}
+
+// pictured puts pictures in a bubble, each asked for by what it holds. A
+// picture is as tall as it is once it has arrived, which is after the bubble
+// is on the screen, so a screen at the bottom is kept there. A bubble holding
+// pictures and nothing else is the pictures.
+function pictured(el, shas) {
+  for (const sha of shas || []) {
     const img = document.createElement('img')
     img.src = 'api/media/' + sha
     img.alt = 'a picture'
     img.loading = 'lazy'
-    last.append(img)
+    img.addEventListener('load', () => {
+      if (page.reading) bottom()
+    })
+    el.append(img)
   }
-  // A bubble holding a picture and nothing else is the picture.
-  for (const el of out) {
-    if (el.textContent === '' && el.children.length > 0) el.classList.add('picture')
-  }
-  return out
+  if (el.textContent === '' && el.children.length > 0) el.classList.add('picture')
 }
 
 // paragraphs are the texts a message reads as: a blank line is where one ends
@@ -138,6 +161,7 @@ function paragraphs(text) {
 function bubbled(m) {
   const el = bubble(m.hers ? 'hers' : 'aside', 'b' + m.id, null)
   words(el, m.text)
+  pictured(el, m.pictures)
   if (m.choices) el.append(offered(m.choices))
   return el
 }
@@ -440,7 +464,9 @@ function told(m) {
   page.told = true
   if (Notification.permission !== 'granted') return
   navigator.serviceWorker.ready.then(reg => {
-    reg.showNotification(who.textContent, { body: m.text, tag: 'paula' })
+    const shown = { body: m.text || 'a photo', tag: 'paula' }
+    if (!face.hidden) shown.icon = face.src
+    reg.showNotification(who.textContent, shown)
   }).catch(() => {})
 }
 

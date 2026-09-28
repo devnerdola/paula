@@ -42,11 +42,18 @@ type Model struct {
 	Chat              bool
 	Vision            bool
 	Tools             bool
+	Paint             bool
+	Edit              bool
 	Reasoning         bool
 	Mandatory         bool
 	Efforts           []string
 	StructuredOutputs bool
 	Parameters        []string // nil when the catalogue does not list them
+	Ratios            []string // the aspect ratios a picture is made in
+	// AnswerVision says the model is shown a picture in the answer of a call.
+	// A host that takes only text there turns the picture into the text of
+	// its bytes, which the model reads as text.
+	AnswerVision bool
 }
 
 // Needs is what a model has to be able to do.
@@ -54,6 +61,8 @@ type Needs struct {
 	Chat   bool
 	Vision bool
 	Tools  bool
+	Paint  bool
+	Edit   bool
 	// Context is the prompt the model has to hold. Zero takes whatever it
 	// serves.
 	Context int
@@ -75,6 +84,8 @@ func (n Needs) With(o Needs) Needs {
 		Chat:    n.Chat || o.Chat,
 		Vision:  n.Vision || o.Vision,
 		Tools:   n.Tools || o.Tools,
+		Paint:   n.Paint || o.Paint,
+		Edit:    n.Edit || o.Edit,
 		Context: max(n.Context, o.Context),
 	}
 }
@@ -244,6 +255,12 @@ func (m *Model) Missing(n Needs) []error {
 	}
 	if n.Tools {
 		want(m.Tools, "tools")
+	}
+	if n.Paint {
+		want(m.Paint, "pictures from a prompt")
+	}
+	if n.Edit {
+		want(m.Edit, "pictures from a picture and a prompt")
 	}
 	return errs
 }

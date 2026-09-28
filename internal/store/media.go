@@ -35,6 +35,29 @@ func (s *Store) Media(ctx context.Context, sha256 string) (*Media, error) {
 	return m, err
 }
 
+// AddPhoto records a picture she took under the call that took it, and returns
+// its number. A picture recorded before keeps its number and the call that
+// took it first.
+func (s *Store) AddPhoto(ctx context.Context, sha256 string, call int64) (int64, error) {
+	var id int64
+	err := s.db.QueryRowContext(ctx, `INSERT INTO media (sha256, tool_call_id) VALUES (?, ?)
+		ON CONFLICT(sha256) DO UPDATE SET tool_call_id = coalesce(tool_call_id, excluded.tool_call_id)
+		RETURNING id`, sha256, call).Scan(&id)
+	return id, err
+}
+
+// Photo is the picture of that number she took, whether or not a message has
+// carried it yet.
+func (s *Store) Photo(ctx context.Context, id int64) (*Media, error) {
+	row := s.ro.QueryRowContext(ctx,
+		`SELECT `+mediaColumns+` FROM media WHERE id = ? AND tool_call_id IS NOT NULL`, id)
+	m, err := scanMedia(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	return m, err
+}
+
 // SetCaption stores a caption and clears an earlier failure.
 func (s *Store) SetCaption(ctx context.Context, sha256, caption string) error {
 	_, err := s.db.ExecContext(ctx,
@@ -52,19 +75,20 @@ func (s *Store) SetCaptionError(ctx context.Context, sha256, reason string) erro
 }
 
 // Image is a picture as it was sent: the number it is looked up by, which is
-// the one its file was recorded under, the message it came in, when that was
-// sent, and what it showed.
+// the one its file was recorded under, the message it came in, who sent that
+// and when, and what it showed.
 type Image struct {
 	ID        int64
 	SHA256    string
 	Caption   string
 	MessageID MessageID
+	Role      string
 	SentAt    time.Time
 }
 
 // imagesFrom is every picture a message carries, with what is known of its
 // file. A picture sent twice is one file, and two pictures.
-const imagesFrom = `SELECT media.id, media.sha256, media.caption, messages.id, messages.created_at
+const imagesFrom = `SELECT media.id, media.sha256, media.caption, messages.id, messages.role, messages.created_at
 	  FROM messages, json_each(messages.parts_json) AS part
 	  JOIN media ON media.sha256 = json_extract(part.value, '$.sha256')
 	 WHERE json_extract(part.value, '$.type') = 'image'`
@@ -114,7 +138,7 @@ func (s *Store) Image(ctx context.Context, id int64) (*Image, error) {
 func scanImage(row scanner) (*Image, error) {
 	var img Image
 	var sent int64
-	if err := row.Scan(&img.ID, &img.SHA256, &img.Caption, &img.MessageID, &sent); err != nil {
+	if err := row.Scan(&img.ID, &img.SHA256, &img.Caption, &img.MessageID, &img.Role, &sent); err != nil {
 		return nil, err
 	}
 	img.SentAt = time.Unix(0, sent)

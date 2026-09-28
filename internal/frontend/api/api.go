@@ -27,6 +27,9 @@ type Outgoing struct {
 	// offer a choice offers them however it does that; one that cannot shows
 	// the text, which says the same thing in words.
 	Choices []Choice
+	// Pictures are the photos she sent, after the text, by the digest their
+	// files are kept under in the data directory.
+	Pictures []string
 }
 
 // Choice is one thing that can be picked.
@@ -233,6 +236,9 @@ type Host struct {
 	// written by the run it belongs to carries it. A token that rides in the
 	// URL of every request is in the error of every request that fails.
 	Secrets *logs.Secrets
+	// Avatar is the file of her picture, which a frontend shows where a face
+	// goes, and empty when there is none.
+	Avatar string
 }
 
 // Names are the two in the conversation, as the character card names them.

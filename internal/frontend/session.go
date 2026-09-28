@@ -537,15 +537,30 @@ func (s *Session) showEnded(ctx context.Context, e conversation.Event, suffix st
 	}
 	s.shown = e.Message.ID
 	s.entries = max(s.entries, e.Entry)
+	// The photos she sent go after what she wrote, which was written out as it
+	// came when there was a stream to write it on.
+	photos := pictures(e.Message)
 	if written {
-		return nil
+		if len(photos) == 0 {
+			return nil
+		}
+		return s.send(ctx, api.Outgoing{Hers: true, Pictures: photos})
 	}
 
 	text := strings.TrimSpace(e.Message.Text() + suffix)
-	if text == "" {
+	if text == "" && len(photos) == 0 {
 		return nil
 	}
-	return s.send(ctx, api.Outgoing{Text: text, Hers: true})
+	return s.send(ctx, api.Outgoing{Text: text, Hers: true, Pictures: photos})
+}
+
+// pictures are the digests of the pictures a message carries.
+func pictures(m *store.Message) []string {
+	var out []string
+	for _, p := range m.Images() {
+		out = append(out, p.SHA256)
+	}
+	return out
 }
 
 // dropped clears a reply that left nothing behind.
@@ -609,8 +624,9 @@ func (s *Session) showMessage(ctx context.Context, m store.Message) error {
 		}
 		return nil
 	}
-	if text := strings.TrimSpace(m.Text()); text != "" {
-		if err := s.send(ctx, api.Outgoing{Text: text, Hers: true}); err != nil {
+	text, photos := strings.TrimSpace(m.Text()), pictures(&m)
+	if text != "" || len(photos) > 0 {
+		if err := s.send(ctx, api.Outgoing{Text: text, Hers: true, Pictures: photos}); err != nil {
 			return err
 		}
 	}

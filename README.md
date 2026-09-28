@@ -3,7 +3,8 @@
 Paula is a texting companion. You describe a character in a small YAML file,
 point her at a hosted model, and she keeps one long conversation with you in a
 terminal. The conversation lives in a SQLite database on your machine. So do
-the pictures you send her, and a log of every request behind her replies.
+the pictures you send her, the photos she sends you, and a log of every request
+behind her replies.
 
 She is a single Go binary with no services behind it. What she costs is what
 the model API charges.
@@ -212,9 +213,10 @@ The key is never written to a log, and never appears in the request log either.
 
 The two timeouts answer different questions, and neither shortens the other.
 `idle_timeout` cuts any request that goes quiet. `request_timeout` is the whole
-a listing, a key check, a web search or a page read may take, however steadily
-it arrives; a reply has no such bound, since it arrives for as long as she is
-writing.
+a listing, a key check, a web search, a page read or a picture may take,
+however steadily it arrives; a reply has no such bound, since it arrives for as
+long as she is writing. A picture arrives only once it is made, so the wait for
+it is held to `idle_timeout` as well.
 
 `request_timeout` is generous because a catalogue is usually instant and
 occasionally stalls: OpenRouter answers its own in under a second most of the
@@ -225,9 +227,18 @@ A request whose connection drops before any status arrives is reported, not
 sent again: nothing says the host did not take it.
 
 **OpenRouter** serves `https://openrouter.ai/api/v1`. Paula reads its catalogue
-from `GET /models` and checks the key with `GET /key`. She sends `408`, `429`,
-`502` and `503` again after the wait `Retry-After` asks for, at most `retries`
-times, and gives up on a wait longer than two minutes.
+from `GET /models`, and from `GET /images/models`, which alone says which
+models make pictures, and checks the key with `GET /key`. A model on both
+listings is one model. She sends `408`, `429`, `502` and `503` again after the
+wait `Retry-After` asks for, at most `retries` times, and gives up on a wait
+longer than two minutes.
+
+A model of the image listing paints from a prompt alone unless it must be
+given a reference, and makes a picture from another when it takes one. Both go
+to `POST /images`, the second with her avatar as its one `input_references`
+entry, in the listed aspect ratio of the photo's shape; what the answer says a
+picture cost is kept with the request. Nothing of the `provider` block reaches
+a picture.
 
 | `provider` setting | Request field |
 |---|---|
@@ -241,12 +252,25 @@ of them accepts every parameter she sends and serves the context you asked for.
 A base name covers its variants, so `novita` matches `novita/fp8`.
 
 **Venice** serves `https://api.venice.ai/api/v1`. Paula reads its catalogue
-from `GET /models`, which lists the models that write text, and checks the key
-with `GET /api_keys/rate_limits`. She sends `429` again at the time in
-`x-ratelimit-reset-requests`, at most `retries` times. She keeps Venice's own
-system prompt off unless `provider.system_prompt` turns it on, and wants
-`sampling.seed` above zero. For the `web` tools she searches with
-`POST /augment/search` and reads a page with `POST /augment/scrape`.
+from `GET /models`, which lists the models that write text, and from
+`GET /models?type=image` and `GET /models?type=inpaint`, which list the models
+that paint a picture from a prompt and the ones that make a picture from
+another, and checks the key with `GET /api_keys/rate_limits`. She sends `429`
+again at the time in `x-ratelimit-reset-requests`, at most `retries` times. She
+keeps Venice's own system prompt off unless `provider.system_prompt` turns it
+on, and wants `sampling.seed` above zero. For the `web` tools she searches with
+`POST /augment/search` and reads a page with `POST /augment/scrape`. She paints
+her avatar with `POST /image/generate`, and makes a photo from it with
+`POST /image/edit`, each asked for as a JPEG in the listed aspect ratio of its
+shape. Neither answer says what a picture cost, so `paula turns` shows none.
+
+No model on Venice is shown a picture in the answer of a call. Venice
+documents that answer as a string, and turns a picture put there into the text
+of its bytes: Claude, GPT and DeepSeek were each counted over ten thousand
+tokens for one of 256 pixels, and none could say what it showed. So a model on
+Venice is told what such a picture showed. On OpenRouter a model that sees is
+sent the picture itself there, which Claude and GPT were counted about a
+hundred tokens for.
 
 Venice labels each model with a privacy. A `private` model runs where nothing
 of a request is kept. An `anonymized` one, such as Claude, is passed to the
@@ -260,6 +284,8 @@ prompt. The catalogue page of each model says which it is.
 | `output.stop_token_ids`, `output.verbosity` | `stop_token_ids`, `verbosity` |
 | `fallbacks` | `fallbacks`, up to 10 models the catalogue serves |
 | `search.provider` | `search_provider` of a web search, `brave` or `google`; the runner's own block sets it, and a model's that names another is reported |
+| `image.hide_watermark` | `hide_watermark` of a painted picture; `true` when the block says nothing |
+| `image.safe_mode` | `safe_mode` of a painted picture and of a photo, which blurs what Venice reads as adult; `false` when the block says nothing |
 
 Venice publishes no list of accepted parameters, so a sampling setting is held
 against nothing there. Only what a model can do is checked.
@@ -315,6 +341,11 @@ reasoning off on a model that could use it.
 
 Each API documents settings the other does not. Those live in the `provider`
 block of its runner, and are listed with each runner above.
+
+A model that only makes pictures is sent none of these, so none of them is held
+against it, including the ones its runner writes for every model: a runner's
+`reasoning.effort` or `routing.only` is for the models that chat. On Venice,
+the `provider.image` block is what reaches a picture.
 
 ### Model families
 
@@ -425,9 +456,21 @@ just begun may show none.
 |---|---|---|
 | `chat` | chats and accepts tools | yes |
 | `vision` | sees images | no |
+| `image` | makes a picture from another and a prompt | no |
+| `avatar` | makes a picture from a prompt | no |
 
 Without a `vision` model, pictures reach the chat model only if that model can
 see them itself.
+
+The `image` model makes the photos she takes with the `photos` tools, each from
+her avatar: the picture of her in `data_dir`, as `avatar.jpg`, `avatar.jpeg`,
+`avatar.png` or `avatar.webp`. Put one there yourself, or name an `avatar`
+model, and `serve` paints one from the card's `appearance` when it finds none:
+a head-and-shoulders portrait against a plain background, kept as
+`avatar.jpg`. A portrait says how she looks and nothing more, which is all a
+photo made from it should keep. It is painted once, before anything is
+served, and a card that says nothing of her appearance is refused. Every
+frontend that has somewhere to show a face shows it.
 
 A reply is offered the tools the file names, so the chat role asks for a model
 that takes them.
@@ -451,7 +494,8 @@ the same conversation, and each shows what you said on the others.
 
 **`repl`** listens on a Unix socket: `paula.sock` inside `data_dir`, or the
 `socket` you name. That path is relative to `data_dir`, not to the
-configuration file.
+configuration file. A terminal shows no picture, so a photo she sends is a line
+of its own saying where its file is.
 
 **`telegram`** is a bot you text. Talk to `@BotFather` to make one, and tell
 Paula the token and who she is talking to:
@@ -479,7 +523,14 @@ What she writes as separate paragraphs arrives as separate texts, each sent as
 she finishes writing it, with the typing status up in between — she texts the
 way a person does. A text longer than Telegram takes carries on in another.
 `/models` and the rest are offered by the client as you type them, and the
-models menu is buttons to tap.
+models menu is buttons to tap. A photo she sends comes after her texts, as a
+message of its own.
+
+Her avatar is the bot's profile photo, set as `serve` starts. Nothing Telegram
+answers says which picture a bot has, so the run keeps the digest of the one it
+set in `telegram.avatar` beside the database, and sets it again only when the
+avatar is another. A bot that refuses it is logged at `warn` and talks all the
+same.
 
 `stream_edits` lets you watch her write: a text appears as soon as she has
 started it and is written over as it fills, about once a second, instead of
@@ -515,9 +566,13 @@ is doing the letting in.
 
 Every browser that opens the page gets a session of its own, and they show each
 other what is typed. A message she writes arrives text by text, as it does
-everywhere else, and the one she is in the middle of fills as she writes it.
-Scrolling up reads further back. A message shows as it was written, as it does
-on every frontend, and an address in it is a link.
+everywhere else, and the one she is in the middle of fills as she writes it. A
+photo she sends comes after her texts, in a bubble of its own. Scrolling up
+reads further back. A message shows as it was written, as it does on every
+frontend, and an address in it is a link.
+
+Her avatar is her face beside her name, the page's icon, and the icon of a
+notification.
 
 On a page the browser calls secure — `https`, or `localhost` — a bell asks
 whether to notify you. While the page is open but not being looked at, the
@@ -539,9 +594,10 @@ the user's turn comes after the answers, so the host reads from its cache all
 it kept of the round before, thinking included.
 
 In the last round, a call that only looks something up is not run, since
-nothing would read what it answered. One that changes something still runs,
-so putting the answer off, or keeping a memory, works there as it does in any
-round. When the last round left a call to look something up, or wrote nothing
+nothing would read what it answered, and neither is one whose answer only a
+later round could act on, such as taking a photo. One that changes something
+still runs, so putting the answer off, or keeping a memory, works there as it
+does in any round. When the last round left a call to look something up, or wrote nothing
 without putting the answer off, she is asked once more for an answer, this
 time with calls turned off, which a host reads from its cache no further than
 the prompt's start.
@@ -575,18 +631,51 @@ finds it at once. The memories it replaces must still stand: a number that
 names none keeps nothing, and she is told so. Nothing but these tools makes or
 changes a memory.
 
-**`images`** reaches the pictures you sent. It takes no settings.
+**`images`** reaches the pictures you sent and the photos she sent. It takes no
+settings.
 
 | Tool | What she does with it |
 |---|---|
-| `list_images` | lists the pictures, newest first and 50 at a time: its number, when it was sent, and what it showed; a list with older ones after it says so, and `from` lists them |
-| `get_image` | looks at one picture again by its number: a model that sees images is sent the picture in the call's answer, and any other what it showed |
+| `list_images` | lists the pictures, newest first and 50 at a time: its number, when it was sent and by whom, and what it showed; a list with older ones after it says so, and `from` lists them |
+| `get_image` | looks at one picture again by its number: a model shown a picture in the answer of a call is sent the picture there, and any other what it showed |
 
 ```yaml
 tools:
   memory:
   images:
 ```
+
+**`photos`** lets her send you photos of herself. It takes no settings, and
+needs her avatar and an `image` model (see [Roles](#roles)): `serve` refuses
+it without either, saying which.
+
+| Tool | What she does with it |
+|---|---|
+| `take_photo` | takes a photo of herself, as its camera sees it: where she is, what she is doing and wearing, the light, and where the camera is, in the shape she asks for, `portrait`, `landscape` or `square`; she is told its number and what it shows, and is sent the photo in the call's answer as `get_image` sends a picture |
+| `send_photo` | puts a photo she took in her reply, by its number, after what she writes |
+
+```yaml
+tools:
+  photos:
+```
+
+A photo is the `image` model's, made from her avatar and her prompt, which
+comes after a line telling the model that the avatar says how she looks, that
+the photo is a new one, and that it is what its camera sees, so no camera or
+phone is in it but in a mirror. Told only of a place, a model made the avatar
+again over another background, and told of a selfie, it drew her holding a
+phone. Her avatar goes to the model as every picture Paula keeps does, turned
+upright and scaled to `image_max_px` as a JPEG, whatever file it is. The photo
+is kept as a picture she was sent is, under the call that took it, and the
+`vision` model describes it at once. She looks at it, or reads what it shows,
+before she sends it. In the last round of a reply a photo
+is not taken, as a search is not: nothing after it could send it.
+
+Every photo is a request the image model's API charges for, apart from the
+chat model: a few cents each on Venice. Her system prompt tells her so, and to
+take one only to send it. In the prompts after a reply that carried a photo,
+the photo is told after her message the way a time is: `Your message above
+came with [photo: …].`
 
 **`callbacks`** lets her write to you on her own. It takes no settings.
 
@@ -720,8 +809,11 @@ summary does not cover, in order, each reply after what it answers, and last
 the time it is now and the message she is answering. A call back that came due
 is one message in the history, told the way a time is: `A call back you
 scheduled came due at Tuesday, 29 September 2026, 21:30 UTC+02:00: ask how the
-interview went.`, with her reply after it. Her memories and her call backs are
-not in it: she reaches them with her tools.
+interview went.`, with her reply after it. A photo she sent is told the same
+way, after her message: no host takes a picture in a message of hers, and a
+model that read her photos written in her own text would write them there
+rather than take them. Her memories and her call backs are not in it: she
+reaches them with her tools.
 
 Within a reply, each round that asked for tools goes back with what she
 thought in it, as the API sent it. Earlier replies go back as what she said,
@@ -875,7 +967,8 @@ orientation and kept as JPEG in `media/`, and the `vision` model describes it
 the first time it is used; both stay for good, whatever the chat model can do,
 so any model you switch to can be served it. A chat model that sees images is
 sent every picture its prompt carries as the picture, never its description in
-its place; any other is sent the description.
+its place; any other is sent the description. A photo she takes is kept and
+described the same way, as it arrives.
 
 **Slow APIs are visible.** Any request still waiting after five seconds is
 logged at `warn`, which the default level shows, with its runner and its URL.
@@ -889,11 +982,16 @@ or that opens later, reads the conversation from the database instead, and
 shows only what it has not shown.
 
 **Every turn is recorded.** Each reply is an entry, and an entry holds the
-requests it made: the reply itself, and a look at any picture she was sent.
-Each request keeps its headers, bodies, timings, tokens and cost, and shows a
-dash for a cost the host did not report. Bodies older than the latest
-`log_keep` entries are dropped, and the rest stays. `paula turns` is the window
-into it.
+requests it made: the reply itself, a look at any picture she was sent, and
+any photo she took. Each request keeps its headers, bodies, timings, tokens and
+cost, and shows a dash for a cost the host did not report. A picture a host
+answered with is kept whole. `paula turns -dump` prints one that came as a
+file, as Venice's does, as its size and type, and one that came in JSON, as
+OpenRouter's does, as the JSON it came in, the way it prints a picture a
+request carried. A photo's request carries her avatar, so each keeps a copy of it for as
+long as its body is kept. Bodies older than the latest `log_keep` entries are
+dropped, and the rest stays. `paula turns` is the window into it. The
+avatar is painted before any turn, so its request is logged and not recorded.
 
 ## Your data
 
@@ -905,6 +1003,7 @@ data/
   paula.db-shm     the shared memory it keeps with it
   media/xx/        every picture, as JPEG named by its sha256, under the
                    first two characters of that name
+  avatar.jpg       her avatar, painted or put there by you
   paula.sock       the socket a terminal connects to
   paula.lock       held by the running serve
 ```
@@ -917,10 +1016,11 @@ only reads says to run `serve` first, rather than read a schema it does not
 know. Only one `serve` may use a directory at a time.
 
 Nothing leaves the machine except the requests to the model API, and those of
-the `web` tools. The first carry the prompt, the pictures and the settings. A
-web search sends its query, and reading a page its address, to the runner the
-`web` tools name. A search of her memories runs in the database and sends
-nothing.
+the `web` tools. The first carry the prompt, the pictures and the settings; a
+photo's carries her avatar and what she asked of the photo, and the avatar's
+what the card says of her appearance. A web search sends its query, and
+reading a page its address, to the runner the `web` tools name. A search of
+her memories runs in the database and sends nothing.
 
 ## Development
 
@@ -936,7 +1036,7 @@ The tests run without a network: every runner test answers from captured API
 responses in `testdata`, and `SOURCES.md` in each of those directories says
 which request each file came from.
 
-Five tests run against real models, and only when `PAULA_LIVE` names a
+Six tests run against real models, and only when `PAULA_LIVE` names a
 configuration file. Each reads the keys the environment holds, as `serve` does.
 
 ```
@@ -1013,4 +1113,15 @@ searches:
 ```
 VENICE_API_KEY=… TAVILY_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
   go test ./internal/conversation -run TestLiveWeb -v -timeout 20m
+```
+
+The sixth holds the `photos` tools to the file's `image` and `avatar` models.
+It paints her avatar from the card into its own data directory, as `serve`
+does, and asks her for a selfie, which she has to take and send: the reply has
+to carry a photo she took, described, whose file is a JPEG. The report names
+the files, to look at:
+
+```
+VENICE_API_KEY=… PAULA_LIVE=scratch/paula.yaml \
+  go test ./internal/conversation -run TestLivePhotos -v -timeout 20m
 ```

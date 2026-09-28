@@ -63,6 +63,14 @@ header h1 {
   font-weight: 600;
 }
 
+/* Her face beside her name, the way a chat shows who it is with. */
+#face {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
 #chat {
   flex: 1;
   overflow-y: auto;

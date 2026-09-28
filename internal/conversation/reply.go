@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"nerdola.dev/x/paula/internal/config"
+	"nerdola.dev/x/paula/internal/media"
 	"nerdola.dev/x/paula/internal/runners"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
@@ -30,7 +31,8 @@ const tooLong = "error: the call ran, but what it answered is too long for the r
 // lastRound is what a model is told after the answers of the last round of
 // calls a reply may take, so it answers with what it has.
 const lastRound = "This reply has taken every round of calls it may, so write your answer now. " +
-	"A call that only looks something up is not run any more; one that changes something still runs."
+	"A call that only looks something up, or whose answer you would have to act on, is not run any more; " +
+	"one that changes something still runs."
 
 // model is a configured model and what its runner says it can do.
 type model struct {
@@ -237,11 +239,11 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		if over := e.excess(m, messages); over > 0 {
 			return past(over)
 		}
-		// In the last round, a call that only looks something up is left:
-		// what it answered would not be read before the reply is asked for
-		// its answer. One that changes something runs, such as putting the
-		// answer off or keeping a memory, which is as good there as in any
-		// round.
+		// In the last round, a call that only looks something up, or whose
+		// answer only a later round could act on, is left: what it answered
+		// would not be read before the reply is asked for its answer. One that
+		// changes something runs, such as putting the answer off or keeping a
+		// memory, which is as good there as in any round.
 		lookedUp := false
 		for i, c := range res.ToolCalls {
 			var answer api.Message
@@ -250,7 +252,7 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 				result := e.call(ctx, a, rec.last, c, errLookup, nil)
 				answer = api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, pictures{})}
 			} else {
-				shown := pictures{sees: m.catalogue.Vision}
+				shown := pictures{sees: m.catalogue.AnswerVision}
 				result := e.call(ctx, a, rec.last, c, nil, &shown)
 				answer = api.Message{Role: api.RoleTool, ToolCallID: c.ID, Parts: e.answered(result, shown)}
 			}
@@ -289,10 +291,11 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 
 	// What she wrote in any round is what she said: a model often puts the
 	// whole of its answer beside the call it makes, and has nothing to add
-	// once the call is answered. Nothing at all is her putting the answer off
-	// when she scheduled a call back for it: the messages are answered, and
-	// stay in the history for when it comes due.
-	if strings.TrimSpace(written.String()) == "" {
+	// once the call is answered. A photo she sent is a reply on its own.
+	// Nothing at all is her putting the answer off when she scheduled a call
+	// back for it: the messages are answered, and stay in the history for when
+	// it comes due.
+	if strings.TrimSpace(written.String()) == "" && len(a.photos) == 0 {
 		if a.putOff {
 			a.finished()
 			return nil, nil
@@ -337,18 +340,25 @@ func reason(res *api.Result) string {
 	return res.FinishReason
 }
 
-// replyMessage is the reply as a message of its own, for the loop to store. How
-// the model finished is kept with the request that asked, which paula turns
-// shows, so it is not kept here a second time.
+// replyMessage is the reply as a message of its own, for the loop to store:
+// what she wrote, and then the photos she sent. How the model finished is kept
+// with the request that asked, which paula turns shows, so it is not kept here
+// a second time.
 func (e *Engine) replyMessage(a *attempt, text, reasoning string, details []json.RawMessage, interrupted bool) *store.Message {
-	text = strings.TrimSpace(text)
-	if text == "" {
+	var parts []store.Part
+	if text = strings.TrimSpace(text); text != "" {
+		parts = append(parts, store.Part{Type: store.PartText, Text: text})
+	}
+	for _, sha := range a.photos {
+		parts = append(parts, store.Part{Type: store.PartImage, SHA256: sha, MIME: media.MIMEJPEG})
+	}
+	if len(parts) == 0 {
 		return nil
 	}
 	return &store.Message{
 		Role:             store.RoleAssistant,
 		Channel:          a.entry.Channel,
-		Parts:            []store.Part{{Type: store.PartText, Text: text}},
+		Parts:            parts,
 		Reasoning:        reasoning,
 		ReasoningDetails: details,
 		Interrupted:      interrupted,

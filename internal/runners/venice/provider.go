@@ -19,6 +19,7 @@ type provider struct {
 	Sampling sampling `yaml:"sampling"`
 	Output   output   `yaml:"output"`
 	Search   search   `yaml:"search"`
+	Image    image    `yaml:"image"`
 }
 
 type sampling struct {
@@ -34,6 +35,16 @@ type output struct {
 type search struct {
 	Provider string `yaml:"provider"`
 }
+
+// image is what a picture is asked for with. Left unset, a picture comes with
+// no watermark, and one Venice would blur as adult content comes as it is.
+type image struct {
+	HideWatermark *bool `yaml:"hide_watermark"`
+	SafeMode      *bool `yaml:"safe_mode"`
+}
+
+func (i image) hideWatermark() bool { return i.HideWatermark == nil || *i.HideWatermark }
+func (i image) safeMode() bool      { return i.SafeMode != nil && *i.SafeMode }
 
 var (
 	verbosities = []string{"low", "medium", "high", "auto"}

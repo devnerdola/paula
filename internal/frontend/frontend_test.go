@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -524,6 +525,56 @@ func TestAReplyWrittenOutIsNotSentAgain(t *testing.T) {
 	if got := s.messages(); len(got) != 0 {
 		t.Errorf("sent %+v, want the replies left as they were written", got)
 	}
+}
+
+// The photos she sent go after what she wrote: on their own once a reply was
+// written out as it came, with the text of one that was not, and with a
+// message of hers a session catches up on.
+func TestHerPhotosGoAfterWhatSheWrote(t *testing.T) {
+	const sha = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	photo := func(id store.MessageID, text string) *store.Message {
+		m := &store.Message{ID: id, Role: store.RoleAssistant}
+		if text != "" {
+			m.Parts = append(m.Parts, store.Part{Type: store.PartText, Text: text})
+		}
+		m.Parts = append(m.Parts, store.Part{Type: store.PartImage, SHA256: sha, MIME: "image/jpeg"})
+		return m
+	}
+	sent := func(t *testing.T, s *screen, want api.Outgoing) {
+		t.Helper()
+		waitFor(t, "the photo", func() bool { return len(s.messages()) > 0 })
+		if got := s.messages(); len(got) != 1 || !reflect.DeepEqual(got[0], want) {
+			t.Errorf("sent %+v, want %+v", got, want)
+		}
+	}
+
+	t.Run("streamed", func(t *testing.T) {
+		s := &streaming{newScreen(api.Features{Channel: "repl"})}
+		tk := newTalk()
+		run(t, s, tk)
+		tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+		tk.publish(conversation.Event{Kind: conversation.ReplyText, Entry: 1, Text: "me right now"})
+		tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 1, Message: photo(1, "me right now")})
+		sent(t, s.screen, api.Outgoing{Hers: true, Pictures: []string{sha}})
+	})
+	t.Run("sent whole", func(t *testing.T) {
+		s := newScreen(api.Features{Channel: "telegram"})
+		tk := newTalk()
+		run(t, s, tk)
+		tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+		tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 1, Message: photo(1, "me right now")})
+		sent(t, s, api.Outgoing{Text: "me right now", Hers: true, Pictures: []string{sha}})
+	})
+	t.Run("caught up", func(t *testing.T) {
+		s := newScreen(api.Features{Channel: "telegram"})
+		tk := newTalk()
+		run(t, s, tk)
+		missed := photo(5, "")
+		tk.fallBehind([]store.Message{*missed})
+		tk.publish(conversation.Event{Kind: conversation.ReplyStarted, Entry: 1})
+		tk.publish(conversation.Event{Kind: conversation.ReplyDone, Entry: 1, Message: missed})
+		sent(t, s, api.Outgoing{Hers: true, Pictures: []string{sha}})
+	})
 }
 
 // noting is a screen with a place of its own for what she is doing.

@@ -4,6 +4,8 @@ package telegram
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -32,6 +34,9 @@ const (
 	// offsetFile is where the run keeps what to ask for next, so a run that
 	// follows does not answer what the one before it already answered.
 	offsetFile = "telegram.offset"
+	// faceFile is where the run keeps the digest of the profile photo it set,
+	// so a run that follows does not upload the same one again.
+	faceFile = "telegram.avatar"
 	// poll is how long getUpdates waits for something to happen. Telegram holds
 	// the request open until it does, which is how a bot is told at once.
 	poll = 30 * time.Second
@@ -61,6 +66,12 @@ type Frontend struct {
 	// pause is how the run waits between saying she is writing, which a test
 	// shortens.
 	pause func(context.Context, time.Duration) error
+	// pictures are the files of the conversation's pictures, and avatar the
+	// file of hers, which is the bot's profile photo. face is where the digest
+	// of the profile photo set last is kept.
+	pictures *media.Files
+	avatar   string
+	face     string
 }
 
 // Open reads the telegram section and builds the bot it describes.
@@ -101,12 +112,15 @@ func Open(s config.Section, h api.Host) (*Frontend, error) {
 			url: defaultURL, token: token, http: &http.Client{},
 			wait: answerWait, pause: waiting,
 		},
-		user:   cfg.UserID,
-		offset: filepath.Join(h.DataDir, offsetFile),
-		log:    log,
-		names:  h.Names,
-		stream: cfg.StreamEdits,
-		pause:  waiting,
+		user:     cfg.UserID,
+		offset:   filepath.Join(h.DataDir, offsetFile),
+		log:      log,
+		names:    h.Names,
+		stream:   cfg.StreamEdits,
+		pause:    waiting,
+		pictures: media.New(h.DataDir, 0),
+		avatar:   h.Avatar,
+		face:     filepath.Join(h.DataDir, faceFile),
 	}, nil
 }
 
@@ -125,6 +139,30 @@ func tokenShape(token string) bool {
 
 func (f *Frontend) Kind() string { return Kind }
 
+// setAvatar makes her avatar the bot's profile photo, which Telegram takes
+// only as a JPEG. Nothing the API answers says which picture a bot has, so
+// the one set is written down, and it is uploaded again only when the avatar
+// is another.
+func (f *Frontend) setAvatar(ctx context.Context) error {
+	data, err := os.ReadFile(f.avatar)
+	if err != nil {
+		return err
+	}
+	photo, err := media.Process(data, 0)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(photo)
+	set := hex.EncodeToString(sum[:])
+	if was, err := os.ReadFile(f.face); err == nil && strings.TrimSpace(string(was)) == set {
+		return nil
+	}
+	if err := f.client.setPhoto(ctx, photo); err != nil {
+		return err
+	}
+	return whole(f.face, set+"\n")
+}
+
 // Run keeps one session on the chat, fed by what the bot is sent, until the
 // context ends.
 func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Adapter) error) error {
@@ -137,6 +175,12 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 	name, err := f.client.me(ctx)
 	if err != nil {
 		return err
+	}
+	// Her face is the bot's. A bot that cannot take it still talks.
+	if f.avatar != "" {
+		if err := f.setAvatar(ctx); err != nil {
+			f.log.Warn("setting the bot's profile photo", "avatar", f.avatar, "error", err)
+		}
 	}
 	f.log.Info("telegram polling", "bot", name, "user", f.user)
 
@@ -421,11 +465,23 @@ func (a *adapter) polled() {
 // Send writes one thing to the chat. What she wrote as separate paragraphs is
 // sent as separate messages, which is how a person texts, and each of them is
 // held to what Telegram takes. What can be picked from it goes under the last
-// of them as buttons.
+// of them as buttons. The photos she sent follow, each a message of its own.
 func (a *adapter) Send(ctx context.Context, m api.Outgoing) error {
 	// Only what she wrote is paced. A frontend saying something of its own is
 	// answering at once, and reads as waiting on nobody.
-	return a.f.write(ctx, api.Bubbles(m.Text, fits), a.buttons(m.Choices))
+	if err := a.f.write(ctx, api.Bubbles(m.Text, fits), a.buttons(m.Choices)); err != nil {
+		return err
+	}
+	for _, sha := range m.Pictures {
+		photo, err := a.f.pictures.Load(sha)
+		if err != nil {
+			return err
+		}
+		if err := a.f.client.sendPhoto(ctx, a.f.user, photo); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // buttons are the choices as Telegram takes them. What comes back when one is
@@ -572,12 +628,18 @@ func (f *Frontend) took(id int64) {
 }
 
 func (f *Frontend) keep(next int64) error {
-	tmp, err := os.CreateTemp(filepath.Dir(f.offset), "offset-")
+	return whole(f.offset, strconv.FormatInt(next, 10)+"\n")
+}
+
+// whole writes a file beside where it goes and moves it over it, so what is
+// there is never half written.
+func whole(path, text string) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "tmp-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(strconv.FormatInt(next, 10) + "\n"); err != nil {
+	if _, err := tmp.WriteString(text); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -587,7 +649,7 @@ func (f *Frontend) keep(next int64) error {
 	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), f.offset)
+	return os.Rename(tmp.Name(), path)
 }
 
 // poll asks what arrived, over and over, and hands each of them to the session

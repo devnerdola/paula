@@ -17,6 +17,7 @@ import (
 
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/frontend/api"
+	"nerdola.dev/x/paula/internal/media"
 )
 
 // Kind is the type written in the configuration file.
@@ -37,6 +38,9 @@ type Frontend struct {
 	socket string
 	log    *slog.Logger
 	names  api.Names
+	// pictures are the files of the conversation's pictures, which is where a
+	// terminal is told a photo of hers is.
+	pictures *media.Files
 }
 
 // Socket is where the repl of a configuration listens, and what the client
@@ -65,7 +69,7 @@ func Open(s config.Section, h api.Host) (*Frontend, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Frontend{socket: socket, log: log, names: h.Names}, nil
+	return &Frontend{socket: socket, log: log, names: h.Names, pictures: media.New(h.DataDir, 0)}, nil
 }
 
 func (f *Frontend) Kind() string { return Kind }
@@ -140,7 +144,7 @@ func (f *Frontend) Run(ctx context.Context, session func(context.Context, api.Ad
 				case <-ended:
 				}
 			}()
-			if err := serve(ctx, conn, f.names, session); err != nil && !gone(err) {
+			if err := serve(ctx, conn, f.names, f.pictures, session); err != nil && !gone(err) {
 				f.log.Error("repl session", "error", err)
 			}
 		})

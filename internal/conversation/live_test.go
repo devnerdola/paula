@@ -17,6 +17,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"nerdola.dev/x/paula/internal/avatar"
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/logs"
 	"nerdola.dev/x/paula/internal/persona"
@@ -191,18 +192,28 @@ func openLive(t *testing.T, path string) *live {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Her avatar goes in the run's own data directory, where the test that
+	// takes photos paints it, as serve paints one into a data directory that
+	// has none, by the file's avatar model.
+	data := filepath.Join(dir, "data")
+	face := ""
+	if lv.set.Defaults[config.RoleAvatar] != nil {
+		face = avatar.Path(data)
+	}
 	for _, tc := range cfg.Tools {
 		opened, err := toolkinds.Open(tc.Name, tc.Section, toolkinds.Host{
 			Names:     toolkinds.Names{Character: card.Name, User: card.User.Name},
 			Language:  card.Language,
 			Searchers: lv.set.Searchers(),
+			Avatar:    face,
+			Image:     lv.set.Defaults[config.RoleImage] != nil,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		lv.tools = append(lv.tools, opened...)
 	}
-	lv.st, err = store.Open(filepath.Join(dir, "data"))
+	lv.st, err = store.Open(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -985,12 +996,12 @@ func (lv *live) checkPictureSent(first *liveRun) {
 }
 
 // checkPictureGot holds the request for the picture again to getting it with
-// the tool, whose answer carries the picture to a model that sees. A model
-// that does not see is told what a picture showed by either tool, so listing
-// the pictures reaches it as well.
+// the tool, whose answer carries the picture to a model shown one there. Any
+// other is told what a picture showed by either tool, so listing the pictures
+// reaches it as well.
 func (lv *live) checkPictureGot(r *liveRun, looked liveTurn) {
 	ctx := context.Background()
-	sees := r.model().catalogue.Vision
+	sees := r.model().catalogue.AnswerVision
 	if sees {
 		lv.checkCalled(looked, "a request to look at an old picture again gets it", "get_image")
 	} else {
@@ -1013,9 +1024,9 @@ func (lv *live) checkPictureGot(r *liveRun, looked liveTurn) {
 			if sees {
 				want = 1
 			}
-			lv.check("the picture get_image returns is sent inside its answer, to a model that sees",
+			lv.check("the picture get_image returns is sent inside its answer, to a model shown one there",
 				inAnswers == want && elsewhere == 0 && next.Error == "",
-				fmt.Sprintf("%d pictures in tool answers and none elsewhere (the model sees: %v), taken by the host", want, sees),
+				fmt.Sprintf("%d pictures in tool answers and none elsewhere (the model is shown one there: %v), taken by the host", want, sees),
 				fmt.Sprintf("%d in tool answers, %d elsewhere; error %q", inAnswers, elsewhere, next.Error),
 				calls[i].RequestID, next.ID)
 		}

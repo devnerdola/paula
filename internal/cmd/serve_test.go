@@ -4,12 +4,16 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"nerdola.dev/x/paula/internal/media"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -248,6 +252,126 @@ tools:
 		if !strings.Contains(string(requests[0].RequestBody), `"name":"`+name+`"`) {
 			t.Errorf("the request offered no %s:\n%s", name, requests[0].RequestBody)
 		}
+	}
+}
+
+// painting answers the listings as the OpenRouter fixtures do, and every
+// picture asked for with the one OpenRouter made, counting them.
+func painting(t *testing.T, asked *atomic.Int32) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/models":
+			w.Write(openrouterAnswer(t, "models.json"))
+		case "/v1/images/models":
+			w.Write(openrouterAnswer(t, "images_models.json"))
+		case "/v1/key":
+			// Health reads nothing of the answer, as openrouterCatalogueWhile
+			// says.
+			w.Write([]byte(`{}`))
+		case "/v1/images":
+			asked.Add(1)
+			w.Write(openrouterAnswer(t, "images.json"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// A data directory with no avatar has one painted by the avatar model when
+// serve starts, before anything is served, and a run that finds it there
+// paints none.
+func TestServePaintsTheAvatarItHasNotGot(t *testing.T) {
+	dir := shortDir(t)
+	var asked atomic.Int32
+	ts := painting(t, &asked)
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	example, err := filepath.Abs(filepath.Join("..", "..", "personas", "paula.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := configFile(t, `
+persona: `+example+`
+data_dir: `+dir+`
+runners:
+  openrouter:
+    type: openrouter
+    url: `+ts.URL+`/v1
+models:
+  talk:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+  face:
+    runner: openrouter
+    id: recraft/recraft-v4.1-flash
+  photos:
+    runner: openrouter
+    id: bytedance-seed/seedream-5-0-lite
+default_models:
+  chat: talk
+  avatar: face
+  image: photos
+frontends:
+  repl:
+tools:
+  photos:
+`)
+
+	for run := 1; run <= 2; run++ {
+		serving, stop := context.WithCancel(context.Background())
+		served := make(chan int, 1)
+		go func() {
+			code, _, _ := execWith(t, serving, typed(), "-config", cfg, "serve")
+			served <- code
+		}()
+		waitFor(t, "the repl to listen", func() bool {
+			c, err := net.Dial("unix", filepath.Join(dir, "paula.sock"))
+			if err != nil {
+				return false
+			}
+			c.Close()
+			return true
+		})
+		stop()
+		if code := <-served; code != 0 {
+			t.Fatalf("run %d of serve = %d", run, code)
+		}
+		if asked.Load() != 1 {
+			t.Errorf("after run %d the avatar was painted %d times, want once", run, asked.Load())
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "avatar.jpg"))
+		if err != nil || media.Detect(data) != media.MIMEJPEG {
+			t.Errorf("after run %d the avatar is %d bytes of %q, %v", run, len(data), media.Detect(data), err)
+		}
+	}
+}
+
+// A photo is made from her avatar by the image model, so serve refuses the
+// photos tools with no avatar, no model to paint one and no model to take a
+// photo with, saying each.
+func TestServeRefusesPhotosWithNothingToTakeThemWith(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	cfg := configFile(t, `
+data_dir: `+shortDir(t)+`
+runners:
+  openrouter:
+    type: openrouter
+models:
+  talk:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+default_models:
+  chat: talk
+tools:
+  photos:
+`)
+	code, _, errOut := exec(t, "-config", cfg, "serve")
+	if code != 1 || !strings.Contains(errOut, "tools.photos:") || !strings.Contains(errOut, "there is no avatar") ||
+		!strings.Contains(errOut, "default_models.image") {
+		t.Errorf("serve = %d, %q", code, errOut)
 	}
 }
 

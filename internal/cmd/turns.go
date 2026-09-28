@@ -253,6 +253,9 @@ func writeReply(w io.Writer, reply *store.Message) {
 		fmt.Fprintf(w, "\n--- reasoning\n%s\n", reply.Reasoning)
 	}
 	fmt.Fprintf(w, "\n--- reply, message %d\n%s\n", reply.ID, reply.Text())
+	for _, p := range reply.Images() {
+		fmt.Fprintf(w, "image %s %s\n", p.SHA256, p.MIME)
+	}
 }
 
 func lastOf(requests []store.Request, purpose string) *store.Request {
@@ -369,7 +372,7 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 			writeHeaders(w, "request headers", r.RequestHeaders)
 			writeBody(w, "request body", r.RequestBody)
 			writeHeaders(w, "response headers", r.ResponseHeaders)
-			writeBody(w, "response body", r.ResponseBody)
+			writeBody(w, "response body", readable(r.ResponseHeaders, r.ResponseBody))
 		}
 		writeUsage(w, r)
 	}
@@ -402,8 +405,21 @@ func dumpTurn(ctx context.Context, w io.Writer, s *store.Store, id store.EntryID
 			writeBody(w, "reasoning", []byte(reply.Reasoning))
 		}
 		writeBody(w, "text", []byte(reply.Text()))
+		for _, p := range reply.Images() {
+			fmt.Fprintf(w, "image %s %s\n", p.SHA256, p.MIME)
+		}
 	}
 	return nil
+}
+
+// readable is a body as it is printed: a picture is kept whole and printed as
+// how big it is and what type, since its bytes read as nothing.
+func readable(h http.Header, body []byte) []byte {
+	kind := h.Get("Content-Type")
+	if !strings.HasPrefix(kind, "image/") {
+		return body
+	}
+	return fmt.Appendf(nil, "<%d bytes %s>", len(body), kind)
 }
 
 // numbered is the requests of an entry numbered by their place in it, a search

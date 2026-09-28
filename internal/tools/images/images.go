@@ -1,6 +1,7 @@
-// Package images is the tools that reach the pictures of the conversation:
-// listing them, and looking at one again. The pictures of messages older than
-// the recent ones are not in the prompt, so these tools are how she has them.
+// Package images is the tools that reach the pictures of the conversation,
+// the ones she was sent and the photos she sent: listing them, and looking at
+// one again. The pictures of messages older than the recent ones are not in
+// the prompt, so these tools are how she has them.
 package images
 
 import (
@@ -30,9 +31,9 @@ func Open(s config.Section, h api.Host) ([]api.Tool, error) {
 
 // arrangement is what both tools tell a model of where the pictures are.
 func arrangement(n api.Names) string {
-	return "The pictures " + n.User + " sent are kept for good, each with what it showed. Only the pictures " +
-		"of the recent messages are in your prompt: older messages survive as the summary of your " +
-		"conversation, which mentions a picture at most."
+	return "The pictures " + n.User + " sent and the photos you sent are kept for good, each with what it " +
+		"showed. Only the pictures of the recent messages are in your prompt: older messages survive as the " +
+		"summary of your conversation, which mentions a picture at most."
 }
 
 // page is how many pictures a list answers with at once. What a call answers
@@ -46,8 +47,9 @@ func (t list) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "list_images",
-		Description: fmt.Sprintf("List the pictures %s has sent, newest first, %d at a time: its number, when "+
-			"it was sent, and what it showed. ", n.User, page) + arrangement(n) + " List them when " + n.User +
+		Description: fmt.Sprintf("List the pictures %s has sent and the photos you have sent, newest first, %d "+
+			"at a time: its number, when it was sent and by whom, and what it showed. ", n.User, page) +
+			arrangement(n) + " List them when " + n.User +
 			" brings up a picture you do not have in front of you, and look at one again with get_image, by " +
 			"its number. A list with older pictures after it says so, and from lists them.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
@@ -63,7 +65,7 @@ func (list) Note(json.RawMessage) string { return "listing pictures" }
 
 func (list) LooksUp() {}
 
-func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
+func (t list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a listArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -88,7 +90,7 @@ func (list) Call(ctx context.Context, env api.Env, args json.RawMessage) (string
 	}
 	out := make([]string, len(images))
 	for i, img := range images {
-		out[i] = line(env, img)
+		out[i] = line(env, t.h.Names, img)
 	}
 	if older {
 		out = append(out, fmt.Sprintf("There are older pictures: list_images with from %d lists them.", a.From+page))
@@ -102,9 +104,9 @@ func (t get) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "get_image",
-		Description: "Look at a picture " + n.User + " sent, by the number list_images gives it. " +
-			arrangement(n) + " You are shown the picture itself when you can see images, and told what it " +
-			"showed otherwise.",
+		Description: "Look at a picture " + n.User + " sent, or a photo you sent, by the number list_images gives it. " +
+			arrangement(n) + " You are told what it showed, and the answer carries the picture itself when it " +
+			"can, and says so.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"number":{"type":"integer","description":"the number of the picture"}},` +
 			`"required":["number"]}`),
@@ -123,7 +125,7 @@ func (get) Note(args json.RawMessage) string {
 
 func (get) LooksUp() {}
 
-func (get) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
+func (t get) Call(ctx context.Context, env api.Env, args json.RawMessage) (string, error) {
 	var a getArgs
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", err
@@ -135,19 +137,23 @@ func (get) Call(ctx context.Context, env api.Env, args json.RawMessage) (string,
 	if err != nil {
 		return "", err
 	}
-	out := line(env, *img)
+	out := line(env, t.h.Names, *img)
 	if env.Show(*img) {
 		out += "\nThe picture itself is with this answer."
 	}
 	return out, nil
 }
 
-// line is a picture as a model reads it: its number, when it was sent, and
-// what it showed.
-func line(env api.Env, img store.Image) string {
+// line is a picture as a model reads it: its number, when it was sent and by
+// whom, and what it showed.
+func line(env api.Env, n api.Names, img store.Image) string {
 	caption := img.Caption
 	if caption == "" {
 		caption = "nothing was said of what it shows"
 	}
-	return fmt.Sprintf("#%d (sent %s) %s", img.ID, env.Time(img.SentAt), caption)
+	by := n.User
+	if img.Role == store.RoleAssistant {
+		by = "you"
+	}
+	return fmt.Sprintf("#%d (sent %s by %s) %s", img.ID, env.Time(img.SentAt), by, caption)
 }

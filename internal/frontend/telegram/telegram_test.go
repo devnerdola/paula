@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,7 @@ import (
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/frontend/api"
 	"nerdola.dev/x/paula/internal/logs"
+	"nerdola.dev/x/paula/internal/media"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -41,6 +43,8 @@ type bot struct {
 	sent    []string         // the text of each sendMessage
 	acted   int              // how often it was told she is writing
 	offered []string         // the commands it was told the bot answers
+	photos  []upload         // each sendPhoto
+	faces   []upload         // each setMyProfilePhoto
 	keys    []button         // the buttons under the message sent last
 	tapped  int              // how many taps were answered
 	lastID  int64            // the number the message sent last was given
@@ -59,6 +63,29 @@ type bot struct {
 type edited struct {
 	Message int64
 	Text    string
+}
+
+// upload is a method sent as a form: its fields, and the file in its part of
+// the name the method gives it.
+type upload struct {
+	fields map[string]string
+	file   []byte
+}
+
+// uploaded reads the form of a method that carries a file in the part named.
+func uploaded(r *http.Request, part string) upload {
+	out := upload{fields: map[string]string{}}
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		return out
+	}
+	for k, v := range r.MultipartForm.Value {
+		out.fields[k] = v[0]
+	}
+	if f, _, err := r.FormFile(part); err == nil {
+		out.file, _ = io.ReadAll(f)
+		f.Close()
+	}
+	return out
 }
 
 func newBot(t *testing.T, answers ...[]update) *bot {
@@ -108,6 +135,25 @@ func (b *bot) serve(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+	}
+
+	switch method {
+	case "sendPhoto":
+		b.photos = append(b.photos, uploaded(r, "photo"))
+		b.lastID++
+		b.order = append(b.order, b.lastID)
+		if b.holds == nil {
+			b.holds = map[int64]string{}
+		}
+		b.holds[b.lastID] = "(photo)"
+		json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "result": map[string]any{"message_id": b.lastID},
+		})
+		return
+	case "setMyProfilePhoto":
+		b.faces = append(b.faces, uploaded(r, "avatar"))
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": true})
+		return
 	}
 
 	var body map[string]any
@@ -174,6 +220,13 @@ func (b *bot) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// uploads are the photos sent to the chat, and the profile photos set.
+func (b *bot) uploads() (photos, faces []upload) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]upload(nil), b.photos...), append([]upload(nil), b.faces...)
 }
 
 func (b *bot) said() []string {
@@ -964,6 +1017,102 @@ func TestAMessageTheAPICouldNotTakeIsSentAgain(t *testing.T) {
 	if said := b.said(); len(said) != 3 ||
 		said[0] != "one" || said[1] != "two" || said[2] != "three" {
 		t.Errorf("sent %q, want all three in the order she wrote them", said)
+	}
+}
+
+// A photo she sent follows what she wrote, as the file the data directory
+// keeps it in, to the one person served. One the API could not take just then
+// is sent again.
+func TestHerPhotoFollowsHerTexts(t *testing.T) {
+	b := newBot(t)
+	var photos atomic.Int64
+	b.fail = func(method string) (int, string) {
+		if method == "sendPhoto" && photos.Add(1) == 1 {
+			return 502, "Bad Gateway"
+		}
+		return 0, ""
+	}
+	dir := t.TempDir()
+	f, _ := open(t, b, dir, "user_id: 7")
+	f.client.pause = func(context.Context, time.Duration) error { return nil }
+	made, err := os.ReadFile(filepath.Join("..", "..", "runners", "venice", "testdata", "image_edit.jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha, err := media.New(dir, 0).Store(made)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept, err := os.ReadFile(filepath.Join(dir, "media", sha[:2], sha+".jpg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a := &adapter{f: f, inputs: make(chan api.Input)}
+	if err := a.Send(context.Background(), api.Outgoing{Text: "me right now", Hers: true, Pictures: []string{sha}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := b.shown(); !slices.Equal(got, []string{"me right now", "(photo)"}) {
+		t.Errorf("the chat shows %q, want her text and then her photo", got)
+	}
+	if sent, _ := b.uploads(); len(sent) != 1 || sent[0].fields["chat_id"] != "7" || !bytes.Equal(sent[0].file, kept) {
+		t.Errorf("the photo went as %d uploads, want the file the data directory keeps, to chat 7", len(sent))
+	}
+}
+
+// Her avatar is the bot's profile photo, set as the run starts, as the JPEG
+// Telegram takes whatever the file is. A run that follows sets it again only
+// when the avatar is another. A bot that cannot take it still talks, and a
+// run with no avatar asks nothing.
+func TestTheAvatarIsTheBotsProfilePhoto(t *testing.T) {
+	png := filepath.Join("..", "..", "media", "testdata", "red-blue-8x4.png")
+	dir := t.TempDir()
+	b := newBot(t, []update{from(10, 7, message{Text: "hey"})})
+	f, _ := open(t, b, dir, "user_id: 7")
+	f.avatar = png
+	inputs(t, f, 1)
+	if _, faces := b.uploads(); len(faces) != 1 || faces[0].fields["photo"] != `{"type":"static","photo":"attach://avatar"}` ||
+		!strings.HasPrefix(http.DetectContentType(faces[0].file), "image/jpeg") {
+		t.Fatalf("the profile photo was set %d times, as %+v", len(faces), faces)
+	}
+
+	for _, run := range []struct {
+		avatar string
+		sets   int
+	}{
+		{png, 0},
+		{filepath.Join("..", "..", "runners", "venice", "testdata", "image_generate.jpg"), 1},
+	} {
+		next := newBot(t, []update{from(11, 7, message{Text: "hey"})})
+		f, _ := open(t, next, dir, "user_id: 7")
+		f.avatar = run.avatar
+		inputs(t, f, 1)
+		if _, faces := next.uploads(); len(faces) != run.sets {
+			t.Errorf("a run that follows with %s set the profile photo %d times, want %d", run.avatar, len(faces), run.sets)
+		}
+	}
+
+	refusing := newBot(t, []update{from(10, 7, message{Text: "hey"})})
+	refusing.fail = func(method string) (int, string) {
+		if method == "setMyProfilePhoto" {
+			return 400, "Bad Request: PHOTO_INVALID_DIMENSIONS"
+		}
+		return 0, ""
+	}
+	f, said := open(t, refusing, t.TempDir(), "user_id: 7")
+	f.avatar = png
+	if got := inputs(t, f, 1); len(got) != 1 || got[0].Text != "hey" {
+		t.Errorf("a bot that refused the photo took %+v", got)
+	}
+	if !strings.Contains(said.String(), "setting the bot's profile photo") || !strings.Contains(said.String(), "PHOTO_INVALID_DIMENSIONS") {
+		t.Errorf("the log says %q, want why the photo was not set", said.String())
+	}
+
+	none := newBot(t, []update{from(10, 7, message{Text: "hey"})})
+	f, _ = open(t, none, t.TempDir(), "user_id: 7")
+	inputs(t, f, 1)
+	if _, faces := none.uploads(); len(faces) != 0 {
+		t.Errorf("a run with no avatar set %d profile photos", len(faces))
 	}
 }
 

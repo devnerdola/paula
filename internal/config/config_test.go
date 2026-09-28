@@ -168,6 +168,8 @@ func TestValidationErrors(t *testing.T) {
 		{"bad model name", "runners:\n  r:\n    type: openrouter\nmodels:\n  _a:\n    runner: r\n    id: i\ndefault_models:\n  chat: _a\n", "models._a: a name holds"},
 		{"no chat model", "runners:\n  r:\n    type: openrouter\nmodels:\n  a:\n    runner: r\n    id: i\n", "default_models.chat: no model is set"},
 		{"unknown chat model", "runners:\n  r:\n    type: openrouter\nmodels:\n  a:\n    runner: r\n    id: i\ndefault_models:\n  chat: b\n", `default_models.chat: no model is called "b"`},
+		{"unknown image model", strings.Replace(minimal, "  chat: chat\n", "  chat: chat\n  image: photos\n", 1), `default_models.image: no model is called "photos"`},
+		{"unknown avatar model", strings.Replace(minimal, "  chat: chat\n", "  chat: chat\n  avatar: face\n", 1), `default_models.avatar: no model is called "face"`},
 		{"unknown role", strings.Replace(minimal, "  chat: chat\n", "  chat: chat\n  audio: chat\n", 1), "default_models.audio: unknown key"},
 		{"runners is not a mapping", "runners: [a, b]\ndefault_models:\n  chat: a\n", "runners: want a mapping"},
 		{"image max px", minimal + "\nengine:\n  image_max_px: -1\n", "engine.image_max_px: -1 is below zero"},

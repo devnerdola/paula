@@ -82,8 +82,8 @@ A runner is a hosted API with a key. One that serves models is a
   measure their own thing: `idle_timeout` a gap between bytes,
   `request_timeout` the whole of a request that is not a reply.
 - **Setup-agnostic.** Nothing in the code names a model, a family or a host,
-  apart from the family extensions and their table. Roles are `chat` and
-  `vision`, and what a role needs is a capability.
+  apart from the family extensions and their table. Roles are `chat`,
+  `vision`, `image` and `avatar`, and what a role needs is a capability.
 - **One family extension per model.** What a model needs of its prompt and to
   cache one belongs to its family and the host that serves it, and lives in
   the one extension the table picks for it by runner kind and id. Drivers and

@@ -58,6 +58,9 @@ type attempt struct {
 	// reply of no text is her putting the answer off until then.
 	acted  bool
 	putOff bool
+	// photos are the photos she took that go with the reply, by the digest of
+	// their files, in the order she sent them.
+	photos []string
 
 	cancel context.CancelFunc
 	state  atomic.Int32

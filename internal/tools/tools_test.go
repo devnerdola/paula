@@ -57,7 +57,7 @@ func (searcher) Read(context.Context, runnersapi.PageRequest) (string, error) { 
 // with parameters that are JSON.
 func TestEveryKindOpens(t *testing.T) {
 	needs := map[string]string{"web": "    runner: r\n"}
-	host := Host{Searchers: map[string]runnersapi.Searcher{"r": searcher{}}}
+	host := Host{Searchers: map[string]runnersapi.Searcher{"r": searcher{}}, Avatar: "avatar.jpg", Image: true}
 	for _, kind := range Kinds() {
 		t.Run(kind, func(t *testing.T) {
 			cfg := load(t, "  "+kind+":\n"+needs[kind])

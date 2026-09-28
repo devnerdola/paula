@@ -21,10 +21,12 @@ type Role string
 const (
 	RoleChat   Role = "chat"
 	RoleVision Role = "vision"
+	RoleImage  Role = "image"
+	RoleAvatar Role = "avatar"
 )
 
 // Roles are every role, in the order they are shown.
-var Roles = []Role{RoleChat, RoleVision}
+var Roles = []Role{RoleChat, RoleVision, RoleImage, RoleAvatar}
 
 // Config is a loaded paula.yaml.
 type Config struct {
@@ -84,6 +86,8 @@ type Tool struct {
 type DefaultModels struct {
 	Chat   string `yaml:"chat"`
 	Vision string `yaml:"vision"`
+	Image  string `yaml:"image"`
+	Avatar string `yaml:"avatar"`
 }
 
 func (d DefaultModels) Get(r Role) string {
@@ -92,6 +96,10 @@ func (d DefaultModels) Get(r Role) string {
 		return d.Chat
 	case RoleVision:
 		return d.Vision
+	case RoleImage:
+		return d.Image
+	case RoleAvatar:
+		return d.Avatar
 	}
 	return ""
 }

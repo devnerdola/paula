@@ -147,6 +147,10 @@ func RoleNeeds(role config.Role) api.Needs {
 		return api.Needs{Chat: true, Tools: true}
 	case config.RoleVision:
 		return api.Needs{Vision: true}
+	case config.RoleImage:
+		return api.Needs{Edit: true}
+	case config.RoleAvatar:
+		return api.Needs{Paint: true}
 	}
 	return api.Needs{}
 }
@@ -332,7 +336,7 @@ func (s *Setup) checkRoles(models []ModelStatus) []RoleStatus {
 		m, ok := s.Defaults[role]
 		if !ok {
 			// A file naming no model for chat is refused before a setup is made
-			// from it, and seeing a picture is a choice.
+			// from it, and seeing and making pictures are choices.
 			continue
 		}
 		catalogue := catalogues[m.Name]

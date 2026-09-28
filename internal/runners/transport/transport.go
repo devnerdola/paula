@@ -136,9 +136,7 @@ type Ask struct {
 
 // Get asks a JSON endpoint and decodes the answer into out.
 func (c *Client) Get(ctx context.Context, path string, out any) error {
-	ctx, cancel := c.limited(ctx)
-	defer cancel()
-	return c.Send(ctx, Ask{
+	return c.Call(ctx, Ask{
 		Method: http.MethodGet,
 		Path:   path,
 		Read:   func(r io.Reader, _ *api.Record) error { return decode(r, out) },
@@ -152,15 +150,20 @@ func (c *Client) Post(ctx context.Context, path string, in, out any, rec api.Rec
 	if err != nil {
 		return err
 	}
-	ctx, cancel := c.limited(ctx)
-	defer cancel()
-	return c.Send(ctx, Ask{
+	return c.Call(ctx, Ask{
 		Method:   http.MethodPost,
 		Path:     path,
 		Body:     body,
 		Recorder: rec,
 		Read:     func(r io.Reader, _ *api.Record) error { return decode(r, out) },
 	})
+}
+
+// Call sends a request that is not a stream, held to the request timeout.
+func (c *Client) Call(ctx context.Context, a Ask) error {
+	ctx, cancel := c.limited(ctx)
+	defer cancel()
+	return c.Send(ctx, a)
 }
 
 // limited gives a request that is not a stream the whole of the request

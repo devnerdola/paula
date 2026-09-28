@@ -1,11 +1,14 @@
 package venice
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,14 +33,23 @@ func read(t *testing.T, name string) []byte {
 	return b
 }
 
-// answers serves one captured file for every path.
+// listed answers each listing with the one captured of its type.
+func listed(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	file := "models.json"
+	if kind := r.URL.Query().Get("type"); kind != "" {
+		file = "models_" + kind + ".json"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(read(t, file))
+}
+
+// answers serves one captured file for every path but the listings.
 func answers(t *testing.T, kind, file string) *httptest.Server {
 	t.Helper()
 	body := read(t, file)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/models" {
-			w.Header().Set("Content-Type", "application/json")
-			w.Write(read(t, "models.json"))
+			listed(t, w, r)
 			return
 		}
 		w.Header().Set("Content-Type", kind)
@@ -162,10 +174,10 @@ func streamed(t *testing.T, name string) *api.Result {
 func TestCatalogue(t *testing.T) {
 	r := runner(t, answers(t, "application/json", "models.json").URL, "")
 
-	// A model that reasons at a chosen effort, sees images, takes tools and
-	// answers a schema.
+	// A model that reasons at a chosen effort, sees images, but not in the
+	// answer of a call, takes tools and answers a schema.
 	m := model(t, r, "z-ai-glm-5-3-flash")
-	if !m.Chat || !m.Vision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
+	if !m.Chat || !m.Vision || m.AnswerVision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
 		t.Errorf("%s = %+v", m.ID, m)
 	}
 	if m.Context != 1048576 || m.Output != 131072 {
@@ -188,27 +200,56 @@ func TestCatalogue(t *testing.T) {
 		t.Errorf("%s = %+v, want no reasoning", m.ID, m)
 	}
 
+	// A model that writes makes no picture, one of the image listing paints,
+	// and one of the inpaint listing makes a picture from another. Neither
+	// writes, and each is made in the aspect ratios it lists, or none.
+	if m := model(t, r, "z-ai-glm-5-3"); m.Paint || m.Edit {
+		t.Errorf("%s = %+v, want no pictures", m.ID, m)
+	}
+	if m := model(t, r, "venice-sd35"); !m.Paint || m.Edit || m.Chat || m.Ratios != nil {
+		t.Errorf("%s = %+v, want a model that paints in no listed ratio", m.ID, m)
+	}
+	if m := model(t, r, "nano-banana-2-edit"); !m.Edit || m.Paint || m.Chat || !slices.Contains(m.Ratios, "3:4") {
+		t.Errorf("%s = %+v, want a model that edits in the ratios it lists", m.ID, m)
+	}
+
 	if _, err := r.Model(context.Background(), "nope"); err == nil {
 		t.Error("Model of an unknown id succeeded")
 	}
 }
 
-// The listing with no type is the models that write text, which are the only
-// ones she can use: the images, the voices and the embeddings are not asked for.
-func TestTheCatalogueIsTheModelsThatWrite(t *testing.T) {
+// The catalogue is the models that write text, the ones that paint and the
+// ones that make a picture from another: the voices and the embeddings are
+// not asked for.
+func TestTheCatalogueIsTheTextImageAndInpaintListings(t *testing.T) {
 	var asked []string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		asked = append(asked, r.URL.RequestURI())
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
 	if _, err := runner(t, ts.URL, "").Models(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(asked, []string{"/v1/models"}) {
-		t.Errorf("asked %q, want the listing with no type", asked)
+	if want := []string{"/v1/models", "/v1/models?type=image", "/v1/models?type=inpaint"}; !slices.Equal(asked, want) {
+		t.Errorf("asked %q, want %q", asked, want)
+	}
+}
+
+// A listing that cannot be read leaves the catalogue unread, whichever it is.
+func TestAListingThatFailsFailsTheCatalogue(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("type") == "inpaint" {
+			http.Error(w, `{"error":"the host is away"}`, http.StatusBadGateway)
+			return
+		}
+		listed(t, w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	if _, err := runner(t, ts.URL, "retries: 0").Models(context.Background()); err == nil {
+		t.Error("the catalogue was read without the inpaint listing")
 	}
 }
 
@@ -216,8 +257,7 @@ func TestCatalogueIsReadOnce(t *testing.T) {
 	var reads int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reads++
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -227,8 +267,8 @@ func TestCatalogueIsReadOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if reads != 1 {
-		t.Errorf("reads = %d, want the listing read once", reads)
+	if reads != 3 {
+		t.Errorf("reads = %d, want the three listings read once", reads)
 	}
 }
 
@@ -242,10 +282,11 @@ func TestEveryRunReadsTheListing(t *testing.T) {
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		reads++
+		if r.URL.RequestURI() == "/v1/models" {
+			reads++
+		}
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -443,6 +484,154 @@ func TestAPageIsWhatVeniceRead(t *testing.T) {
 	}
 }
 
+// painted serves the listings, and one captured file with a status for any
+// other path, keeping the path and the body of what it was sent.
+func painted(t *testing.T, status int, kind, file string) (*httptest.Server, *string, *map[string]any) {
+	t.Helper()
+	body := read(t, file)
+	var path string
+	var sent map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			listed(t, w, r)
+			return
+		}
+		path = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", kind)
+		w.WriteHeader(status)
+		w.Write(body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &path, &sent
+}
+
+// A picture is the file Venice answered with, asked for as a JPEG with no
+// watermark and not blurred, and kept by the recorder the request carries. A
+// model that lists no aspect ratio is sent none.
+func TestAPaintIsThePictureVeniceMade(t *testing.T) {
+	ts, path, sent := painted(t, http.StatusOK, "image/jpeg", "image_generate.jpg")
+	r := runner(t, ts.URL, "")
+	kept := &records{}
+	got, err := r.Paint(context.Background(), api.PaintRequest{
+		Model:    "venice-sd35",
+		Prompt:   "A red apple on a wooden kitchen table, morning light",
+		Shape:    api.ShapeSquare,
+		Settings: r.Settings(),
+		Recorder: kept,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, read(t, "image_generate.jpg")) {
+		t.Errorf("the picture is %d bytes, want the %d Venice answered with", len(got), len(read(t, "image_generate.jpg")))
+	}
+	want := map[string]any{
+		"model":          "venice-sd35",
+		"prompt":         "A red apple on a wooden kitchen table, morning light",
+		"format":         "jpeg",
+		"return_binary":  true,
+		"hide_watermark": true,
+		"safe_mode":      false,
+	}
+	if *path != "/v1/image/generate" || !maps.Equal(*sent, want) {
+		t.Errorf("sent %v to %s, want %v", *sent, *path, want)
+	}
+	if len(kept.ended) != 1 || kept.ended[0].Model != "venice-sd35" || kept.ended[0].Status != http.StatusOK {
+		t.Errorf("records = %+v, want the picture kept", kept.ended)
+	}
+}
+
+// An edit carries the picture as base64 and asks for a JPEG, in the aspect
+// ratio of its shape among the ones the model lists: the one the shape is
+// named for, the nearest when the model lists another, and none when it lists
+// none of them or no shape is asked for.
+func TestAnEditCarriesThePictureInTheShapeAsked(t *testing.T) {
+	picture := read(t, "image_generate.jpg")
+	for _, tc := range []struct{ id, shape, ratio string }{
+		{"muse-image-edit", api.ShapePortrait, "3:4"},
+		{"nano-banana-2-edit", api.ShapeLandscape, "3:2"},
+		{"wan-2-7-pro-edit", api.ShapePortrait, ""},
+		{"muse-image-edit", "", ""},
+	} {
+		ts, path, sent := painted(t, http.StatusOK, "image/jpeg", "image_edit.jpg")
+		r := runner(t, ts.URL, "")
+		got, err := r.Edit(context.Background(), api.EditRequest{
+			Model:    tc.id,
+			Prompt:   "The same apple, cut in half, on the same table",
+			Shape:    tc.shape,
+			Picture:  picture,
+			Settings: r.Settings(),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, read(t, "image_edit.jpg")) {
+			t.Errorf("%s: the picture is %d bytes, want the one Venice answered with", tc.id, len(got))
+		}
+		want := map[string]any{
+			"model":         tc.id,
+			"prompt":        "The same apple, cut in half, on the same table",
+			"image":         base64.StdEncoding.EncodeToString(picture),
+			"output_format": "jpeg",
+			"safe_mode":     false,
+		}
+		if tc.ratio != "" {
+			want["aspect_ratio"] = tc.ratio
+		}
+		if *path != "/v1/image/edit" || !maps.Equal(*sent, want) {
+			t.Errorf("%s as %q: sent %s with aspect_ratio %v, want %q", tc.id, tc.shape, *path, (*sent)["aspect_ratio"], tc.ratio)
+		}
+	}
+}
+
+// What the provider block sets of a picture is what it is asked for with.
+func TestAPictureIsAskedForAsTheBlockSays(t *testing.T) {
+	ts, _, sent := painted(t, http.StatusOK, "image/jpeg", "image_generate.jpg")
+	r := runner(t, ts.URL, "provider:\n  image:\n    hide_watermark: false\n    safe_mode: true")
+	if _, err := r.Paint(context.Background(), api.PaintRequest{Model: "venice-sd35", Prompt: "an apple", Settings: r.Settings()}); err != nil {
+		t.Fatal(err)
+	}
+	if (*sent)["hide_watermark"] != false || (*sent)["safe_mode"] != true {
+		t.Errorf("sent %v, want the watermark kept and safe mode on", *sent)
+	}
+}
+
+// A model that only makes pictures is sent none of what a chat is, so the
+// settings its runner writes for every model are not held against it; a
+// model that chats is held to the same ones.
+func TestAModelThatOnlyMakesPicturesIsHeldToNoChatSetting(t *testing.T) {
+	r := runner(t, answers(t, "application/json", "models.json").URL, "")
+	s := api.Settings{
+		Reasoning: api.ReasoningSettings{Mode: api.ReasoningOn, Effort: "high"},
+		Sampling:  api.SamplingSettings{Seed: new(int64(0))},
+	}
+	ctx := context.Background()
+	if err := check(ctx, r, api.Checked{ID: "muse-image-edit", Settings: s, Needs: api.Needs{Edit: true}}); err != nil {
+		t.Errorf("a model that only edits was held to the chat settings: %v", err)
+	}
+	if err := check(ctx, r, api.Checked{ID: "venice-uncensored-1-2", Settings: s}); err == nil {
+		t.Error("a model that chats took reasoning it does not do and a seed at zero")
+	}
+}
+
+// A picture Venice will not make is refused in its words.
+func TestAPictureVeniceWillNotMakeIsRefusedInItsWords(t *testing.T) {
+	ts, _, _ := painted(t, http.StatusNotFound, "application/json", "error_image_generate.json")
+	_, err := runner(t, ts.URL, "").Paint(context.Background(), api.PaintRequest{Model: "venice-sd35", Prompt: "A red apple"})
+	var e *api.APIError
+	if !errors.As(err, &e) || e.Status != http.StatusNotFound || e.Message != "Specified model not found: no-such-painter." {
+		t.Errorf("a paint Venice refused = %v", err)
+	}
+
+	ts, _, _ = painted(t, http.StatusBadRequest, "application/json", "error_image_edit.json")
+	_, err = runner(t, ts.URL, "").Edit(context.Background(), api.EditRequest{Model: "muse-image-edit", Prompt: "The same apple", Picture: read(t, "image_generate.jpg")})
+	if !errors.As(err, &e) || e.Status != http.StatusBadRequest ||
+		e.Message != "Prompt exceeds 1500 character limit for model 'firered-image-edit'" {
+		t.Errorf("an edit Venice refused = %v", err)
+	}
+}
+
 func TestRequestBody(t *testing.T) {
 	var sent []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -593,15 +782,18 @@ func TestOnlyTheRunnerNamesTheSearchEngine(t *testing.T) {
 	}
 }
 
+// A reply falls back to a model the catalogue serves that writes it: one the
+// catalogue does not hold, and one that only makes pictures, are each named.
 func TestFallbacksMustBeServed(t *testing.T) {
 	r := runner(t, answers(t, "application/json", "models.json").URL,
-		"provider:\n  fallbacks: [z-ai-glm-5-3, nope]")
+		"provider:\n  fallbacks: [z-ai-glm-5-3, nope, seedream-v5-lite]")
 	s := api.Settings{Provider: r.Settings().Provider}
 	err := check(context.Background(), r, api.Checked{ID: "z-ai-glm-5-3-flash", Settings: s})
 	if err == nil {
 		t.Fatal("Check passed")
 	}
-	if !strings.Contains(err.Error(), `provider.fallbacks`) || !strings.Contains(err.Error(), "nope") {
+	if !strings.Contains(err.Error(), `provider.fallbacks`) || !strings.Contains(err.Error(), "nope") ||
+		!strings.Contains(err.Error(), "seedream-v5-lite does not chat") || strings.Contains(err.Error(), "z-ai-glm-5-3 ") {
 		t.Errorf("error = %v", err)
 	}
 }
@@ -644,8 +836,7 @@ func TestACatalogueThatFailedIsAskedAgain(t *testing.T) {
 			http.Error(w, `{"error":"the host is away"}`, http.StatusBadGateway)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 

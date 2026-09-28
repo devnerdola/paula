@@ -353,6 +353,65 @@ func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
 	}
 }
 
+// A picture she took is found by its number before any message carries it, and
+// only a picture she took is. Once her message carries it, it is one of the
+// pictures of the conversation, and says she sent it.
+func TestAPhotoSheTookIsFoundByItsNumberBeforeItIsSent(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	e := &Entry{StartedAt: now}
+	if err := s.StartEntry(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	r := &Request{EntryID: e.ID, Purpose: PurposeReply, Runner: "venice",
+		Method: "POST", URL: "https://api.venice.ai/api/v1/chat/completions", StartedAt: now}
+	if err := s.AddRequest(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	call := &ToolCall{EntryID: e.ID, RequestID: r.ID, CallID: "call_1",
+		Name: "take_photo", Arguments: `{"prompt":"a selfie at the window"}`, StartedAt: now}
+	if err := s.StartToolCall(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.AddMedia(ctx, "sha-sent"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddMessage(ctx, &Message{Role: RoleUser, CreatedAt: now,
+		Parts: []Part{{Type: PartImage, SHA256: "sha-sent", MIME: "image/jpeg"}}}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.AddPhoto(ctx, "sha-taken", call.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := s.Photo(ctx, id); err != nil || m.SHA256 != "sha-taken" {
+		t.Errorf("the photo she took = %+v, %v", m, err)
+	}
+	images, err := s.Images(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 1 {
+		t.Fatalf("images = %+v, want only the one a message carried", images)
+	}
+	if _, err := s.Photo(ctx, images[0].ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a picture sent to her as a photo she took = %v, want not found", err)
+	}
+
+	if err := s.AddMessage(ctx, &Message{Role: RoleAssistant, CreatedAt: now.Add(time.Minute),
+		Parts: []Part{{Type: PartText, Text: "me right now"}, {Type: PartImage, SHA256: "sha-taken", MIME: "image/jpeg"}}}); err != nil {
+		t.Fatal(err)
+	}
+	images, err = s.Images(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(images) != 2 || images[0].ID != id || images[0].Role != RoleAssistant || images[1].Role != RoleUser {
+		t.Errorf("images = %+v, want hers first, then the one sent to her", images)
+	}
+}
+
 // A picture is looked up by the number the model was told it by, so a database
 // brought up to date keeps every picture's number, the gap a picture left
 // behind it included.

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "message": "No model found for \"nope/does-not-paint\"",
+    "code": 404
+  }
+}

@@ -33,8 +33,9 @@ type Instructor interface {
 	Instructions() string
 }
 
-// Lookup is a tool whose calls only look something up and change nothing, so
-// a call of one is worth running only when what it answers reaches a model.
+// Lookup is a tool whose calls only look something up and change nothing, or
+// whose answer is of use only to a round that can act on it, so a call of one
+// is worth running only when what it answers reaches a model.
 type Lookup interface {
 	LooksUp()
 }
@@ -70,9 +71,15 @@ type Env interface {
 	Images(ctx context.Context, from, limit int) ([]store.Image, error)
 	Image(ctx context.Context, id int64) (*store.Image, error)
 	// Show has a picture sent to the model in the call's answer, and reports
-	// whether it will be: a model that sees images is sent it, and any other
-	// is not, since it can read what the picture showed.
+	// whether it will be: a model shown a picture there is sent it, and any
+	// other is not, since it can read what the picture showed.
 	Show(img store.Image) bool
+	// Photo is a picture she took: the image model's picture of her, made
+	// from the reference as the prompt says, in a shape of runnersapi.Shapes
+	// or the one the model chooses. SendPhoto has one she took go with the
+	// reply.
+	Photo(ctx context.Context, prompt, shape string, reference []byte) (*store.Image, error)
+	SendPhoto(ctx context.Context, id int64) error
 	// Now is what time it is, by the conversation's clock.
 	Now() time.Time
 	// Callbacks are the call backs she scheduled that have not fired, soonest
@@ -95,6 +102,10 @@ type Host struct {
 	Language string
 	// Searchers are the runners that search the web, by name.
 	Searchers map[string]runnersapi.Searcher
+	// Avatar is the file of her picture, and empty when there is none. Image
+	// says a model is set for the image role, which makes a picture from it.
+	Avatar string
+	Image  bool
 }
 
 // Names are the two in the conversation, as the character card names them.

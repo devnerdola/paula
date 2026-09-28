@@ -77,13 +77,19 @@ func (f *fakeEnv) Show(img store.Image) bool {
 	return f.sees
 }
 
-// env holds two pictures sent on 21 September 2026, the newest first, one of
-// which nothing has said what it shows.
+func (f *fakeEnv) Photo(context.Context, string, string, []byte) (*store.Image, error) {
+	return nil, nil
+}
+
+func (f *fakeEnv) SendPhoto(context.Context, int64) error { return nil }
+
+// env holds two pictures sent on 21 September 2026, the newest first: one she
+// sent, which nothing has said what it shows, and one Caio sent.
 func env() *fakeEnv {
 	return &fakeEnv{images: []store.Image{
-		{ID: 2, SHA256: "sha-b", MessageID: 40, SentAt: time.Date(2026, 9, 21, 19, 50, 0, 0, time.UTC)},
+		{ID: 2, SHA256: "sha-b", MessageID: 40, Role: store.RoleAssistant, SentAt: time.Date(2026, 9, 21, 19, 50, 0, 0, time.UTC)},
 		{ID: 1, SHA256: "sha-a", Caption: "White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER.",
-			MessageID: 31, SentAt: time.Date(2026, 9, 21, 19, 44, 0, 0, time.UTC)},
+			MessageID: 31, Role: store.RoleUser, SentAt: time.Date(2026, 9, 21, 19, 44, 0, 0, time.UTC)},
 	}}
 }
 
@@ -105,7 +111,7 @@ func call(t *testing.T, name string, e *fakeEnv, args string) (string, error) {
 }
 
 // Every picture is listed, newest first, with its number, when it was sent and
-// what it showed, and a conversation that has none says so.
+// by whom, and what it showed, and a conversation that has none says so.
 func TestAListIsEveryPicture(t *testing.T) {
 	if got, err := call(t, "list_images", &fakeEnv{}, `{}`); err != nil || got != "no pictures yet" {
 		t.Errorf("listing no pictures answered %q, %v", got, err)
@@ -115,8 +121,8 @@ func TestAListIsEveryPicture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#2 (sent 21 Sep 19:50) nothing was said of what it shows\n" +
-		"#1 (sent 21 Sep 19:44) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
+	want := "#2 (sent 21 Sep 19:50 by you) nothing was said of what it shows\n" +
+		"#1 (sent 21 Sep 19:44 by Caio) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
 	if got != want {
 		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
 	}
@@ -169,7 +175,7 @@ func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
 // A model that sees images is shown the picture with the answer, which says so;
 // any other is told what it showed, and shown nothing.
 func TestAPictureIsShownToAModelThatSees(t *testing.T) {
-	line := "#1 (sent 21 Sep 19:44) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
+	line := "#1 (sent 21 Sep 19:44 by Caio) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
 
 	e := env()
 	e.sees = true

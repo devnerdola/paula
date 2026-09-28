@@ -112,17 +112,21 @@ func table(w io.Writer, header []string, rows func(row func(...string))) {
 }
 
 // budget is the context column: what the file sets, and what the catalogue
-// reports.
+// reports. A model that makes pictures has no context, and neither says one.
 func budget(configured int, m *api.Model) string {
+	listed := 0
+	if m != nil {
+		listed = m.Context
+	}
 	switch {
-	case m == nil && configured == 0:
+	case configured == 0 && listed == 0:
 		return "-"
-	case m == nil:
+	case listed == 0:
 		return strconv.Itoa(configured)
 	case configured == 0:
-		return strconv.Itoa(m.Context)
+		return strconv.Itoa(listed)
 	}
-	return fmt.Sprintf("%d of %d", configured, m.Context)
+	return fmt.Sprintf("%d of %d", configured, listed)
 }
 
 func capabilities(m *api.Model) string {
@@ -153,6 +157,12 @@ func capabilities(m *api.Model) string {
 	}
 	if m.StructuredOutputs {
 		out = append(out, "schema")
+	}
+	if m.Paint {
+		out = append(out, "paint")
+	}
+	if m.Edit {
+		out = append(out, "edit")
 	}
 	if len(out) == 0 {
 		return "-"
@@ -204,7 +214,7 @@ func catalogue(ctx context.Context, w io.Writer, runner runners.Runner) {
 	fmt.Fprintf(w, "%s serves:\n", r.Name())
 	table(w, []string{"ID", "CONTEXT", "CAPABILITIES"}, func(row func(...string)) {
 		for _, m := range models {
-			row(m.ID, strconv.Itoa(m.Context), capabilities(&m))
+			row(m.ID, budget(0, &m), capabilities(&m))
 		}
 	})
 }

@@ -86,27 +86,32 @@ func (f *Files) Store(b []byte) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return "", err
 	}
-	// The file is written under a name of its own, so two images kept at once
-	// cannot write over each other.
-	tmp, err := os.CreateTemp(filepath.Dir(path), "tmp-")
-	if err != nil {
-		return "", err
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(out); err != nil {
-		tmp.Close()
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := Keep(path, out); err != nil {
 		return "", err
 	}
 	return sha, nil
+}
+
+// Keep writes an image under a name of its own and then moves it where it
+// goes, so two images kept at once cannot write over each other, and a run
+// that ends in the middle of one leaves none rather than half of one.
+func Keep(path string, b []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "tmp-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // Load reads a stored image, which is a JPEG like every other.

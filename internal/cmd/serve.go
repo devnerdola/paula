@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"nerdola.dev/x/paula/internal/avatar"
 	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/conversation"
 	"nerdola.dev/x/paula/internal/frontend"
@@ -55,18 +56,6 @@ func serve(g *globals) error {
 	if err != nil {
 		return err
 	}
-	var offered []tools.Tool
-	for _, t := range cfg.Tools {
-		opened, err := tools.Open(t.Name, t.Section, tools.Host{
-			Names:     tools.Names{Character: card.Name, User: card.User.Name},
-			Language:  card.Language,
-			Searchers: set.Searchers(),
-		})
-		if err != nil {
-			return err
-		}
-		offered = append(offered, opened...)
-	}
 	unlock, err := lock(cfg.DataDir)
 	if err != nil {
 		return err
@@ -84,6 +73,39 @@ func serve(g *globals) error {
 	ctx, stop := signal.NotifyContext(g.ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Her avatar is the one in the data directory, or the one the avatar model
+	// paints there once the models are checked. The tools and the frontends
+	// are told where it is before either opens.
+	face := avatar.Find(cfg.DataDir)
+	var painter *runners.Configured
+	if face == "" {
+		if painter, err = conversation.RoleModel(ctx, s, set, config.RoleAvatar); err != nil {
+			return err
+		}
+		if painter != nil {
+			face = avatar.Path(cfg.DataDir)
+		}
+	}
+	photographer, err := conversation.RoleModel(ctx, s, set, config.RoleImage)
+	if err != nil {
+		return err
+	}
+
+	var offered []tools.Tool
+	for _, t := range cfg.Tools {
+		opened, err := tools.Open(t.Name, t.Section, tools.Host{
+			Names:     tools.Names{Character: card.Name, User: card.User.Name},
+			Language:  card.Language,
+			Searchers: set.Searchers(),
+			Avatar:    face,
+			Image:     photographer != nil,
+		})
+		if err != nil {
+			return err
+		}
+		offered = append(offered, opened...)
+	}
+
 	// Every listing is read over the network, so a slow API is said out loud
 	// before it is waited for.
 	log.Info("checking the models")
@@ -92,6 +114,15 @@ func serve(g *globals) error {
 		return err
 	}
 	log.Info("models checked", "duration", time.Since(started))
+
+	if painter != nil {
+		log.Info("painting the avatar", "model", painter.Name)
+		started := time.Now()
+		if err := avatar.Paint(ctx, cfg.DataDir, cfg.Engine.ImageMaxPx, card, set, painter); err != nil {
+			return fmt.Errorf("painting the avatar: %w", err)
+		}
+		log.Info("avatar painted", "path", face, "duration", time.Since(started))
+	}
 
 	conv, err := conversation.Open(ctx, conversation.Options{
 		Store:   s,
@@ -113,6 +144,7 @@ func serve(g *globals) error {
 		Log:     log,
 		Names:   frontend.Names{Character: card.Name, User: card.User.Name},
 		Secrets: g.secrets,
+		Avatar:  face,
 	}
 	opened := make([]frontendapi.Frontend, 0, len(cfg.Frontends))
 	for _, f := range cfg.Frontends {

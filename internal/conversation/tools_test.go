@@ -288,7 +288,8 @@ func (lookingUp) LooksUp() {}
 // noted is what a model is told after the answers of the last round of calls a
 // reply may take.
 const noted = "This reply has taken every round of calls it may, so write your answer now. " +
-	"A call that only looks something up is not run any more; one that changes something still runs."
+	"A call that only looks something up, or whose answer you would have to act on, is not run any more; " +
+	"one that changes something still runs."
 
 // A reply may take so many rounds of calls, and the round after them is the
 // last. It is sent as the round before it with what came of that round, the
@@ -371,7 +372,7 @@ func TestALastRoundThatLooksSomethingUpIsAskedForItsAnswer(t *testing.T) {
 		t.Errorf("the tool ran %d times, want only in the round calls were taken in", len(got))
 	}
 	msgs := requests[2].Messages
-	if left := msgs[len(msgs)-1]; left.Role != api.RoleTool || !strings.HasPrefix(text(left), "error: not run: it only looks something up") {
+	if left := msgs[len(msgs)-1]; left.Role != api.RoleTool || !strings.HasPrefix(text(left), "error: not run: nothing could act on what it answers") {
 		t.Errorf("the call left was answered %s: %q", left.Role, text(left))
 	}
 
@@ -379,7 +380,7 @@ func TestALastRoundThatLooksSomethingUpIsAskedForItsAnswer(t *testing.T) {
 	if reply.Text() != "let me check\n\nI could not find it" {
 		t.Errorf("the reply is %q, want what the last round wrote and the answer after it", reply.Text())
 	}
-	if len(calls) != 3 || !strings.Contains(calls[1].Error, "only looks something up") || !strings.Contains(calls[2].Error, "not run") {
+	if len(calls) != 3 || !strings.Contains(calls[1].Error, "nothing could act on") || !strings.Contains(calls[2].Error, "not run") {
 		t.Errorf("the calls were written down as %+v, want the last two left unrun", calls)
 	}
 }
@@ -1163,13 +1164,15 @@ func lookingAgain(ctx context.Context, req api.ChatRequest, fn func(api.Chunk) e
 	return says("there it is")(ctx, req, fn)
 }
 
-// A picture a call shows goes to a model that sees images in the call's answer;
-// a model that does not see is sent the answer's text alone. Nothing of it is
-// sent outside the answer.
+// A picture a call shows goes in the call's answer to a model shown a picture
+// there; any other is sent the answer's text alone, a model that sees among
+// them when its host turns a picture in an answer into text, as Venice does.
+// Nothing of it is sent outside the answer.
 func TestAPictureACallShowsIsInItsAnswer(t *testing.T) {
-	for _, sees := range []bool{true, false} {
+	for _, c := range []struct{ vision, answers bool }{{true, true}, {true, false}, {false, false}} {
+		sees := c.answers
 		model := chatModel()
-		model.Vision = sees
+		model.Vision, model.AnswerVision = c.vision, c.answers
 		f := &fakeRunner{model: model, chat: lookingAgain}
 		r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), shower{})
 		sendPhoto(t, r, "look", photo(t))
@@ -1197,7 +1200,7 @@ func TestAPictureACallShowsIsInItsAnswer(t *testing.T) {
 // showed instead of saying the picture is in its answer.
 func TestAPictureWhoseFileIsGoneIsNotShown(t *testing.T) {
 	model := chatModel()
-	model.Vision = true
+	model.Vision, model.AnswerVision = true, true
 	f := &fakeRunner{model: model, chat: lookingAgain}
 	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), shower{})
 	sha := sendPhoto(t, r, "look", photo(t))

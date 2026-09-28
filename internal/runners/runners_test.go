@@ -31,6 +31,8 @@ func openrouterCatalogue(t *testing.T) *httptest.Server {
 		switch r.URL.Path {
 		case "/v1/models":
 			w.Write(read("models.json"))
+		case "/v1/images/models":
+			w.Write(read("images_models.json"))
 		case "/v1/key":
 			// The answer to this one is the account's own spending, so there is
 			// no fixture of it (openrouter/testdata/SOURCES.md). Health reads
@@ -320,6 +322,12 @@ default_models:
 	if vision := RoleNeeds(config.RoleVision); vision != (api.Needs{Vision: true}) {
 		t.Errorf("vision needs = %+v", vision)
 	}
+	if image := RoleNeeds(config.RoleImage); image != (api.Needs{Edit: true}) {
+		t.Errorf("image needs = %+v", image)
+	}
+	if avatar := RoleNeeds(config.RoleAvatar); avatar != (api.Needs{Paint: true}) {
+		t.Errorf("avatar needs = %+v", avatar)
+	}
 }
 
 func TestCheckPasses(t *testing.T) {
@@ -336,9 +344,17 @@ models:
   look:
     runner: openrouter
     id: ~deepseek/deepseek-flash-latest
+  photos:
+    runner: openrouter
+    id: bytedance-seed/seedream-5-0-lite
+  face:
+    runner: openrouter
+    id: recraft/recraft-v4.1-flash
 default_models:
   chat: talk
   vision: look
+  image: photos
+  avatar: face
 `)
 	s, err := Configure(cfg, Host{})
 	if err != nil {
@@ -367,9 +383,13 @@ models:
   gone:
     runner: openrouter
     id: nope/nope
+  painter:
+    runner: openrouter
+    id: recraft/recraft-v4.1-flash
 default_models:
   chat: talk
   vision: blind
+  image: painter
 `)
 	s, err := Configure(cfg, Host{})
 	if err != nil {
@@ -383,6 +403,7 @@ default_models:
 		"models.talk: context: 99999999 is above the 1048576",
 		"default_models.vision",
 		"does not do vision",
+		"default_models.image: painter: the model does not do pictures from a picture and a prompt",
 		"models.gone",
 	} {
 		if !strings.Contains(err.Error(), want) {

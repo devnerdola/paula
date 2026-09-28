@@ -183,9 +183,29 @@ func (e *Engine) render(messages []store.Message, sees bool, last store.MessageI
 			}
 			out = append(out, api.Text(notes.Role, when))
 		}
+		if msg.Role == store.RoleAssistant && len(msg.Images()) > 0 {
+			out = append(out, e.herPhotos(msg, notes, r)...)
+			continue
+		}
 		out = append(out, e.message(msg, sees, r))
 	}
 	return out, at
+}
+
+// herPhotos is a message of hers that carried photos: what she wrote, and then
+// what the photos showed, told the way a time is. A host takes no picture in a
+// message of hers, and a model that read her photos written in her text would
+// write them there itself rather than take them.
+func (e *Engine) herPhotos(msg store.Message, notes api.Notes, r reading) []api.Message {
+	var shown []string
+	for _, p := range msg.Images() {
+		shown = append(shown, r.describe(p.SHA256))
+	}
+	photos := strings.Join(shown, " and ")
+	if msg.Text() == "" {
+		return []api.Message{api.Text(notes.Role, "You sent "+photos+".")}
+	}
+	return []api.Message{e.message(msg, false, r), api.Text(notes.Role, "Your message above came with "+photos+".")}
 }
 
 // reading is how messages are built: what a picture that is not sent as one is

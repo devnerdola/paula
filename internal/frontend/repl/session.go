@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"strings"
 
 	"nerdola.dev/x/paula/internal/frontend/api"
+	"nerdola.dev/x/paula/internal/media"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -17,7 +19,7 @@ const channel = "repl"
 const history = 10
 
 // serve reads the hello of one connection and keeps a session for it.
-func serve(ctx context.Context, conn io.ReadWriter, names api.Names, session func(context.Context, api.Adapter) error) error {
+func serve(ctx context.Context, conn io.ReadWriter, names api.Names, pictures *media.Files, session func(context.Context, api.Adapter) error) error {
 	w := newWriter(conn)
 	next, stop := iter.Pull2(frames[fromClient](conn))
 
@@ -42,11 +44,12 @@ func serve(ctx context.Context, conn io.ReadWriter, names api.Names, session fun
 	// reading, which is the only one that may ask for the next frame or stop
 	// asking.
 	a := &adapter{
-		out:     w,
-		names:   names,
-		history: first.Hello.History,
-		next:    next,
-		stop:    stop,
+		out:      w,
+		names:    names,
+		pictures: pictures,
+		history:  first.Hello.History,
+		next:     next,
+		stop:     stop,
 	}
 	code := 0
 	if err := session(ctx, a); err != nil {
@@ -74,8 +77,9 @@ func refuse(w *writer, why string) error {
 
 // adapter is one terminal, which takes one line at a time.
 type adapter struct {
-	out   *writer
-	names api.Names
+	out      *writer
+	names    api.Names
+	pictures *media.Files
 	// history is how much of the conversation this terminal asked for.
 	history int
 	next    func() (fromClient, error, bool)
@@ -143,14 +147,29 @@ func send(ctx context.Context, inputs chan<- api.Input, in api.Input) bool {
 }
 
 // Send shows one thing. What she says is hers, and everything else is the
-// terminal talking.
+// terminal talking. A terminal shows no picture, so a photo she sent is a
+// line of its own saying where its file is.
 func (a *adapter) Send(_ context.Context, m api.Outgoing) error {
-	text := m.Text
-	if m.Hers {
-		text = a.names.Character + ": " + text
+	var lines []string
+	if m.Text != "" || len(m.Pictures) == 0 {
+		lines = append(lines, m.Text)
 	}
-	return a.out.line(text)
+	for _, sha := range m.Pictures {
+		lines = append(lines, a.photo(sha))
+	}
+	for _, text := range lines {
+		if m.Hers {
+			text = a.names.Character + ": " + text
+		}
+		if err := a.out.line(text); err != nil {
+			return err
+		}
+	}
+	return nil
 }
+
+// photo is a picture as a terminal shows one: where its file is.
+func (a *adapter) photo(sha string) string { return "(photo: " + a.pictures.Path(sha) + ")" }
 
 // Stream shows a reply as she writes it: the text arrives on the line it is
 // being written on, and nothing is sent again when it ends.
@@ -180,7 +199,8 @@ func (a *adapter) ShowUserMessage(_ context.Context, m *store.Message) error {
 	return a.out.line(a.messageLine(m))
 }
 
-// messageLine is one stored message as a line: who said it, where, and what.
+// messageLine is one stored message as a line: who said it, where, and what,
+// with where the file of every picture it carried is.
 func (a *adapter) messageLine(m *store.Message) string {
 	who := a.names.Character
 	if m.Role == store.RoleUser {
@@ -189,7 +209,14 @@ func (a *adapter) messageLine(m *store.Message) string {
 			who = "[" + m.Channel + "] " + who
 		}
 	}
-	return who + ": " + m.Text()
+	var said []string
+	if text := m.Text(); text != "" {
+		said = append(said, text)
+	}
+	for _, p := range m.Images() {
+		said = append(said, a.photo(p.SHA256))
+	}
+	return who + ": " + strings.Join(said, " ")
 }
 
 // write is the terminal talking, rather than anything Paula said. One that

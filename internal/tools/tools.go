@@ -13,6 +13,7 @@ import (
 	"nerdola.dev/x/paula/internal/tools/callbacks"
 	"nerdola.dev/x/paula/internal/tools/images"
 	"nerdola.dev/x/paula/internal/tools/memory"
+	"nerdola.dev/x/paula/internal/tools/photos"
 	"nerdola.dev/x/paula/internal/tools/web"
 )
 
@@ -33,6 +34,7 @@ var kinds = map[string]Factory{
 	callbacks.Kind: callbacks.Open,
 	images.Kind:    images.Open,
 	memory.Kind:    memory.Open,
+	photos.Kind:    photos.Open,
 	web.Kind:       web.Open,
 }
 

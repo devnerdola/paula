@@ -10,6 +10,10 @@ id noted below.
 | `stream_tool_calls.sse` | `POST /chat/completions` with `deepseek/deepseek-v4-flash-0731`, streaming, `reasoning.enabled`, one tool offered; two calls came back |
 | `error_bad_model.json` | `POST /chat/completions` with a model id that does not exist, 400; the `user_id` the answer carries is dropped |
 | `error_unauthorized.json` | `POST /chat/completions` with a key that does not exist, 401 |
+| `images_models.json` | `GET /images/models` on 2026-09-28, five of the 55 entries |
+| `models_gemini_image.json` | `GET /models` on 2026-09-28, the entry of `google/gemini-3.1-flash-image`, one of the nine models that `GET /images/models` lists as well |
+| `images.json` | `POST /images` on 2026-09-28 with `google/gemini-3.1-flash-image`, `aspect_ratio: 3:4`, `resolution: 512`, the prompt `The same apple, cut in half, on the same table`, and as the one `input_references` entry a picture the same model had painted from `A red apple on a wooden kitchen table, morning light` |
+| `error_images_bad_model.json` | `POST /images` on 2026-09-28 with a model id that does not exist, 404 |
 
 `GET /key` has no fixture: it answers with the account's own spending.
 

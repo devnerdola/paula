@@ -56,6 +56,12 @@ func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return n
 
 func (f *fakeEnv) Show(store.Image) bool { return false }
 
+func (f *fakeEnv) Photo(context.Context, string, string, []byte) (*store.Image, error) {
+	return nil, nil
+}
+
+func (f *fakeEnv) SendPhoto(context.Context, int64) error { return nil }
+
 func (f *fakeEnv) Now() time.Time { return time.Time{} }
 
 func (f *fakeEnv) Callbacks(context.Context) ([]store.Callback, error) { return nil, nil }

@@ -257,6 +257,27 @@ func TestWhatSheSaysAndWhatTheTerminalSays(t *testing.T) {
 	}
 }
 
+// A terminal shows no picture, so a photo she sent is a line saying where its
+// file is in the data directory, after what she wrote, as it arrives and in
+// what was said before.
+func TestAPhotoOfHersIsWhereItsFileIs(t *testing.T) {
+	data := dir(t)
+	const sha = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	path := filepath.Join(data, "media", "9f", sha+".jpg")
+	f := open(t, data, "")
+	serving(t, f, func(ctx context.Context, a api.Adapter) error {
+		if err := a.Send(ctx, api.Outgoing{Text: "me right now", Hers: true, Pictures: []string{sha}}); err != nil {
+			return err
+		}
+		return a.(api.HistoryShower).ShowHistory(ctx, []store.Message{
+			{ID: 2, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartImage, SHA256: sha, MIME: "image/jpeg"}}},
+		})
+	})
+	term := dial(t, f, true)
+
+	term.waitFor(t, "the photo in what was said before", "Paula: me right now\nPaula: (photo: "+path+")\nPaula: (photo: "+path+")\n")
+}
+
 func TestWhatWasSaidBeforeAndSomewhereElse(t *testing.T) {
 	f := open(t, dir(t), "")
 	serving(t, f, func(ctx context.Context, a api.Adapter) error {

@@ -1,10 +1,13 @@
 package openrouter
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,17 +33,23 @@ func read(t *testing.T, name string) []byte {
 	return b
 }
 
-// catalogue answers the two listings from the captured ones.
+// listed answers the two listings from the captured ones.
+func listed(t *testing.T, w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	switch r.URL.Path {
+	case "/v1/models":
+		w.Write(read(t, "models.json"))
+	case "/v1/images/models":
+		w.Write(read(t, "images_models.json"))
+	default:
+		http.NotFound(w, r)
+	}
+}
+
 func catalogue(t *testing.T) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/models":
-			w.Write(read(t, "models.json"))
-		default:
-			http.NotFound(w, r)
-		}
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 	return ts
@@ -92,10 +101,14 @@ func model(t *testing.T, r *Runner, id string) api.Model {
 func TestCatalogue(t *testing.T) {
 	r := runner(t, catalogue(t).URL, "")
 
-	// A model that reasons, sees images, takes tools and answers a schema.
+	// A model that reasons, sees images, in the answer of a call as well,
+	// takes tools and answers a schema.
 	m := model(t, r, "~deepseek/deepseek-flash-latest")
-	if !m.Chat || !m.Vision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
+	if !m.Chat || !m.Vision || !m.AnswerVision || !m.Tools || !m.Reasoning || !m.StructuredOutputs {
 		t.Errorf("%s = %+v", m.ID, m)
+	}
+	if m := model(t, r, "inference-net/schematron-v2-turbo"); m.Vision || m.AnswerVision {
+		t.Errorf("%s = %+v, want a model that does not see", m.ID, m)
 	}
 	if m.Mandatory {
 		t.Errorf("%s reads as always reasoning", m.ID)
@@ -129,13 +142,78 @@ func TestCatalogue(t *testing.T) {
 		t.Errorf("%s = %+v, want reasoning with no efforts", m.ID, m)
 	}
 
+	// A model of the image models listing makes pictures and does not write.
+	// One that takes no reference paints from a prompt alone, one that may be
+	// given one makes a picture from another as well, and one that must be
+	// given one does only that. Each is made in the aspect ratios it lists.
+	for _, tc := range []struct {
+		id          string
+		paint, edit bool
+	}{
+		{"recraft/recraft-v4.1-flash", true, false},
+		{"meta/muse-image", true, false},
+		{"bytedance-seed/seedream-5-0-lite", true, true},
+		{"inclusionai/ming-image-0.1-design-layer", false, true},
+	} {
+		if m := model(t, r, tc.id); m.Paint != tc.paint || m.Edit != tc.edit || m.Chat || m.Parameters != nil {
+			t.Errorf("%s = %+v, want paint %v and edit %v", tc.id, m, tc.paint, tc.edit)
+		}
+	}
+	if m := model(t, r, "bytedance-seed/seedream-5-0-lite"); !slices.Contains(m.Ratios, "3:4") || !slices.Contains(m.Ratios, "4:3") {
+		t.Errorf("ratios = %v, want the ones the listing gives", m.Ratios)
+	}
+	if m := model(t, r, "~deepseek/deepseek-flash-latest"); m.Paint || m.Edit {
+		t.Errorf("%s = %+v, want no pictures", m.ID, m)
+	}
+
 	models, err := r.Models(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The listing of the models she can talk to is the whole catalogue.
+	if len(models) != 10 {
+		t.Errorf("models = %d, want the five each listing holds", len(models))
+	}
+}
+
+// A model on both listings is one model, which writes and makes pictures.
+func TestAModelOnBothListingsWritesAndPaints(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(read(t, "models_gemini_image.json"))
+			return
+		}
+		listed(t, w, r)
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "")
+
+	m := model(t, r, "google/gemini-3.1-flash-image")
+	if !m.Chat || !m.Vision || !m.Paint || !m.Edit || m.Context == 0 || m.Parameters == nil || len(m.Ratios) == 0 {
+		t.Errorf("%s = %+v, want what both listings say of it", m.ID, m)
+	}
+	models, err := r.Models(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(models) != 5 {
-		t.Errorf("models = %d, want the five the listing holds", len(models))
+		t.Errorf("models = %d, want the five of the image listing, one of them the model of both", len(models))
+	}
+}
+
+// A listing that cannot be read leaves the catalogue unread, whichever it is.
+func TestAListingThatFailsFailsTheCatalogue(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/images/models" {
+			http.Error(w, `{"error":{"message":"upstream is away"}}`, http.StatusBadGateway)
+			return
+		}
+		listed(t, w, r)
+	}))
+	t.Cleanup(ts.Close)
+
+	if _, err := runner(t, ts.URL, "retries: 0").Models(context.Background()); err == nil {
+		t.Error("the catalogue was read without the image models listing")
 	}
 }
 
@@ -143,8 +221,7 @@ func TestCatalogueIsReadOnce(t *testing.T) {
 	var reads int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reads++
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -154,8 +231,8 @@ func TestCatalogueIsReadOnce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if reads != 1 {
-		t.Errorf("reads = %d, want the listing read once", reads)
+	if reads != 2 {
+		t.Errorf("reads = %d, want the two listings read once", reads)
 	}
 }
 
@@ -169,10 +246,11 @@ func TestEveryRunReadsTheListing(t *testing.T) {
 	)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		reads++
+		if r.URL.Path == "/v1/models" {
+			reads++
+		}
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -378,15 +456,12 @@ func TestCapturedErrors(t *testing.T) {
 
 func TestEndpointsCheck(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.URL.Path == "/v1/models":
-			w.Write(read(t, "models.json"))
-		case strings.HasSuffix(r.URL.Path, "/endpoints"):
+		if strings.HasSuffix(r.URL.Path, "/endpoints") {
+			w.Header().Set("Content-Type", "application/json")
 			w.Write(read(t, "endpoints.json"))
-		default:
-			http.NotFound(w, r)
+			return
 		}
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -601,8 +676,7 @@ func TestACatalogueThatFailedIsAskedAgain(t *testing.T) {
 			http.Error(w, `{"error":{"message":"upstream is away"}}`, http.StatusBadGateway)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(read(t, "models.json"))
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 
@@ -707,14 +781,10 @@ func TestWhatAnAnswerSaysOfItselfIsRecorded(t *testing.T) {
 func TestTheCatalogueIsReadOnceUnderManyReaders(t *testing.T) {
 	var reads atomic.Int64
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/v1/models":
+		if r.URL.Path == "/v1/models" {
 			reads.Add(1)
-			w.Write(read(t, "models.json"))
-		default:
-			http.NotFound(w, r)
 		}
+		listed(t, w, r)
 	}))
 	t.Cleanup(ts.Close)
 	r := runner(t, ts.URL, "")
@@ -749,6 +819,139 @@ func TestTheCatalogueIsReadOnceUnderManyReaders(t *testing.T) {
 	}
 	if again[0].ID == lists[0][0].ID && len(again) > 1 {
 		t.Error("a reader that sorted its list sorted the runner's")
+	}
+}
+
+// A model that only makes pictures is sent none of what a chat is, so the
+// settings its runner writes for every model are not held against it: not
+// the reasoning it would be asked for, and not the hosts its routing allows,
+// which are never asked about. A model that chats is held to the same ones.
+func TestAModelThatOnlyMakesPicturesIsHeldToNoChatSetting(t *testing.T) {
+	var endpoints int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/endpoints") {
+			endpoints++
+		}
+		listed(t, w, r)
+	}))
+	t.Cleanup(ts.Close)
+	r := runner(t, ts.URL, "provider:\n  routing:\n    only: [novita]")
+	s := api.Settings{
+		Reasoning: api.ReasoningSettings{Mode: api.ReasoningOn, Effort: "high"},
+		Provider:  providerOf(t, r),
+	}
+	ctx := context.Background()
+	if err := check(ctx, r, api.Checked{ID: "recraft/recraft-v4.1-flash", Settings: s, Needs: api.Needs{Paint: true}}); err != nil {
+		t.Errorf("a model that only paints was held to the chat settings: %v", err)
+	}
+	if endpoints != 0 {
+		t.Errorf("the hosts of a model that only paints were asked about %d times", endpoints)
+	}
+	if err := check(ctx, r, api.Checked{ID: "inference-net/schematron-v2-turbo", Settings: s}); err == nil {
+		t.Error("a model that chats and does not reason took reasoning on")
+	}
+}
+
+// painted serves the listings, and one captured file with a status for any
+// other path, keeping the path and the body of what it was sent.
+func painted(t *testing.T, status int, file string) (*httptest.Server, *string, *map[string]any) {
+	t.Helper()
+	body := read(t, file)
+	var path string
+	var sent map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/models") {
+			listed(t, w, r)
+			return
+		}
+		path = r.URL.Path
+		json.NewDecoder(r.Body).Decode(&sent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		w.Write(body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &path, &sent
+}
+
+// An edit sends its picture as the one reference, as a data URL, in the
+// aspect ratio of its shape among the ones the model lists. What comes back is
+// the picture the answer carries as base64, and what it cost is kept on the
+// record.
+func TestAnEditIsThePictureOpenRouterMade(t *testing.T) {
+	var answer struct {
+		Data []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(read(t, "images.json"), &answer); err != nil {
+		t.Fatal(err)
+	}
+	made, err := base64.StdEncoding.DecodeString(answer.Data[0].B64JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ts, path, sent := painted(t, http.StatusOK, "images.json")
+	r := runner(t, ts.URL, "")
+	kept := &records{}
+	got, err := r.Edit(context.Background(), api.EditRequest{
+		Model:    "google/gemini-3.1-flash-image",
+		Prompt:   "The same apple, cut in half, on the same table",
+		Shape:    api.ShapePortrait,
+		Picture:  made,
+		Recorder: kept,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, made) {
+		t.Errorf("the picture is %d bytes, want the %d the answer carries", len(got), len(made))
+	}
+	refs, _ := (*sent)["input_references"].([]any)
+	ref, _ := refs[0].(map[string]any)
+	url, _ := ref["image_url"].(map[string]any)
+	if *path != "/v1/images" || (*sent)["model"] != "google/gemini-3.1-flash-image" ||
+		(*sent)["prompt"] != "The same apple, cut in half, on the same table" || (*sent)["aspect_ratio"] != "3:4" ||
+		len(refs) != 1 || ref["type"] != "image_url" ||
+		url["url"] != "data:image/png;base64,"+base64.StdEncoding.EncodeToString(made) {
+		t.Errorf("sent to %s: model %v, prompt %v, aspect_ratio %v, %d references", *path,
+			(*sent)["model"], (*sent)["prompt"], (*sent)["aspect_ratio"], len(refs))
+	}
+	if len(kept.ended) != 1 || kept.ended[0].Usage == nil || kept.ended[0].Usage.Cost != 0.045386 {
+		t.Errorf("records = %+v, want the picture kept with what it cost", kept.ended)
+	}
+}
+
+// A paint sends the prompt alone, in the aspect ratio of its shape when the
+// model lists one for it, and none when it lists none.
+func TestAPaintSendsThePromptAlone(t *testing.T) {
+	for _, tc := range []struct{ id, shape, ratio string }{
+		{"recraft/recraft-v4.1-flash", api.ShapeLandscape, "4:3"},
+		{"meta/muse-image", api.ShapeSquare, ""},
+	} {
+		ts, _, sent := painted(t, http.StatusOK, "images.json")
+		r := runner(t, ts.URL, "")
+		if _, err := r.Paint(context.Background(), api.PaintRequest{Model: tc.id, Prompt: "A red apple", Shape: tc.shape}); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"model": tc.id, "prompt": "A red apple"}
+		if tc.ratio != "" {
+			want["aspect_ratio"] = tc.ratio
+		}
+		if !maps.Equal(*sent, want) {
+			t.Errorf("%s as %q: sent %v, want %v", tc.id, tc.shape, *sent, want)
+		}
+	}
+}
+
+// A picture OpenRouter will not make is refused in its words.
+func TestAPictureOpenRouterWillNotMakeIsRefusedInItsWords(t *testing.T) {
+	ts, _, _ := painted(t, http.StatusNotFound, "error_images_bad_model.json")
+	_, err := runner(t, ts.URL, "").Paint(context.Background(), api.PaintRequest{Model: "meta/muse-image", Prompt: "A red apple"})
+	var e *api.APIError
+	if !errors.As(err, &e) || e.Status != http.StatusNotFound || e.Message != `No model found for "nope/does-not-paint"` {
+		t.Errorf("a paint OpenRouter refused = %v", err)
 	}
 }
 
@@ -904,6 +1107,10 @@ func TestRetryAfterAsADateAndAsZero(t *testing.T) {
 // An entry that says little is not a model that can do nothing.
 func TestAListingThatSaysLittle(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			listed(t, w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"data":[{"id":"quiet/model","architecture":`+
 			`{"input_modalities":["text"],"output_modalities":["text"]}}]}`)

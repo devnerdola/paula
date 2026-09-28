@@ -1,10 +1,15 @@
 // Package venice talks to Venice, which serves models behind an
-// OpenAI-compatible API, and searches the web and reads pages beside them.
+// OpenAI-compatible API, searches the web and reads pages beside them, and
+// makes pictures.
 package venice
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 
 	"nerdola.dev/x/paula/internal/config"
@@ -167,13 +172,23 @@ type listing struct {
 				ReasoningEffortOptions  []string `json:"reasoningEffortOptions"`
 				SupportsResponseSchema  bool     `json:"supportsResponseSchema"`
 			} `json:"capabilities"`
+			Constraints struct {
+				AspectRatios []string `json:"aspectRatios"`
+			} `json:"constraints"`
 		} `json:"model_spec"`
 	} `json:"data"`
 }
 
 // listing is what the API serves, as the models Paula speaks of. The listing
-// with no type is the models that write text, and nothing Paula does asks
-// anything of the rest.
+// with no type is the models that write text, the image listing the models
+// that paint a picture from a prompt, and the inpaint listing the models that
+// make one from a picture and a prompt. The voices and the embeddings are not
+// asked for.
+//
+// No model is shown a picture in the answer of a call. Venice documents that
+// answer as a string, and turns a picture put there into the text of its
+// bytes: Claude, GPT and DeepSeek were each counted over ten thousand tokens
+// for a picture of 256 pixels there, and none could say what it showed.
 func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 	var list listing
 	if err := r.client.Get(ctx, "/models", &list); err != nil {
@@ -198,6 +213,89 @@ func (r *Runner) listing(ctx context.Context) ([]api.Model, error) {
 		}
 		out = append(out, model)
 	}
+
+	for _, kind := range []string{"image", "inpaint"} {
+		var list listing
+		if err := r.client.Get(ctx, "/models?type="+kind, &list); err != nil {
+			return nil, err
+		}
+		for _, m := range list.Data {
+			out = append(out, api.Model{
+				ID:     m.ID,
+				Paint:  kind == "image",
+				Edit:   kind == "inpaint",
+				Ratios: m.ModelSpec.Constraints.AspectRatios,
+			})
+		}
+	}
+	return out, nil
+}
+
+// Paint asks Venice for a picture of what a prompt describes.
+func (r *Runner) Paint(ctx context.Context, req api.PaintRequest) ([]byte, error) {
+	prov, errs := decodeProvider(req.Settings.Provider)
+	if len(errs) > 0 {
+		return nil, errs[0]
+	}
+	in := map[string]any{
+		"model":          req.Model,
+		"prompt":         req.Prompt,
+		"format":         "jpeg",
+		"return_binary":  true,
+		"hide_watermark": prov.Image.hideWatermark(),
+		"safe_mode":      prov.Image.safeMode(),
+	}
+	return r.picture(ctx, "/image/generate", in, req.Model, req.Shape, req.Recorder)
+}
+
+// Edit asks Venice for a picture made from another, as a prompt says.
+func (r *Runner) Edit(ctx context.Context, req api.EditRequest) ([]byte, error) {
+	prov, errs := decodeProvider(req.Settings.Provider)
+	if len(errs) > 0 {
+		return nil, errs[0]
+	}
+	in := map[string]any{
+		"model":         req.Model,
+		"prompt":        req.Prompt,
+		"image":         base64.StdEncoding.EncodeToString(req.Picture),
+		"output_format": "jpeg",
+		"safe_mode":     prov.Image.safeMode(),
+	}
+	return r.picture(ctx, "/image/edit", in, req.Model, req.Shape, req.Recorder)
+}
+
+// picture posts a request whose answer is the picture itself, in the aspect
+// ratio of its shape among the ones the model lists. A JPEG is asked for,
+// since that is what Paula keeps a picture as.
+func (r *Runner) picture(ctx context.Context, path string, in map[string]any, id, shape string, rec api.Recorder) ([]byte, error) {
+	m, err := r.Model(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if ratio := m.Ratio(shape); ratio != "" {
+		in["aspect_ratio"] = ratio
+	}
+	body, err := json.Marshal(in)
+	if err != nil {
+		return nil, err
+	}
+	var out []byte
+	err = r.client.Call(ctx, transport.Ask{
+		Method:   http.MethodPost,
+		Path:     path,
+		Model:    id,
+		Body:     body,
+		Header:   http.Header{"Accept": {"*/*"}},
+		Recorder: rec,
+		Read: func(body io.Reader, _ *api.Record) error {
+			var err error
+			out, err = io.ReadAll(body)
+			return err
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -207,6 +305,13 @@ func (r *Runner) Check(ctx context.Context, m api.Checked) []error {
 	model, err := r.Model(ctx, m.ID)
 	if err != nil {
 		return []error{err}
+	}
+	// A model that only makes pictures is sent none of what a chat is, so
+	// none of it is held against it: the runner's settings are every model's
+	// defaults, a picture's as well. Its image block is held as it is read.
+	if !model.Chat {
+		_, errs := decodeProvider(m.Settings.Provider)
+		return errs
 	}
 	p := &api.Problems{}
 	p.Add(m.Settings.Validate()...)
@@ -238,8 +343,14 @@ func (r *Runner) Check(ctx context.Context, m api.Checked) []error {
 func (r *Runner) checkFallbacks(ctx context.Context, prov *provider) []error {
 	var errs []error
 	for _, id := range prov.Fallbacks {
-		if _, err := r.Model(ctx, id); err != nil {
+		m, err := r.Model(ctx, id)
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("provider.fallbacks: %w", err))
+		case !m.Chat:
+			// A reply falls back to a model that writes it, which a model that
+			// only makes pictures is not.
+			errs = append(errs, fmt.Errorf("provider.fallbacks: %s does not chat", id))
 		}
 	}
 	if len(prov.Fallbacks) > maxFallbacks {

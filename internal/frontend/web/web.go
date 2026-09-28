@@ -66,6 +66,8 @@ type Frontend struct {
 	log    *slog.Logger
 	names  api.Names
 	files  *media.Files
+	// avatar is the file of her picture, and empty when there is none.
+	avatar string
 
 	// told numbers everything the run has put on a page, whichever page it went
 	// to. A browser opening the stream again says the number it had, which is
@@ -130,8 +132,9 @@ func Open(s config.Section, h api.Host) (*Frontend, error) {
 		names:  h.Names,
 		// The pictures are read back as they were kept, so nothing here says
 		// how large one may be.
-		files: media.New(h.DataDir, 0),
-		pages: make(map[string]*adapter),
+		files:  media.New(h.DataDir, 0),
+		avatar: h.Avatar,
+		pages:  make(map[string]*adapter),
 	}, nil
 }
 
@@ -205,6 +208,7 @@ func (f *Frontend) handler(ctx context.Context, session func(context.Context, ap
 	mux.HandleFunc("POST /api/stop", f.stopped)
 	mux.HandleFunc("GET /api/history", f.history)
 	mux.HandleFunc("GET /api/media/{sha}", f.picture)
+	mux.HandleFunc("GET /api/avatar", f.face)
 
 	out := http.NewServeMux()
 	out.Handle("GET /"+worker, http.FileServerFS(files))
@@ -480,4 +484,26 @@ func (f *Frontend) picture(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", media.MIMEJPEG)
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(b))
+}
+
+// face serves her avatar, as the file it is. A file put in its place is
+// served in its place, so the browser asks each time whether it changed.
+func (f *Frontend) face(w http.ResponseWriter, r *http.Request) {
+	if f.avatar == "" {
+		http.NotFound(w, r)
+		return
+	}
+	file, err := os.Open(f.avatar)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	http.ServeContent(w, r, f.avatar, info.ModTime(), file)
 }

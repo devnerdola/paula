@@ -99,13 +99,11 @@ func (a *adapter) Start(context.Context) (<-chan api.Input, error) {
 }
 
 // Send puts one thing on the page, which is the paragraphs of it: a page shows
-// a message at a time, the way the chat it looks like does.
+// a message at a time, the way the chat it looks like does. The photos she
+// sent come after them, in a bubble of their own, as the page reads them back.
 func (a *adapter) Send(_ context.Context, m api.Outgoing) error {
 	texts := api.Bubbles(m.Text, nil)
-	if len(texts) == 0 && len(m.Choices) == 0 {
-		return nil
-	}
-	if len(texts) == 0 {
+	if len(texts) == 0 && len(m.Choices) > 0 {
 		// A choice with nothing said before it is still a choice to offer.
 		texts = []string{""}
 	}
@@ -118,7 +116,10 @@ func (a *adapter) Send(_ context.Context, m api.Outgoing) error {
 			return err
 		}
 	}
-	return nil
+	if len(m.Pictures) == 0 {
+		return nil
+	}
+	return a.bubbled(message{Hers: m.Hers, Pictures: m.Pictures})
 }
 
 // Stream shows a reply as she writes it: every text in a bubble of its own,
@@ -238,11 +239,12 @@ func (a *adapter) ShowHistory(_ context.Context, ms []store.Message) error {
 	out := struct {
 		Page string `json:"page"`
 		// Character is who the page is a conversation with, which is what it
-		// calls itself.
+		// calls itself, and Avatar says her face is there to show with it.
 		Character string `json:"character,omitempty"`
+		Avatar    bool   `json:"avatar,omitempty"`
 		Messages  []said `json:"messages,omitempty"`
 		Caught    bool   `json:"caught,omitempty"`
-	}{Page: a.id, Character: a.f.names.Character, Caught: a.caught}
+	}{Page: a.id, Character: a.f.names.Character, Avatar: a.f.avatar != "", Caught: a.caught}
 	if !a.caught {
 		out.Messages = sayings(ms)
 	}
@@ -296,13 +298,15 @@ func (a *adapter) asks(ctx context.Context, before store.MessageID) ([]said, err
 	}
 }
 
-// message is one bubble of the page: what it says, who said it, and what can
-// be picked from it. An edit carries the number of the bubble it is about.
+// message is one bubble of the page: what it says, who said it, what can be
+// picked from it, and the pictures it holds. An edit carries the number of the
+// bubble it is about.
 type message struct {
-	ID      int64    `json:"id"`
-	Text    string   `json:"text"`
-	Hers    bool     `json:"hers,omitempty"`
-	Choices []choice `json:"choices,omitempty"`
+	ID       int64    `json:"id"`
+	Text     string   `json:"text"`
+	Hers     bool     `json:"hers,omitempty"`
+	Choices  []choice `json:"choices,omitempty"`
+	Pictures []string `json:"pictures,omitempty"`
 }
 
 // choice is one thing that can be picked. What comes back when it is picked is

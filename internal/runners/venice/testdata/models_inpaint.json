@@ -1,0 +1,133 @@
+{
+  "data": [
+    {
+      "created": 1776902400,
+      "id": "wan-2-7-pro-edit",
+      "model_spec": {
+        "pricing": {
+          "inpaint": {
+            "usd": 0.094,
+            "diem": 0.094
+          }
+        },
+        "constraints": {
+          "aspectRatios": [
+            "auto"
+          ],
+          "promptCharacterLimit": 5000,
+          "combineImages": true,
+          "maxInputImages": 6,
+          "singleImageAspectRatio": true,
+          "defaultResolution": "1K",
+          "resolutions": [
+            "1K",
+            "2K"
+          ]
+        },
+        "supportsOptimizePromptThinking": false,
+        "name": "Wan 2.7 Pro",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "inpaint"
+    },
+    {
+      "created": 1772064000,
+      "id": "nano-banana-2-edit",
+      "model_spec": {
+        "pricing": {
+          "inpaint": {
+            "usd": 0.1,
+            "diem": 0.1
+          },
+          "resolutions": {
+            "1K": {
+              "usd": 0.1,
+              "diem": 0.1
+            },
+            "2K": {
+              "usd": 0.14,
+              "diem": 0.14
+            },
+            "4K": {
+              "usd": 0.19,
+              "diem": 0.19
+            }
+          }
+        },
+        "constraints": {
+          "aspectRatios": [
+            "auto",
+            "1:1",
+            "3:2",
+            "16:9",
+            "21:9",
+            "9:16",
+            "2:3",
+            "3:4",
+            "4:5"
+          ],
+          "promptCharacterLimit": 32768,
+          "combineImages": true,
+          "maxInputImages": 6,
+          "singleImageAspectRatio": true,
+          "defaultResolution": "1K",
+          "resolutions": [
+            "1K",
+            "2K",
+            "4K"
+          ]
+        },
+        "supportsOptimizePromptThinking": false,
+        "name": "Nano Banana 2",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "inpaint"
+    },
+    {
+      "created": 1788393600,
+      "id": "muse-image-edit",
+      "model_spec": {
+        "pricing": {
+          "inpaint": {
+            "usd": 0.02,
+            "diem": 0.02
+          }
+        },
+        "constraints": {
+          "aspectRatios": [
+            "auto",
+            "1:1",
+            "3:2",
+            "16:9",
+            "21:9",
+            "9:16",
+            "2:3",
+            "3:4"
+          ],
+          "promptCharacterLimit": 10000,
+          "combineImages": true,
+          "maxInputImages": 6,
+          "singleImageAspectRatio": true
+        },
+        "supportsOptimizePromptThinking": false,
+        "name": "Muse Image",
+        "offline": false,
+        "privacy": "anonymized",
+        "traits": []
+      },
+      "object": "model",
+      "owned_by": "venice.ai",
+      "type": "inpaint"
+    }
+  ],
+  "object": "list",
+  "type": "inpaint"
+}

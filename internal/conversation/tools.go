@@ -52,10 +52,11 @@ func (t tools) looksUp(name string) bool {
 // A call a reply asked for is left unrun, and answered with why, once running
 // it would come to nothing.
 var (
-	// errLookup is a call that only looks something up, asked for in the last
-	// round a reply may take calls in: nothing it answered would be read
-	// before the reply is asked for its answer.
-	errLookup = errors.New("not run: it only looks something up, and the reply had taken every round of calls it may")
+	// errLookup is a call that only looks something up, or whose answer only a
+	// later round could act on, asked for in the last round a reply may take
+	// calls in: nothing it answered would be read before the reply is asked
+	// for its answer.
+	errLookup = errors.New("not run: nothing could act on what it answers, since the reply had taken every round of calls it may")
 	// errNotRun is a call asked for in the round after the last, which was
 	// asked for an answer with no call in it.
 	errNotRun = errors.New("not run: the reply had taken every round of calls it may")
@@ -128,7 +129,7 @@ func (e *Engine) run(ctx context.Context, a *attempt, c api.ToolCall, call int64
 }
 
 // pictures are the pictures a call showed, which go to the model in its
-// answer, and whether the model sees them.
+// answer, and whether the model sees a picture there.
 type pictures struct {
 	sees   bool
 	images [][]byte
@@ -174,9 +175,9 @@ func (v env) Image(ctx context.Context, id int64) (*store.Image, error) {
 	return v.e.store.Image(ctx, id)
 }
 
-// Show sends a picture in the call's answer, to a model that sees images: any
-// other, and one whose file cannot be read, has what it showed in the
-// answer's text.
+// Show sends a picture in the call's answer, to a model shown a picture
+// there: any other, and one whose file cannot be read, has what it showed in
+// the answer's text.
 func (v env) Show(img store.Image) bool {
 	if v.shown == nil || !v.shown.sees {
 		return false

@@ -36,9 +36,21 @@ models:
     runner: venice
     id: deepseek-v4-1-flash
 
+  # The photos she takes are made from her avatar by one model, and the avatar
+  # is painted from the card by another, once, when data_dir holds none.
+  photos:
+    runner: venice
+    id: seedream-v5-lite-edit
+
+  face:
+    runner: venice
+    id: seedream-v5-lite
+
 default_models:
   chat: pro
   vision: flash
+  image: photos
+  avatar: face
 
 frontends:
   repl:
@@ -54,13 +66,14 @@ frontends:
   #   listen: 127.0.0.1:8484
 
 # What she can do in the middle of a reply: list, search, keep and forget
-# memories; list the pictures you sent and look at one again; schedule a time
-# to write to you on her own; and search the web and read a page, through the
-# runner web names. None of it is ever in her prompt, so these are how she
-# reaches them.
+# memories; list the pictures of the conversation and look at one again;
+# schedule a time to write to you on her own; search the web and read a page,
+# through the runner web names; and take photos of herself and send them. None
+# of it is ever in her prompt, so these are how she reaches them.
 tools:
   memory:
   images:
   callbacks:
   web:
     runner: venice
+  photos:

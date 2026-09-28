@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,6 +259,7 @@ func (s *stream) next() event {
 type opening struct {
 	Page      string `json:"page"`
 	Character string `json:"character"`
+	Avatar    bool   `json:"avatar"`
 	Messages  []said `json:"messages"`
 	Caught    bool   `json:"caught"`
 }
@@ -607,6 +609,76 @@ func TestANoteGoesToThePage(t *testing.T) {
 	page.decode(e, &got)
 	if got.Text != "looking up Ana" {
 		t.Errorf("the note says %q", got.Text)
+	}
+}
+
+// The photos she sent come after what she wrote, in a bubble of their own, as
+// the page reads them back, by what they hold, which is what the page asks for
+// each by.
+func TestHerPhotosGoInABubbleOfTheirOwn(t *testing.T) {
+	const sha = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+	srv, s := serving(t, running(t, t.TempDir()))
+	page := opens(t, srv)
+	page.synced()
+	a := s.opened(t)
+
+	if err := a.Send(t.Context(), api.Outgoing{Text: "me right now\n\nat the window", Hers: true, Pictures: []string{sha}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Send(t.Context(), api.Outgoing{Hers: true, Pictures: []string{sha}}); err != nil {
+		t.Fatal(err)
+	}
+	var got []message
+	for range 4 {
+		e := page.next()
+		if e.name != "message" {
+			t.Fatalf("a bubble arrived as %q", e.name)
+		}
+		var m message
+		page.decode(e, &m)
+		got = append(got, m)
+	}
+	if got[0].Text != "me right now" || len(got[0].Pictures) != 0 ||
+		got[1].Text != "at the window" || len(got[1].Pictures) != 0 ||
+		got[2].Text != "" || !got[2].Hers || !slices.Equal(got[2].Pictures, []string{sha}) ||
+		got[3].Text != "" || !got[3].Hers || !slices.Equal(got[3].Pictures, []string{sha}) {
+		t.Errorf("the bubbles are %+v", got)
+	}
+}
+
+// Her avatar is served to the page, which is told it is there as it opens,
+// and a run with none serves none and says nothing of one.
+func TestTheAvatarIsServedToThePage(t *testing.T) {
+	png, err := os.ReadFile(filepath.Join("..", "..", "media", "testdata", "red-blue-8x4.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "avatar.png")
+	if err := os.WriteFile(path, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	f := running(t, dir)
+	f.avatar = path
+	srv, _ := serving(t, f)
+	page := opens(t, srv)
+	if !page.synced().Avatar {
+		t.Error("the page was not told there is an avatar")
+	}
+	resp := page.gets(srv, "/api/avatar")
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("Content-Type") != "image/png" || !bytes.Equal(body, png) {
+		t.Errorf("the avatar was served as %s, %q, %d bytes", resp.Status, resp.Header.Get("Content-Type"), len(body))
+	}
+
+	srv, _ = serving(t, running(t, t.TempDir()))
+	page = opens(t, srv)
+	if page.synced().Avatar {
+		t.Error("a page with no avatar was told there is one")
+	}
+	if resp := page.gets(srv, "/api/avatar"); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("no avatar was served as %s", resp.Status)
 	}
 }
 

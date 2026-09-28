@@ -7,7 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"mime/multipart"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -30,8 +34,8 @@ const (
 	downloadWait = 2 * time.Minute
 )
 
-// client talks to the Bot API. Every call is a POST of JSON to
-// <url>/bot<token>/<method>, which is the whole of what Paula needs of it.
+// client talks to the Bot API. Every call is a POST to
+// <url>/bot<token>/<method>: of JSON, or of a form for one that carries a file.
 type client struct {
 	url   string
 	token string
@@ -75,13 +79,41 @@ func (e *apiError) Error() string {
 // a method whose answer says nothing but that it worked. within is the whole
 // the call may take.
 func (c *client) call(ctx context.Context, method string, within time.Duration, body, out any) error {
-	ctx, cancel := context.WithTimeout(ctx, within)
-	defer cancel()
-
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
+	return c.post(ctx, method, within, "application/json", b, out)
+}
+
+// upload sends one method as a form, with a file in the part named for it:
+// the fields that are not the file are its other parameters.
+func (c *client) upload(ctx context.Context, method string, fields map[string]string, file string, data []byte, out any) error {
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	for _, k := range slices.Sorted(maps.Keys(fields)) {
+		if err := w.WriteField(k, fields[k]); err != nil {
+			return err
+		}
+	}
+	part, err := w.CreateFormFile(file, file+".jpg")
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(data); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.post(ctx, method, c.wait, w.FormDataContentType(), b.Bytes(), out)
+}
+
+// post sends one method with a body of a type, and decodes its result.
+func (c *client) post(ctx context.Context, method string, within time.Duration, kind string, b []byte, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, within)
+	defer cancel()
+
 	// The token is in the path of every request, so it is in the error of every
 	// request that fails. What names the method is the method, not the URL.
 	url := c.url + "/bot" + c.token + "/" + method
@@ -89,7 +121,7 @@ func (c *client) call(ctx context.Context, method string, within time.Duration, 
 	if err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", kind)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -244,20 +276,48 @@ func (c *client) send(ctx context.Context, chat int64, text string, buttons []bu
 		}
 		body["reply_markup"] = map[string]any{"inline_keyboard": rows}
 	}
-	var wait time.Duration
-	for try := 1; ; try++ {
+	var id int64
+	err := c.again(ctx, func() error {
 		var out struct {
 			MessageID int64 `json:"message_id"`
 		}
 		err := c.call(ctx, "sendMessage", c.wait, body, &out)
+		id = out.MessageID
+		return err
+	})
+	return id, err
+}
+
+// sendPhoto sends one of her photos to a chat, and sends it again as a
+// message is.
+func (c *client) sendPhoto(ctx context.Context, chat int64, photo []byte) error {
+	return c.again(ctx, func() error {
+		return c.upload(ctx, "sendPhoto", map[string]string{"chat_id": strconv.FormatInt(chat, 10)}, "photo", photo, nil)
+	})
+}
+
+// again sends a request until it is taken, sendTries times at most, waiting
+// between tries as long as the API asks.
+func (c *client) again(ctx context.Context, send func() error) error {
+	var wait time.Duration
+	for try := 1; ; try++ {
+		err := send()
 		if err == nil || try >= sendTries || !worthAgain(err) {
-			return out.MessageID, err
+			return err
 		}
 		wait = after(err, wait)
 		if werr := c.pause(ctx, wait); werr != nil {
-			return 0, err
+			return err
 		}
 	}
+}
+
+// setPhoto makes a JPEG the bot's profile photo. Telegram takes one only as
+// a file uploaded with the request, attached from the part it is named by.
+func (c *client) setPhoto(ctx context.Context, photo []byte) error {
+	return c.upload(ctx, "setMyProfilePhoto", map[string]string{
+		"photo": `{"type":"static","photo":"attach://avatar"}`,
+	}, "avatar", photo, nil)
 }
 
 // worthAgain reports whether a request is worth sending again: one the API
