@@ -2,6 +2,9 @@ package openai
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -126,7 +129,7 @@ func client(t *testing.T, url string) *transport.Client {
 }
 
 func TestHookFailureStopsTheRequest(t *testing.T) {
-	_, err := chatBody(api.ChatRequest{Model: "m"}, parts{
+	_, _, err := chatBody(api.ChatRequest{Model: "m"}, parts{
 		body: func(map[string]any, api.ChatRequest) error { return errors.New("no") },
 	})
 	if err == nil {
@@ -294,7 +297,7 @@ func TestAnAnswerThatCarriesNoEvents(t *testing.T) {
 // The pieces go as one, joined by a blank line, which is how the conversation
 // joins them when it reads the message back.
 func TestAMessageOfSeveralTextParts(t *testing.T) {
-	body, err := chatBody(api.ChatRequest{
+	body, _, err := chatBody(api.ChatRequest{
 		Model: "some/model",
 		Messages: []api.Message{{Role: api.RoleUser, Parts: []api.Part{
 			{Type: api.PartText, Text: "one"},
@@ -317,7 +320,7 @@ func TestAMessageOfSeveralTextParts(t *testing.T) {
 // answer goes back under the call it answers, as both APIs document them.
 func TestARoundOfCallsGoesBackAsTheAPIsDocumentIt(t *testing.T) {
 	params := json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"}}}`)
-	body, err := chatBody(api.ChatRequest{
+	body, _, err := chatBody(api.ChatRequest{
 		Model: "some/model",
 		Messages: []api.Message{
 			api.Text(api.RoleUser, "where does Ana live?"),
@@ -385,7 +388,7 @@ func TestARoundOfCallsGoesBackAsTheAPIsDocumentIt(t *testing.T) {
 
 // A round asked for an answer with no call in it says so.
 func TestARoundWithNoCallSaysSo(t *testing.T) {
-	body, err := chatBody(api.ChatRequest{
+	body, _, err := chatBody(api.ChatRequest{
 		Model:      "some/model",
 		Messages:   []api.Message{api.Text(api.RoleUser, "hey")},
 		ToolChoice: api.ToolChoiceNone,
@@ -401,7 +404,7 @@ func TestARoundWithNoCallSaysSo(t *testing.T) {
 // A request that offers no tools says nothing of them, so it is the request it
 // always was.
 func TestARequestOfferingNoToolsSaysNothingOfThem(t *testing.T) {
-	body, err := chatBody(api.ChatRequest{
+	body, _, err := chatBody(api.ChatRequest{
 		Model:    "some/model",
 		Messages: []api.Message{api.Text(api.RoleUser, "hey")},
 	}, parts{})
@@ -535,5 +538,47 @@ func TestAStreamThatIsCutOff(t *testing.T) {
 	// which is what the error is about.
 	if text.String() != "one " {
 		t.Errorf("text = %q, want what the host managed to send", text.String())
+	}
+}
+
+// A picture a chat carries goes to the host as its bytes and into the record
+// as the sha256 it is kept under in the media directory, so the record of a
+// prompt of pictures is a line for each. A chat with no picture is recorded as
+// it was sent.
+func TestAPictureIsRecordedByItsName(t *testing.T) {
+	ts, srv := newServer(t, streamed("hey"), streamed("hey"))
+	c := client(t, ts.URL)
+	rec := &recorder{}
+	data := []byte("a picture")
+	sum := sha256.Sum256(data)
+	_, err := Chat(context.Background(), c, parts{}, api.ChatRequest{
+		Model: "some/model", Recorder: rec,
+		Messages: []api.Message{{Role: api.RoleUser, Parts: []api.Part{
+			{Type: api.PartText, Text: "look"},
+			{Type: api.PartImage, MIME: "image/jpeg", Data: data},
+		}}},
+	}, func(api.Chunk) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := srv.bodies[0]
+	raw := `"url":"data:image/jpeg;base64,` + base64.StdEncoding.EncodeToString(data) + `"`
+	name := `"url":"sha256:` + hex.EncodeToString(sum[:]) + `"`
+	if !strings.Contains(sent, raw) {
+		t.Errorf("the host was sent %s, want the picture's bytes in it", sent)
+	}
+	kept := string(rec.ended[0].RequestBody)
+	if !strings.Contains(kept, name) || strings.Contains(kept, "base64,") {
+		t.Errorf("the record kept %s, want the picture by its name", kept)
+	}
+	if strings.Replace(kept, name, raw, 1) != sent {
+		t.Errorf("the record differs from what was sent beyond the picture:\n%s\n%s", kept, sent)
+	}
+
+	if err := asked(context.Background(), c, rec); err != nil {
+		t.Fatal(err)
+	}
+	if kept := string(rec.ended[1].RequestBody); kept != srv.bodies[1] {
+		t.Errorf("a chat with no picture was recorded as %s, want as sent: %s", kept, srv.bodies[1])
 	}
 }

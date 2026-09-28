@@ -2,7 +2,9 @@ package openai
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -12,10 +14,22 @@ import (
 	"nerdola.dev/x/paula/internal/runners/api"
 )
 
-func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
+// picture is an image part of a body, and the sha256 of the picture it carries,
+// which is the name the picture is kept under in the media directory.
+type picture struct {
+	part map[string]any
+	sha  string
+}
+
+// chatBody builds the body of a chat request, and says which of its parts
+// carry a picture.
+func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, []picture, error) {
 	msgs := make([]map[string]any, len(req.Messages))
+	var pictures []picture
 	for i, m := range req.Messages {
-		msgs[i] = message(m)
+		var carried []picture
+		msgs[i], carried = message(m)
+		pictures = append(pictures, carried...)
 		hooks.Message(msgs[i], m)
 	}
 	body := map[string]any{
@@ -48,12 +62,27 @@ func chatBody(req api.ChatRequest, hooks Hooks) (map[string]any, error) {
 
 	settings(body, req.Settings)
 	if err := hooks.Body(body, req); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if req.Settings.Extension != nil {
 		req.Settings.Extension.Body(body, req)
 	}
-	return body, nil
+	return body, pictures, nil
+}
+
+// recorded is a body as the record keeps it, once the body as sent is
+// encoded: every picture named by its sha256 in place of its bytes, so a
+// prompt of pictures costs the record a line each, and the bytes are read from
+// the media directory when they are wanted. A body carrying no picture is
+// recorded as it was sent.
+func recorded(body map[string]any, pictures []picture) ([]byte, error) {
+	if len(pictures) == 0 {
+		return nil, nil
+	}
+	for _, p := range pictures {
+		p.part["image_url"] = map[string]any{"url": "sha256:" + p.sha}
+	}
+	return encode(body)
 }
 
 // encode writes a chat body with the conversation last. Everything else is
@@ -86,7 +115,7 @@ func encode(body map[string]any) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-func message(m api.Message) map[string]any {
+func message(m api.Message) (map[string]any, []picture) {
 	out := map[string]any{"role": m.Role}
 
 	images := false
@@ -95,6 +124,7 @@ func message(m api.Message) map[string]any {
 			images = true
 		}
 	}
+	var pictures []picture
 	if images {
 		parts := make([]map[string]any, 0, len(m.Parts))
 		for _, p := range m.Parts {
@@ -102,13 +132,16 @@ func message(m api.Message) map[string]any {
 			case api.PartText:
 				parts = append(parts, map[string]any{"type": "text", "text": p.Text})
 			case api.PartImage:
-				parts = append(parts, map[string]any{
+				part := map[string]any{
 					"type": "image_url",
 					"image_url": map[string]any{
 						"url": fmt.Sprintf("data:%s;base64,%s", p.MIME,
 							base64.StdEncoding.EncodeToString(p.Data)),
 					},
-				})
+				}
+				sum := sha256.Sum256(p.Data)
+				pictures = append(pictures, picture{part: part, sha: hex.EncodeToString(sum[:])})
+				parts = append(parts, part)
 			}
 		}
 		out["content"] = parts
@@ -146,7 +179,7 @@ func message(m api.Message) map[string]any {
 	if m.ToolCallID != "" {
 		out["tool_call_id"] = m.ToolCallID
 	}
-	return out
+	return out, pictures
 }
 
 // settings writes the parameters both APIs document under the same names. The

@@ -33,11 +33,15 @@ type Hooks interface {
 // stream to fn. The hooks are what the runner adds to a chat; how its API
 // answers is the client's.
 func Chat(ctx context.Context, c *transport.Client, hooks Hooks, req api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
-	body, err := chatBody(req, hooks)
+	body, pictures, err := chatBody(req, hooks)
 	if err != nil {
 		return nil, err
 	}
 	b, err := encode(body)
+	if err != nil {
+		return nil, err
+	}
+	kept, err := recorded(body, pictures)
 	if err != nil {
 		return nil, err
 	}
@@ -47,6 +51,7 @@ func Chat(ctx context.Context, c *transport.Client, hooks Hooks, req api.ChatReq
 		Path:     "/chat/completions",
 		Model:    req.Model,
 		Body:     b,
+		Recorded: kept,
 		Recorder: req.Recorder,
 		Read: func(r io.Reader, rec *api.Record) error {
 			err := stream(r, res, fn, hooks, c.Answers)

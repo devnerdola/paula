@@ -997,14 +997,17 @@ shows only what it has not shown.
 **Every turn is recorded.** Each reply is an entry, and an entry holds the
 requests it made: the reply itself, a look at any picture she was sent, and
 any photo she took. Each request keeps its headers, bodies, timings, tokens and
-cost, and shows a dash for a cost the host did not report. A picture a host
-answered with is kept whole. `paula turns -dump` prints one that came as a
-file, as Venice's does, as its size and type, and one that came in JSON, as
-OpenRouter's does, as the JSON it came in, the way it prints a picture a
-request carried. A photo's request carries her avatar, so each keeps a copy of it for as
-long as its body is kept. Bodies older than the latest `log_keep` entries are
-dropped, and the rest stays. `paula turns` is the window into it. The
-avatar is painted before any turn, so its request is logged and not recorded.
+cost, and shows a dash for a cost the host did not report. A picture a chat
+request carries is recorded by the sha256 it is kept under in `media/`, in
+place of its bytes, so a prompt of pictures costs the record a line each and
+the picture is read from `media/` when it is wanted. A picture a host answered
+with is kept whole. `paula turns -dump` prints one that came as a file, as
+Venice's does, as its size and type, and one that came in JSON, as
+OpenRouter's does, as the JSON it came in. A photo's request carries her
+avatar as it was sent, so each keeps a copy of it for as long as its body is
+kept. Bodies older than the latest `log_keep` entries are dropped, and the
+rest stays. `paula turns` is the window into it. The avatar is painted before
+any turn, so its request is logged and not recorded.
 
 ## Your data
 

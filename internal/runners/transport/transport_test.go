@@ -183,6 +183,33 @@ func TestAPostIsRecordedLikeAChat(t *testing.T) {
 	}
 }
 
+// A request that says how its body is to be recorded is recorded that way,
+// and one that says nothing is recorded as it was sent.
+func TestARequestIsRecordedAsItSays(t *testing.T) {
+	ts, _ := newServer(t, answer(http.StatusOK, `{"content":"hey"}`), answer(http.StatusOK, `{"content":"hey"}`))
+	c, _ := client(t, ts.URL, answers{})
+	rec := &recorder{}
+	ask := Ask{
+		Method: http.MethodPost, Path: "/chat/completions", Model: "some/model",
+		Body: []byte(`{"picture":"its bytes"}`), Recorded: []byte(`{"picture":"its name"}`),
+		Recorder: rec,
+		Read:     func(r io.Reader, _ *api.Record) error { return decode(r, new(struct{})) },
+	}
+	if err := c.Send(context.Background(), ask); err != nil {
+		t.Fatal(err)
+	}
+	ask.Recorded = nil
+	if err := c.Send(context.Background(), ask); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(rec.ended[0].RequestBody); got != `{"picture":"its name"}` {
+		t.Errorf("the record kept %s, want the body as the request said to record it", got)
+	}
+	if got := string(rec.ended[1].RequestBody); got != `{"picture":"its bytes"}` {
+		t.Errorf("the record kept %s, want the body as sent", got)
+	}
+}
+
 func TestRetryWithADelayHeader(t *testing.T) {
 	ts, srv := newServer(t,
 		func(w http.ResponseWriter, r *http.Request) {

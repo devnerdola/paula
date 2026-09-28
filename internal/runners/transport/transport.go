@@ -125,10 +125,14 @@ func (c *Client) log() *slog.Logger {
 // one, the model it is about, the header only this request carries, how the
 // answer is read, and what keeps a record of it.
 type Ask struct {
-	Method   string
-	Path     string
-	Model    string
-	Body     []byte
+	Method string
+	Path   string
+	Model  string
+	Body   []byte
+	// Recorded is the body as the record keeps it, where that is not the body
+	// as sent: a chat names the pictures it carries in place of their bytes.
+	// Nil keeps the body.
+	Recorded []byte
 	Header   http.Header
 	Read     func(io.Reader, *api.Record) error
 	Recorder api.Recorder
@@ -193,13 +197,17 @@ func (c *Client) Send(ctx context.Context, a Ask) error {
 		header.Set("Authorization", "Bearer "+c.Token)
 	}
 
+	kept := a.Body
+	if a.Recorded != nil {
+		kept = a.Recorded
+	}
 	rec := &api.Record{
 		Runner:         c.Runner,
 		Model:          a.Model,
 		Method:         a.Method,
 		URL:            url,
 		RequestHeaders: c.redacted(header),
-		RequestBody:    a.Body,
+		RequestBody:    kept,
 		StartedAt:      c.now(),
 	}
 	recorder := api.Recording(a.Recorder)
