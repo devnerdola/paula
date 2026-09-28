@@ -899,8 +899,10 @@ input's reservation can take a prompt past the model's context, and the host
 refuses that. A turn measured past it waits for the history to be compacted to
 make room, and a turn still past it fails, saying so. A message no reply could
 answer would fail every turn after it, since every prompt carries it: `/stop`
-answers it with nothing, and it goes into the history behind her. Each round
-of tool calls adds the calls and what they answered. A round past the context before its
+answers it with nothing, and it goes into the history behind her, where the
+next compaction folds it into the summary from as much of it as the model
+reads at once, saying the rest was left out. Each round of tool calls adds the
+calls and what they answered. A round past the context before its
 answers are in runs none of its calls, since what they did would never reach
 her, and the reply fails, saying so. An answer that would take the round past
 the context is not sent: she is told the call ran and its answer did not fit.

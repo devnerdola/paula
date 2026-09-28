@@ -817,6 +817,40 @@ func TestACompactionWithAPartCutOffFails(t *testing.T) {
 	}
 }
 
+// A message longer than the model reads at once fits no request, so nothing
+// could fold it into the summary and every prompt would carry it for good. It
+// is carried from its head, as much of it as fits, with a line saying the rest
+// was left out, and the summary covers it.
+func TestAMessageLongerThanTheModelReadsIsFoldedFromItsHead(t *testing.T) {
+	f := &fakeRunner{model: chatModel(), chat: compacting("hm", "they said things")}
+	r := openReplyWith(t, f, sized(f, 2000))
+	ctx := context.Background()
+	// A message of 3,000 words in a context of 2,000 tokens, kept by a run
+	// before this one.
+	big := "so, listen: " + manyWords(3000)
+	asked := add(t, r, store.RoleUser, big)
+	add(t, r, store.RoleAssistant, "wow")
+	ended(t, r, asked)
+
+	r.say(t, "hello")
+	if _, err := r.store.LatestSummary(ctx); err != nil {
+		t.Fatalf("no summary was written: %v", err)
+	}
+	parts := f.sentFor(store.PurposeSummary)
+	if len(parts) == 0 {
+		t.Fatal("the history was never compacted")
+	}
+	carried := text(parts[0].Messages[1])
+	if !strings.Contains(carried, "so, listen:") || !strings.HasSuffix(carried, leftOut) ||
+		len(strings.Fields(carried)) >= 3000 {
+		t.Errorf("the first part carried %d words ending %q, want the head of the message and the line for the rest",
+			len(strings.Fields(carried)), carried[max(0, len(carried)-120):])
+	}
+	if got := said(f.replied(), api.RoleUser); !reflect.DeepEqual(got, []string{"hello"}) {
+		t.Errorf("the turn sent %q, want its message alone after the summary", got)
+	}
+}
+
 // A run picks the conversation up with its history as the last one left it,
 // which may be past this run's reservation: the first turn has it measured,
 // and compacted, before it starts.

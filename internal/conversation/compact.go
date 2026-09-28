@@ -166,6 +166,7 @@ func (e *Engine) summarise(ctx context.Context, a *attempt, m *model, summary *s
 
 	out := make([]string, len(parts))
 	for i, part := range parts {
+		part = e.trimmed(m, part, share)
 		words := int(share * float64(wordsOf(part)))
 		got, err := e.answer(ctx, a, m, store.PurposeSummary, e.fill(i+1, len(parts), words), written(part))
 		if err == nil && strings.TrimSpace(got) == "" {
@@ -191,6 +192,37 @@ func (e *Engine) fits(m *model, part []piece, share float64) bool {
 	}
 	carried := int(math.Ceil(float64(wordsIn(written(part))) * rate))
 	return prompt+carried+back <= m.limit()
+}
+
+// leftOut is the line that stands for the rest of a message longer than the
+// model reads at once.
+const leftOut = "(the rest of this message is left out: it is longer than the model reads at once)"
+
+// trimmed is a part as a request can carry it. A part of one piece that fits
+// no request is a message longer than the model reads at once, which nothing
+// else could fold into the summary, so every prompt would carry it for good:
+// it is carried from its head, as much of it as fits, and a line says the
+// rest was left out.
+func (e *Engine) trimmed(m *model, part []piece, share float64) []piece {
+	if len(part) != 1 || e.fits(m, part, share) {
+		return part
+	}
+	p := part[0]
+	words := strings.Fields(p.text)
+	head := func(n int) []piece {
+		return []piece{{summary: p.summary, day: p.day, text: strings.Join(words[:n], " ") + " " + leftOut}}
+	}
+	// The most words that fit: more never fit once fewer do not.
+	lo, hi := 0, len(words)
+	for lo < hi {
+		mid := (lo + hi + 1) / 2
+		if e.fits(m, head(mid), share) {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	return head(lo)
 }
 
 // wordsOf is how many words pieces hold.
