@@ -163,13 +163,21 @@ type update struct {
 	Tap      *tap     `json:"callback_query"`
 }
 
-// tap is a button that was tapped.
+// tap is a button that was tapped, on a message in some chat.
 type tap struct {
 	ID   string `json:"id"`
 	Data string `json:"data"`
 	From *struct {
 		ID int64 `json:"id"`
 	} `json:"from"`
+	Message *struct {
+		Chat chat `json:"chat"`
+	} `json:"message"`
+}
+
+// chat is where a message was sent. A private chat with someone has their id.
+type chat struct {
+	ID int64 `json:"id"`
 }
 
 // message is what arrived. A photo comes in several sizes, and a document or a
@@ -177,6 +185,7 @@ type tap struct {
 type message struct {
 	Text    string `json:"text"`
 	Caption string `json:"caption"`
+	Chat    chat   `json:"chat"`
 	From    *struct {
 		ID int64 `json:"id"`
 	} `json:"from"`

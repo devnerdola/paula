@@ -302,10 +302,15 @@ func (b *bot) offsets() []int64 {
 }
 
 // from is an update of a message sent by a user.
+// from is an update carrying a message the user sent in their private chat
+// with the bot, which is the chat of their id.
 func from(id int64, user int64, m message) update {
 	m.From = &struct {
 		ID int64 `json:"id"`
 	}{ID: user}
+	if m.Chat.ID == 0 {
+		m.Chat = chat{ID: user}
+	}
 	return update{UpdateID: id, Message: &m}
 }
 
@@ -429,6 +434,27 @@ func TestOnlyTheOnePersonIsAnswered(t *testing.T) {
 	}
 	if len(b.said()) != 0 {
 		t.Errorf("sent %q, want nothing said to someone who is not served", b.said())
+	}
+}
+
+// The conversation is the private chat. What the one person writes in a group
+// the bot was added to is not for her, and is neither stored nor answered.
+func TestOnlyThePrivateChatIsAnswered(t *testing.T) {
+	b := newBot(t, []update{
+		from(10, 7, message{Text: "hello everyone", Chat: chat{ID: -100}}),
+		from(11, 7, message{Text: "hey"}),
+	})
+	f, said := open(t, b, t.TempDir(), "user_id: 7")
+
+	got := inputs(t, f, 1)
+	if len(got) != 1 || got[0].Text != "hey" {
+		t.Fatalf("arrived = %+v, want only what was sent in the private chat", got)
+	}
+	if !strings.Contains(said.String(), "a message in another chat") {
+		t.Errorf("the log holds %q, want the message in the group left alone", said.String())
+	}
+	if len(b.said()) != 0 {
+		t.Errorf("sent %q, want nothing said in a group", b.said())
 	}
 }
 
@@ -841,12 +867,7 @@ func TestAChoiceIsOfferedAsAButtonAndComesBackWhole(t *testing.T) {
 	}
 
 	// A tap comes back as the session's own word for the choice, however long.
-	in, ok := a.tapped(context.Background(), &tap{
-		ID: "1", Data: keys[1].Data,
-		From: &struct {
-			ID int64 `json:"id"`
-		}{ID: 7},
-	})
+	in, ok := a.tapped(context.Background(), tapBy(7, 7, "1", keys[1].Data))
 	if !ok || in.Picked != long {
 		t.Errorf("tapped = %+v, %v, want the choice it stands for", in, ok)
 	}
@@ -854,14 +875,29 @@ func TestAChoiceIsOfferedAsAButtonAndComesBackWhole(t *testing.T) {
 		t.Errorf("answered %d taps, want the one that was tapped", b.taps())
 	}
 
-	// A tap from anyone else is answered and left alone.
-	if _, ok := a.tapped(context.Background(), &tap{
-		ID: "2", Data: keys[0].Data,
+	// A tap from anyone else, and one on a message in a group, are answered
+	// and left alone.
+	if _, ok := a.tapped(context.Background(), tapBy(8, 8, "2", keys[0].Data)); ok {
+		t.Error("a tap from someone who is not served was taken")
+	}
+	if _, ok := a.tapped(context.Background(), tapBy(7, -100, "3", keys[0].Data)); ok {
+		t.Error("a tap in a group was taken")
+	}
+	if b.taps() != 3 {
+		t.Errorf("answered %d taps, want every one of them", b.taps())
+	}
+}
+
+// tapBy is a tap by a user on a button in a chat.
+func tapBy(user, in int64, id, data string) *tap {
+	return &tap{
+		ID: id, Data: data,
 		From: &struct {
 			ID int64 `json:"id"`
-		}{ID: 8},
-	}); ok {
-		t.Error("a tap from someone who is not served was taken")
+		}{ID: user},
+		Message: &struct {
+			Chat chat `json:"chat"`
+		}{Chat: chat{ID: in}},
 	}
 }
 

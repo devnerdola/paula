@@ -740,6 +740,10 @@ func (a *adapter) tapped(ctx context.Context, t *tap) (api.Input, bool) {
 		a.f.log.Info("a tap from someone else", "user", tapper(t))
 		return api.Input{}, false
 	}
+	if t.Message == nil || t.Message.Chat.ID != a.f.user {
+		a.f.log.Info("a tap in another chat", "chat", tappedIn(t))
+		return api.Input{}, false
+	}
 	// A tag this run never offered goes on as it is: what can be picked is not
 	// decided here, and the session says what it makes of it.
 	what, ok := a.picked(t.Data)
@@ -757,6 +761,14 @@ func tapper(t *tap) int64 {
 	return t.From.ID
 }
 
+// tappedIn is the chat a tap was made in, and zero for one that names none.
+func tappedIn(t *tap) int64 {
+	if t.Message == nil {
+		return 0
+	}
+	return t.Message.Chat.ID
+}
+
 // input is what a message becomes for the conversation, and false for one that
 // is not for Paula or holds nothing she can read.
 func (f *Frontend) input(ctx context.Context, m *message) (api.Input, bool) {
@@ -767,6 +779,12 @@ func (f *Frontend) input(ctx context.Context, m *message) (api.Input, bool) {
 		// A bot is reachable by anyone who finds it. Nobody else is answered,
 		// and what they sent is not stored.
 		f.log.Info("a message from someone else", "user", m.From.ID)
+		return api.Input{}, false
+	}
+	if m.Chat.ID != f.user {
+		// The conversation is the private chat. What the one person writes in
+		// a group the bot was added to is not said to her.
+		f.log.Info("a message in another chat", "chat", m.Chat.ID)
 		return api.Input{}, false
 	}
 

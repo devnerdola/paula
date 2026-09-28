@@ -517,7 +517,8 @@ frontends:
 ```
 
 A bot is reachable by anyone who finds it, and this conversation is with one
-person: a message from anyone else is logged and left alone. Send her text,
+person, in your private chat with the bot: a message from anyone else, and one
+you write in a group the bot was added to, is logged and left alone. Send her text,
 photos, stickers or an image as a file; a sticker is read as its emoji, with
 the picture.
 
