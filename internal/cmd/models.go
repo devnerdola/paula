@@ -21,30 +21,137 @@ import (
 func modelsCommand() *command {
 	return &command{
 		name:  "models",
-		args:  "[-available]",
-		short: "ask every runner about the models the configuration file names",
+		args:  "list|available|set|reset",
+		short: "the models the configuration file names, and which serves each role",
+		subs: []*command{
+			modelsListCommand(),
+			modelsAvailableCommand(),
+			modelsSetCommand(),
+			modelsResetCommand(),
+		},
+		flags: oneOfItsCommands,
+	}
+}
+
+func modelsListCommand() *command {
+	return &command{
+		name:  "list",
+		short: "ask every runner about the models the file names, and show which serves each role",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
-			available := fs.Bool("available", false, "add the catalogue of every runner")
 			return func(g *globals, args []string) error {
 				if len(args) > 0 {
-					return usagef("no arguments are taken")
+					return usagef("list takes no arguments")
 				}
-				return models(g, *available)
+				cfg, err := config.Load(g.config)
+				if err != nil {
+					return err
+				}
+				set, err := configured(g, cfg)
+				if err != nil {
+					return err
+				}
+				return models(g, cfg, set)
 			}
 		},
 	}
 }
 
-func models(g *globals, available bool) error {
-	cfg, err := config.Load(g.config)
-	if err != nil {
-		return err
+func modelsAvailableCommand() *command {
+	return &command{
+		name:  "available",
+		short: "everything the runners serve, which is where a model's id comes from",
+		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			return func(g *globals, args []string) error {
+				if len(args) > 0 {
+					return usagef("available takes no arguments")
+				}
+				cfg, err := config.Load(g.config)
+				if err != nil {
+					return err
+				}
+				set, err := configured(g, cfg)
+				if err != nil {
+					return err
+				}
+				ctx := context.Background()
+				var problems []error
+				for i, r := range set.Runners {
+					if i > 0 {
+						fmt.Fprintln(g.stdout)
+					}
+					if err := catalogue(ctx, g.stdout, r); err != nil {
+						problems = append(problems, err)
+					}
+				}
+				return errors.Join(problems...)
+			}
+		},
 	}
-	set, err := runners.Configure(cfg, runners.Host{Log: g.logger(), Secrets: g.secrets})
-	if err != nil {
-		return err
-	}
+}
 
+func modelsSetCommand() *command {
+	return &command{
+		name:  "set",
+		args:  "ROLE NAME",
+		short: "have a role served by a model the file names, and remember it",
+		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			return func(g *globals, args []string) error {
+				if len(args) != 2 {
+					return usagef("set takes a role and a model, such as set chat fast")
+				}
+				// The choice is written beside a run that is serving, which
+				// reads it before every reply. It takes the conversation that
+				// is there rather than starting one: before the first, the
+				// file's default is the one to change.
+				cfg, s, err := reading(g)
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				set, err := configured(g, cfg)
+				if err != nil {
+					return err
+				}
+				if err := conversation.SetModel(context.Background(), s, set, config.Role(args[0]), args[1]); err != nil {
+					return err
+				}
+				fmt.Fprintf(g.stdout, "%s: %s\n", args[0], args[1])
+				return nil
+			}
+		},
+	}
+}
+
+func modelsResetCommand() *command {
+	return &command{
+		name:  "reset",
+		short: "forget every choice, so the file decides again",
+		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			return func(g *globals, args []string) error {
+				if len(args) > 0 {
+					return usagef("reset takes no arguments")
+				}
+				_, s, err := reading(g)
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				if err := conversation.ResetModels(context.Background(), s); err != nil {
+					return err
+				}
+				fmt.Fprintln(g.stdout, "models reset")
+				return nil
+			}
+		},
+	}
+}
+
+// configured sets the runners of a configuration file up.
+func configured(g *globals, cfg *config.Config) (*runners.Setup, error) {
+	return runners.Configure(cfg, runners.Host{Log: g.logger(), Secrets: g.secrets})
+}
+
+func models(g *globals, cfg *config.Config, set *runners.Setup) error {
 	ctx := context.Background()
 	var problems []error
 	report := set.Report(ctx)
@@ -91,13 +198,6 @@ func models(g *globals, available bool) error {
 				note(st.Err, st.Skipped))
 		}
 	})
-
-	if available {
-		for _, st := range report.Runners {
-			fmt.Fprintln(w)
-			catalogue(ctx, w, st.Runner)
-		}
-	}
 
 	return errors.Join(problems...)
 }
@@ -199,16 +299,17 @@ func tokens(ctx context.Context, set *runners.Setup, m *runners.Configured) stri
 	return strconv.Itoa(budget)
 }
 
-func catalogue(ctx context.Context, w io.Writer, runner runners.Runner) {
+// catalogue writes everything a runner serves, and reports a listing that
+// could not be read.
+func catalogue(ctx context.Context, w io.Writer, runner runners.Runner) error {
 	r, ok := runner.(runners.Server)
 	if !ok {
 		fmt.Fprintf(w, "%s serves no models\n", runner.Name())
-		return
+		return nil
 	}
 	models, err := r.Models(ctx)
 	if err != nil {
-		fmt.Fprintf(w, "%s: %v\n", r.Name(), err)
-		return
+		return fmt.Errorf("%s: %w", r.Name(), err)
 	}
 	slices.SortFunc(models, func(a, b api.Model) int { return strings.Compare(a.ID, b.ID) })
 	fmt.Fprintf(w, "%s serves:\n", r.Name())
@@ -217,6 +318,7 @@ func catalogue(ctx context.Context, w io.Writer, runner runners.Runner) {
 			row(m.ID, budget(0, &m), capabilities(&m))
 		}
 	})
+	return nil
 }
 
 // savedModels reads the model saved for each role. A conversation that has not

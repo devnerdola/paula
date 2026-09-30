@@ -70,6 +70,9 @@ A runner is a hosted API with a key. One that serves models is a
   either. The `kv` table holds `model.<role>` and nothing else.
 - **One writer.** The conversation loop is the only thing that writes the
   conversation. Every field of the loop is touched from its one goroutine.
+  A command that writes beside a run, forgetting a memory, cancelling a call
+  back or choosing a model, writes only what the loop reads back before every
+  use and never holds.
 - **A request carries what records it.** The recorder rides on the chat
   request, never in a context. A request that belongs to no turn is not
   recorded.
@@ -186,7 +189,7 @@ the variables it introduces, and leaves the line it rewrote where it was.
 - **An API key is read from the environment**, under the name the runner's
   `token_env` gives. A key never goes into a file in the tree, a command line,
   a test or a log.
-- `paula turns` and `paula turns -dump` are the window into what was really
+- `paula turns show` and `paula turns dump` are the window into what was really
   sent and received, including the tokens a host reported as cached.
 
 ## Editing

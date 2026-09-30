@@ -70,8 +70,8 @@ personality:
 Check that the model is reachable and that the card reads the way you want:
 
 ```
-./paula models
-./paula persona-check
+./paula models list
+./paula persona check
 ```
 
 Both exit with 1 and explain the problem if anything is wrong.
@@ -118,24 +118,28 @@ thrown away; the next `serve` answers the message you were waiting on.
 
 ## Looking at what happened
 
-`paula turns` lists what she did, newest first, with the tokens and the cost of
+Every command past `serve`, `repl`, `version` and `help` is a noun with verbs,
+and the verbs are the same words everywhere: `list` for a table, `show ID` for
+one thing in full, and a plain word for what changes something.
+
+`paula turns` is what she did, newest first, with the tokens and the cost of
 each: a reply, or a compaction of the history into the summary.
 
 ```
-./paula turns
-./paula turns -n 50       # the latest 50 rather than the latest 20
-./paula turns 42          # everything about one reply
-./paula turns -dump 42    # the raw requests and responses of that reply
+./paula turns list          # the latest 20
+./paula turns list -n 50    # the latest 50
+./paula turns show 42       # everything about one reply
+./paula turns dump 42       # the raw requests and responses of that reply
 ```
 
-`turns 42` shows which messages the reply answered, the prompt the model was
-given, whether it was asked to reason and at which effort, and the reply
+`turns show 42` shows which messages the reply answered, the prompt the model
+was given, whether it was asked to reason and at which effort, and the reply
 itself. A reply that asked for tools lists each call, the request of the round
 that asked for it, and why it failed if it did. A request a tool made of a
 runner, such as a web search, is one of the reply's, as `tool`, and the call
-that made it names it under `SENT`. `-dump` adds the headers and the exact
-bytes in both directions, and what each call was asked with and answered,
-which is what you want when an API behaves strangely.
+that made it names it under `SENT`. `turns dump 42` adds the headers and the
+exact bytes in both directions, and what each call was asked with and
+answered, which is what you want when an API behaves strangely.
 
 `paula memory` is what she remembers. It reads and writes the conversation a
 `serve` is holding, so it runs beside one or on its own:
@@ -165,10 +169,33 @@ A `serve` reads what is pending again before it fires a call back, so one
 cancelled here does not come, even when it is due within the minute. Times
 are in the machine's time zone.
 
-`paula models` prints what each runner says about the models you configured.
-`paula models -available` lists everything the runners offer, which is how you
-find the id of a model to configure. Both read every runner's listing from its
-API. Nothing of a listing is kept between runs: both APIs answer it `no-store`.
+`paula images` is the pictures of the conversation, the ones you sent and the
+photos she sent, newest first, by the numbers her tools list them by. It runs
+beside a `serve` or on its own:
+
+```
+./paula images list                  # the newest 20: when each was sent, by whom, and what it showed
+./paula images list -n 50 -from 20   # the 50 after the newest 20
+./paula images show 7                # one picture, with where its file is
+```
+
+`paula models` is the models the configuration file names, and which serves
+each role:
+
+```
+./paula models list             # what each runner says about them, and the model of each role
+./paula models available        # everything the runners offer, which is how you find a model's id
+./paula models set chat fast    # has a role served by a model the file names, and remembers it
+./paula models reset            # forgets those choices, so the file decides again
+```
+
+`list`, `available` and `set` read every runner's listing from its API, and
+nothing of a listing is kept between runs: both APIs answer it `no-store`.
+`set` writes the choice beside a `serve`, as `/model` does from a session: the
+next reply, look at a picture or photo is made with it. Two things are settled
+when `serve` starts and stay so until the next: whether the `photos` tools are
+offered at all, which needs an `image` model then, and the model that paints
+her avatar.
 
 Every command takes `-config FILE`, `-log-level` (`debug`, `info`, `warn`,
 `error`), `-log-format` (`text` or `json`) and `-v`, which is short for
@@ -776,7 +803,7 @@ in wherever they turn up in the finished message.
 
 `prompt` is a Go template over the card, so `{{.User.Facts}}` and the rest of
 it are yours to use, and a stray `{{` is reported as the parse error it is.
-`paula persona-check` prints the finished system message.
+`paula persona check` prints the finished system message.
 
 The lists are descriptive, so each item is a separate line:
 
@@ -1004,7 +1031,7 @@ cost, and shows a dash for a cost the host did not report. A picture a chat
 request carries is recorded by the sha256 it is kept under in `media/`, in
 place of its bytes, so a prompt of pictures costs the record a line each and
 the picture is read from `media/` when it is wanted. A picture a host answered
-with is kept whole. `paula turns -dump` prints one that came as a file, as
+with is kept whole. `paula turns dump` prints one that came as a file, as
 Venice's does, as its size and type, and one that came in JSON, as
 OpenRouter's does, as the JSON it came in. A photo's request carries her
 avatar as it was sent, so each keeps a copy of it for as long as its body is

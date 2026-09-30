@@ -76,19 +76,20 @@ func (s *Store) SetCaptionError(ctx context.Context, sha256, reason string) erro
 
 // Image is a picture as it was sent: the number it is looked up by, which is
 // the one its file was recorded under, the message it came in, who sent that
-// and when, and what it showed.
+// and when, and what it showed, or why nothing said so.
 type Image struct {
-	ID        int64
-	SHA256    string
-	Caption   string
-	MessageID MessageID
-	Role      string
-	SentAt    time.Time
+	ID           int64
+	SHA256       string
+	Caption      string
+	CaptionError string
+	MessageID    MessageID
+	Role         string
+	SentAt       time.Time
 }
 
 // imagesFrom is every picture a message carries, with what is known of its
 // file. A picture sent twice is one file, and two pictures.
-const imagesFrom = `SELECT media.id, media.sha256, media.caption, messages.id, messages.role, messages.created_at
+const imagesFrom = `SELECT media.id, media.sha256, media.caption, media.caption_error, messages.id, messages.role, messages.created_at
 	  FROM messages, json_each(messages.parts_json) AS part
 	  JOIN media ON media.sha256 = json_extract(part.value, '$.sha256')
 	 WHERE json_extract(part.value, '$.type') = 'image'`
@@ -138,7 +139,7 @@ func (s *Store) Image(ctx context.Context, id int64) (*Image, error) {
 func scanImage(row scanner) (*Image, error) {
 	var img Image
 	var sent int64
-	if err := row.Scan(&img.ID, &img.SHA256, &img.Caption, &img.MessageID, &img.Role, &sent); err != nil {
+	if err := row.Scan(&img.ID, &img.SHA256, &img.Caption, &img.CaptionError, &img.MessageID, &img.Role, &sent); err != nil {
 		return nil, err
 	}
 	img.SentAt = time.Unix(0, sent)

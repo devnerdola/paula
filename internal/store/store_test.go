@@ -351,6 +351,18 @@ func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
 	if img.MessageID != first || !img.SentAt.Equal(now) || img.Caption != "a red square" {
 		t.Errorf("image = %+v, want the one sent first", img)
 	}
+
+	// Why a picture was not described comes with it.
+	if err := s.SetCaptionError(ctx, "sha-b", "the host said no"); err != nil {
+		t.Fatal(err)
+	}
+	img, err = s.Image(ctx, images[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Caption != "" || img.CaptionError != "the host said no" {
+		t.Errorf("image = %+v, want why it was not described", img)
+	}
 }
 
 // A picture she took is found by its number before any message carries it, and

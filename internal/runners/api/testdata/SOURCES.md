@@ -1,6 +1,6 @@
 Both files are request bodies Paula sent to
 `https://openrouter.ai/api/v1/chat/completions` on 2026-09-19, taken from
-`paula turns -dump` of a scratch conversation with the card in
+`paula turns dump` of a scratch conversation with the card in
 `internal/cmd/testdata/ada.yaml`. Each was answered 200 and streamed a reply.
 The bytes are as they were sent; no field is changed.
 

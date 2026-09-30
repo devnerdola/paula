@@ -8,14 +8,26 @@ import (
 	"nerdola.dev/x/paula/internal/persona"
 )
 
+func personaCommand() *command {
+	return &command{
+		name:  "persona",
+		args:  "check",
+		short: "the character card",
+		subs: []*command{
+			personaCheckCommand(),
+		},
+		flags: oneOfItsCommands,
+	}
+}
+
 func personaCheckCommand() *command {
 	return &command{
-		name:  "persona-check",
-		short: "print the persona as a model is given it",
+		name:  "check",
+		short: "print the card as a model is given it, or what is wrong with it",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
 			return func(g *globals, args []string) error {
 				if len(args) > 0 {
-					return usagef("no arguments are taken")
+					return usagef("check takes no arguments")
 				}
 				cfg, err := config.Load(g.config)
 				if err != nil {

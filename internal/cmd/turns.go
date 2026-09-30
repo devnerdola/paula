@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/runners/api"
 	"nerdola.dev/x/paula/internal/store"
 )
@@ -25,44 +24,81 @@ const defaultTurns = 20
 func turnsCommand() *command {
 	return &command{
 		name:  "turns",
-		args:  "[-n N] [-dump] [ID]",
-		short: "show what was sent to a model and what came back",
+		args:  "list|show|dump",
+		short: "what was sent to a model and what came back",
+		subs: []*command{
+			turnsListCommand(),
+			turnsShowCommand(),
+			turnsDumpCommand(),
+		},
+		flags: oneOfItsCommands,
+	}
+}
+
+func turnsListCommand() *command {
+	return &command{
+		name:  "list",
+		args:  "[-n N]",
+		short: "the newest entries, with the tokens and the cost of each",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
 			n := fs.Int("n", defaultTurns, "how many entries to list")
-			dump := fs.Bool("dump", false, "print the whole snapshot of an entry")
 			return func(g *globals, args []string) error {
-				if len(args) > 1 {
-					return usagef("one entry at a time")
+				if len(args) > 0 {
+					return usagef("list takes no arguments")
 				}
 				if *n < 1 {
 					return usagef("-n takes a count above zero")
 				}
-				cfg, err := config.Load(g.config)
-				if err != nil {
-					return err
-				}
-				s, err := store.Read(cfg.DataDir)
+				_, s, err := reading(g)
 				if err != nil {
 					return err
 				}
 				defer s.Close()
+				return listTurns(context.Background(), g.stdout, s, *n)
+			}
+		},
+	}
+}
 
-				ctx := context.Background()
-				if len(args) == 0 {
-					if *dump {
-						return usagef("which entry to dump")
-					}
-					return listTurns(ctx, g.stdout, s, *n)
-				}
-				n, err := strconv.ParseInt(args[0], 10, 64)
+func turnsShowCommand() *command {
+	return &command{
+		name:  "show",
+		args:  "ID",
+		short: "one entry: what it answered, its requests, the prompt and the reply",
+		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			return func(g *globals, args []string) error {
+				id, err := oneID(args, "entry")
 				if err != nil {
-					return usagef("%q is not an entry", args[0])
+					return err
 				}
-				id := store.EntryID(n)
-				if *dump {
-					return dumpTurn(ctx, g.stdout, s, id)
+				_, s, err := reading(g)
+				if err != nil {
+					return err
 				}
-				return showTurn(ctx, g.stdout, s, id)
+				defer s.Close()
+				return showTurn(context.Background(), g.stdout, s, store.EntryID(id))
+			}
+		},
+	}
+}
+
+func turnsDumpCommand() *command {
+	return &command{
+		name:  "dump",
+		args:  "ID",
+		short: "the requests and answers of one entry, byte for byte",
+		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			return func(g *globals, args []string) error {
+				id, err := oneID(args, "entry")
+				if err != nil {
+					return err
+				}
+				_, s, err := reading(g)
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				return dumpTurn(context.Background(), g.stdout, s, store.EntryID(id))
 			}
 		},
 	}
@@ -483,6 +519,18 @@ func writeUsage(w io.Writer, r store.Request) {
 func stamp(t time.Time) string {
 	t = t.Local()
 	return t.Format("2006-01-02 15:04:05.000 ") + "UTC" + t.Format("-07:00")
+}
+
+// minute is a time as a table shows it: to the minute, in the machine's time
+// zone.
+func minute(t time.Time) string {
+	return t.Local().Format("2006-01-02 15:04")
+}
+
+// oneLine is text a model wrote as one line of a table: a line of its own
+// inside it would break the row it is part of.
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(text), " ")
 }
 
 func clock(t time.Time) string {

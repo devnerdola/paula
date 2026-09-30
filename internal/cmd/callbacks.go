@@ -8,9 +8,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
-	"strings"
 
-	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/store"
 )
 
@@ -36,11 +34,7 @@ func callbacksListCommand() *command {
 				if len(args) > 0 {
 					return usagef("list takes no arguments")
 				}
-				cfg, err := config.Load(g.config)
-				if err != nil {
-					return err
-				}
-				s, err := store.Read(cfg.DataDir)
+				_, s, err := reading(g)
 				if err != nil {
 					return err
 				}
@@ -63,14 +57,7 @@ func callbacksCancelCommand() *command {
 		short: "take a call back away before it comes",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
 			return func(g *globals, args []string) error {
-				if len(args) != 1 {
-					return usagef("one call back at a time")
-				}
-				id, err := strconv.ParseInt(args[0], 10, 64)
-				if err != nil || id < 1 {
-					return usagef("%q is not a call back", args[0])
-				}
-				cfg, err := config.Load(g.config)
+				id, err := oneID(args, "call back")
 				if err != nil {
 					return err
 				}
@@ -79,7 +66,7 @@ func callbacksCancelCommand() *command {
 				// one. It takes the conversation that is there rather than
 				// starting one: there is nothing to cancel in a conversation
 				// that was never had.
-				s, err := store.Read(cfg.DataDir)
+				_, s, err := reading(g)
 				if err != nil {
 					return err
 				}
@@ -117,11 +104,7 @@ func listCallbacks(w io.Writer, pending []store.Callback) error {
 	}
 	table(w, []string{"ID", "DUE", "REASON"}, func(row func(...string)) {
 		for _, c := range pending {
-			// A reason is one line of a table, so what it holds is written as
-			// one: a model that wrote a line of its own inside one would break
-			// the row it is part of.
-			reason := strings.Join(strings.Fields(c.Reason), " ")
-			row(strconv.FormatInt(int64(c.ID), 10), c.DueAt.Local().Format("2006-01-02 15:04"), reason)
+			row(strconv.FormatInt(int64(c.ID), 10), minute(c.DueAt), oneLine(c.Reason))
 		}
 	})
 	return nil

@@ -15,7 +15,7 @@ func TestPersonaCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	code, out, errOut := exec(t, "-config", path, "persona-check")
+	code, out, errOut := exec(t, "-config", path, "persona", "check")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -33,7 +33,7 @@ func TestAConfigurationWithoutACard(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errOut := exec(t, "-config", path, "persona-check")
+	code, _, errOut := exec(t, "-config", path, "persona", "check")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -43,11 +43,11 @@ func TestAConfigurationWithoutACard(t *testing.T) {
 }
 
 func TestPersonaCheckTakesNoArguments(t *testing.T) {
-	code, _, errOut := exec(t, "persona-check", "extra")
+	code, _, errOut := exec(t, "persona", "check", "extra")
 	if code != 2 {
 		t.Errorf("code = %d, want 2", code)
 	}
-	if !strings.Contains(errOut, "no arguments are taken") {
+	if !strings.Contains(errOut, "check takes no arguments") {
 		t.Errorf("stderr = %q", errOut)
 	}
 }

@@ -114,30 +114,40 @@ func (e *Engine) Models(ctx context.Context) (Models, error) {
 	return out, nil
 }
 
-// SetModel remembers which model serves a role.
-func (e *Engine) SetModel(ctx context.Context, role config.Role, name string) error {
+// SetModel remembers which model serves a role: one the file names, that the
+// runners say can serve it. A session and the command line set one the same
+// way, beside a run or on their own.
+func SetModel(ctx context.Context, s *store.Store, set *runners.Setup, role config.Role, name string) error {
 	if !slices.Contains(config.Roles, role) {
 		return fmt.Errorf("there is no %q to set, only %v", role, config.Roles)
 	}
-	if e.runners == nil || e.runners.Model(name) == nil {
+	if set == nil || set.Model(name) == nil {
 		return fmt.Errorf("no model is called %q", name)
 	}
-	serving, problem := e.runners.Serving(ctx, role)
+	serving, problem := set.Serving(ctx, role)
 	if !slices.ContainsFunc(serving, func(m *runners.Configured) bool { return m.Name == name }) {
 		if problem != nil {
 			return fmt.Errorf("%s cannot be held against the %s role: %w", name, role, problem)
 		}
 		return fmt.Errorf("%s cannot be the %s model", name, role)
 	}
-	return e.store.Set(ctx, store.KeyModel(string(role)), name)
+	return s.Set(ctx, store.KeyModel(string(role)), name)
 }
 
 // ResetModels forgets every saved choice, so the file decides again.
-func (e *Engine) ResetModels(ctx context.Context) error {
+func ResetModels(ctx context.Context, s *store.Store) error {
 	for _, role := range config.Roles {
-		if err := e.store.Delete(ctx, store.KeyModel(string(role))); err != nil {
+		if err := s.Delete(ctx, store.KeyModel(string(role))); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (e *Engine) SetModel(ctx context.Context, role config.Role, name string) error {
+	return SetModel(ctx, e.store, e.runners, role, name)
+}
+
+func (e *Engine) ResetModels(ctx context.Context) error {
+	return ResetModels(ctx, e.store)
 }

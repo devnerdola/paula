@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/conversation"
 	"nerdola.dev/x/paula/internal/persona"
 	"nerdola.dev/x/paula/internal/store"
@@ -46,11 +45,7 @@ func memoryListCommand() *command {
 				if *n < 1 {
 					return usagef("-n takes a count above zero")
 				}
-				cfg, err := config.Load(g.config)
-				if err != nil {
-					return err
-				}
-				s, err := store.Read(cfg.DataDir)
+				_, s, err := reading(g)
 				if err != nil {
 					return err
 				}
@@ -80,21 +75,17 @@ func memorySearchCommand() *command {
 				if *n < 1 {
 					return usagef("-n takes a count above zero")
 				}
-				cfg, err := config.Load(g.config)
+				cfg, s, err := reading(g)
 				if err != nil {
 					return err
 				}
+				defer s.Close()
 				// The card names the two of them, which every memory names
 				// and a search looks past.
 				card, err := persona.Load(cfg.Persona)
 				if err != nil {
 					return err
 				}
-				s, err := store.Read(cfg.DataDir)
-				if err != nil {
-					return err
-				}
-				defer s.Close()
 
 				found, err := conversation.SearchMemories(context.Background(), s, card,
 					strings.Join(args, " "), *n)
@@ -114,14 +105,7 @@ func memoryForgetCommand() *command {
 		short: "take a memory away, and the ones it replaced",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
 			return func(g *globals, args []string) error {
-				if len(args) != 1 {
-					return usagef("one memory at a time")
-				}
-				id, err := strconv.ParseInt(args[0], 10, 64)
-				if err != nil || id < 1 {
-					return usagef("%q is not a memory", args[0])
-				}
-				cfg, err := config.Load(g.config)
+				id, err := oneID(args, "memory")
 				if err != nil {
 					return err
 				}
@@ -129,7 +113,7 @@ func memoryForgetCommand() *command {
 				// serving. It takes the conversation that is there rather than
 				// starting one: there is nothing to forget in a conversation
 				// that was never had.
-				s, err := store.Read(cfg.DataDir)
+				_, s, err := reading(g)
 				if err != nil {
 					return err
 				}
@@ -154,11 +138,7 @@ func listMemories(w io.Writer, memories []store.Memory) error {
 	}
 	table(w, []string{"ID", "SAID", "MEMORY"}, func(row func(...string)) {
 		for _, m := range memories {
-			// A memory is one line of a table, so what it holds is written as
-			// one: a model that wrote a line of its own inside one would break
-			// the row it is part of.
-			said := strings.Join(strings.Fields(m.Content), " ")
-			row(strconv.FormatInt(int64(m.ID), 10), m.SaidAt.Format(time.DateOnly), said)
+			row(strconv.FormatInt(int64(m.ID), 10), m.SaidAt.Format(time.DateOnly), oneLine(m.Content))
 		}
 	})
 	return nil

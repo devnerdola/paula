@@ -9,9 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 
+	"nerdola.dev/x/paula/internal/config"
 	"nerdola.dev/x/paula/internal/logs"
+	"nerdola.dev/x/paula/internal/store"
 )
 
 type globals struct {
@@ -56,7 +59,9 @@ func oneOfItsCommands(fs *flag.FlagSet) func(*globals, []string) error {
 }
 
 // commands is the command table. Adding a command takes its file and one line
-// here.
+// here. serve, repl, version and help stand alone; everything else is a noun
+// with verbs, and the verbs are the same words everywhere: list for a table,
+// show for one thing in full, and a plain word for what changes something.
 func commands() []*command {
 	return []*command{
 		serveCommand(),
@@ -65,10 +70,42 @@ func commands() []*command {
 		turnsCommand(),
 		memoryCommand(),
 		callbacksCommand(),
-		personaCheckCommand(),
+		imagesCommand(),
+		personaCommand(),
 		versionCommand(),
 		helpCommand(),
 	}
+}
+
+// reading opens the configuration file and the conversation it names, for a
+// command that reads the conversation or writes beside a run: the one that is
+// there, never a new one.
+func reading(g *globals) (*config.Config, *store.Store, error) {
+	cfg, err := config.Load(g.config)
+	if err != nil {
+		return nil, nil, err
+	}
+	s, err := store.Read(cfg.DataDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, s, nil
+}
+
+// oneID reads the one number a command names something by, and says what is
+// wrong the same way for every kind of thing.
+func oneID(args []string, what string) (int64, error) {
+	switch {
+	case len(args) == 0:
+		return 0, usagef("which %s", what)
+	case len(args) > 1:
+		return 0, usagef("one %s at a time", what)
+	}
+	id, err := strconv.ParseInt(args[0], 10, 64)
+	if err != nil || id < 1 {
+		return 0, usagef("%q is no %s", args[0], what)
+	}
+	return id, nil
 }
 
 type usageError struct{ msg string }

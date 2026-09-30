@@ -113,7 +113,7 @@ default_models:
   chat: talk
   vision: look
 `)
-	code, out, errOut := exec(t, "-config", path, "models")
+	code, out, errOut := exec(t, "-config", path, "models", "list")
 	if code != 0 {
 		t.Fatalf("code = %d, stdout %s, stderr %s", code, out, errOut)
 	}
@@ -185,7 +185,7 @@ default_models:
   chat: talk
   vision: blind
 `)
-	code, out, errOut := exec(t, "-config", path, "models")
+	code, out, errOut := exec(t, "-config", path, "models", "list")
 	if code != 1 {
 		t.Fatalf("code = %d, want 1:\n%s", code, out)
 	}
@@ -223,17 +223,19 @@ models:
 default_models:
   chat: talk
 `)
-	if code, out, errOut := exec(t, "-config", path, "models"); code != 0 {
+	if code, out, errOut := exec(t, "-config", path, "models", "list"); code != 0 {
 		t.Fatalf("code = %d, stdout %s, stderr %s", code, out, errOut)
 	}
 
 	listing.Store(false)
-	code, out, errOut := exec(t, "-config", path, "models")
-	if code != 1 {
-		t.Fatalf("code = %d, want the run to fail:\n%s", code, out)
-	}
-	if !strings.Contains(errOut, "listing is down") {
-		t.Errorf("stderr does not say the listing could not be read: %s", errOut)
+	for _, verb := range []string{"list", "available"} {
+		code, out, errOut := exec(t, "-config", path, "models", verb)
+		if code != 1 {
+			t.Fatalf("models %s = %d, want the run to fail:\n%s", verb, code, out)
+		}
+		if !strings.Contains(errOut, "listing is down") {
+			t.Errorf("models %s: stderr does not say the listing could not be read: %s", verb, errOut)
+		}
 	}
 }
 
@@ -251,7 +253,7 @@ func TestModelsWithARunnerThatDoesNotAnswer(t *testing.T) {
 	path := configFile(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+
 		"/v1\nmodels:\n  talk:\n    runner: openrouter\n    id: a\ndefault_models:\n  chat: talk\n")
 
-	code, out, errOut := exec(t, "-config", path, "models")
+	code, out, errOut := exec(t, "-config", path, "models", "list")
 	if code != 1 {
 		t.Fatalf("code = %d, want 1:\n%s", code, out)
 	}
@@ -284,12 +286,12 @@ func TestARunnerThatServesNoModelsListsNone(t *testing.T) {
 	path := configFile(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+"/v1\n  tavily:\n    type: tavily\n    url: "+
 		usage.URL+"\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\ndefault_models:\n  chat: talk\n")
 
-	code, out, _ := exec(t, "-config", path, "models", "-available")
+	if out := output(t, path); !strings.Contains(line(t, out, "tavily "), "ok") {
+		t.Errorf("the tavily row = %s, want its key taken", line(t, out, "tavily "))
+	}
+	code, out, _ := exec(t, "-config", path, "models", "available")
 	if code != 0 {
 		t.Fatalf("code = %d:\n%s", code, out)
-	}
-	if !strings.Contains(line(t, out, "tavily "), "ok") {
-		t.Errorf("the tavily row = %s, want its key taken", line(t, out, "tavily "))
 	}
 	if !strings.Contains(out, "tavily serves no models") {
 		t.Errorf("output does not say tavily serves no models:\n%s", out)
@@ -302,8 +304,8 @@ func TestModelsAvailable(t *testing.T) {
 	path := configFile(t, "runners:\n  openrouter:\n    type: openrouter\n    url: "+ts.URL+
 		"/v1\nmodels:\n  talk:\n    runner: openrouter\n    id: deepseek/deepseek-v4-pro-0813\ndefault_models:\n  chat: talk\n")
 
-	_, plain, _ := exec(t, "-config", path, "models")
-	code, out, _ := exec(t, "-config", path, "models", "-available")
+	_, plain, _ := exec(t, "-config", path, "models", "list")
+	code, out, _ := exec(t, "-config", path, "models", "available")
 	if code != 0 {
 		t.Fatalf("code = %d:\n%s", code, out)
 	}
@@ -342,7 +344,7 @@ func TestModelsAvailable(t *testing.T) {
 }
 
 func TestModelsWithoutAConfigurationFile(t *testing.T) {
-	code, _, errOut := exec(t, "-config", filepath.Join(t.TempDir(), "nope.yaml"), "models")
+	code, _, errOut := exec(t, "-config", filepath.Join(t.TempDir(), "nope.yaml"), "models", "list")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -351,13 +353,90 @@ func TestModelsWithoutAConfigurationFile(t *testing.T) {
 	}
 }
 
-func TestModelsTakesNoArguments(t *testing.T) {
-	code, _, errOut := exec(t, "models", "extra")
-	if code != 2 {
-		t.Errorf("code = %d, want 2", code)
+func TestModelsTakesOneOfItsCommands(t *testing.T) {
+	if code, _, errOut := exec(t, "models"); code != 2 || !strings.Contains(errOut, "usage: paula models") {
+		t.Errorf("models alone = %d, %q", code, errOut)
 	}
-	if !strings.Contains(errOut, "no arguments are taken") {
-		t.Errorf("stderr = %q", errOut)
+	if code, _, errOut := exec(t, "models", "extra"); code != 2 || !strings.Contains(errOut, `unknown command "extra"`) {
+		t.Errorf("models extra = %d, %q", code, errOut)
+	}
+	for _, verb := range []string{"list", "available", "reset"} {
+		if code, _, errOut := exec(t, "models", verb, "extra"); code != 2 || !strings.Contains(errOut, verb+" takes no arguments") {
+			t.Errorf("models %s extra = %d, %q", verb, code, errOut)
+		}
+	}
+	if code, _, errOut := exec(t, "models", "set", "chat"); code != 2 || !strings.Contains(errOut, "a role and a model") {
+		t.Errorf("models set chat = %d, %q", code, errOut)
+	}
+}
+
+// A role is given a model from the command line as it is from a session: one
+// the file names, that the runners say can serve the role. The choice is
+// written beside a run and shown from then on, and reset forgets every one.
+func TestModelsSetAndReset(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "test-token-abcdefgh")
+	ts := openrouterCatalogue(t)
+	data := filepath.Join(t.TempDir(), "data")
+	path := configFile(t, `
+data_dir: `+data+`
+runners:
+  openrouter:
+    type: openrouter
+    url: `+ts.URL+`/v1
+models:
+  talk:
+    runner: openrouter
+    id: deepseek/deepseek-v4-pro-0813
+  other:
+    runner: openrouter
+    id: ~deepseek/deepseek-flash-latest
+  paint:
+    runner: openrouter
+    id: bytedance-seed/seedream-5-0-lite
+default_models:
+  chat: talk
+  avatar: paint
+`)
+
+	// Before the first conversation there is nothing to write the choice in.
+	if code, _, errOut := exec(t, "-config", path, "models", "set", "chat", "other"); code != 1 ||
+		!strings.Contains(errOut, "holds no conversation yet") {
+		t.Errorf("set with no conversation = %d, %q", code, errOut)
+	}
+	s, err := store.Open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	code, out, errOut := exec(t, "-config", path, "models", "set", "chat", "other")
+	if code != 0 || out != "chat: other\n" {
+		t.Fatalf("set = %d, %q, stderr %s", code, out, errOut)
+	}
+	if got := field(t, line(t, output(t, path), "chat "), 2); got != "other" {
+		t.Errorf("the chat role shows the choice %q, want the one that was set", got)
+	}
+
+	for _, c := range []struct{ args, want string }{
+		{"chat nope", `no model is called "nope"`},
+		{"singer talk", `there is no "singer" to set`},
+		{"chat paint", "paint cannot be the chat model"},
+	} {
+		code, _, errOut := exec(t, append([]string{"-config", path, "models", "set"}, strings.Fields(c.args)...)...)
+		if code != 1 || !strings.Contains(errOut, c.want) {
+			t.Errorf("set %s = %d, %q, want %q", c.args, code, errOut, c.want)
+		}
+	}
+	if got := field(t, line(t, output(t, path), "chat "), 2); got != "other" {
+		t.Errorf("a refused choice changed the chat role to %q", got)
+	}
+
+	code, out, errOut = exec(t, "-config", path, "models", "reset")
+	if code != 0 || out != "models reset\n" {
+		t.Fatalf("reset = %d, %q, stderr %s", code, out, errOut)
+	}
+	if got := field(t, line(t, output(t, path), "chat "), 2); got != "-" {
+		t.Errorf("the chat role still shows the choice %q after the reset", got)
 	}
 }
 
@@ -430,7 +509,7 @@ default_models:
   chat: talk
 `)
 
-	code, out, errOut := exec(t, "-config", path, "models")
+	code, out, errOut := exec(t, "-config", path, "models", "list")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -455,7 +534,7 @@ func field(t *testing.T, row string, n int) string {
 
 func output(t *testing.T, config string) string {
 	t.Helper()
-	code, out, errOut := exec(t, "-config", config, "models")
+	code, out, errOut := exec(t, "-config", config, "models", "list")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}

@@ -134,7 +134,7 @@ func turnsConfig(t *testing.T, dir string) string {
 
 func TestTurnsList(t *testing.T) {
 	dir, entry, failed := filled(t)
-	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns")
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "list")
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -163,14 +163,15 @@ func TestTurnsList(t *testing.T) {
 
 func TestTurnsSummary(t *testing.T) {
 	dir, entry, _ := filled(t)
-	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", strconv.FormatInt(int64(entry), 10))
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "show", strconv.FormatInt(int64(entry), 10))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
 
 	for _, want := range []string{
 		"entry " + strconv.FormatInt(int64(entry), 10) + "  done  repl",
-		"started   2026-09-16",
+		// The time is shown in the machine's zone, whichever that is.
+		"started   " + when.Local().Format("2006-01-02 15:04:05"),
 		"answers   messages 1",
 		"reply     message 2",
 		"cost      $0.002100",
@@ -203,7 +204,7 @@ func TestTurnsSummary(t *testing.T) {
 
 func TestTurnsOfAnEntryWithNoReply(t *testing.T) {
 	dir, _, failed := filled(t)
-	code, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", strconv.FormatInt(int64(failed), 10))
+	code, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "show", strconv.FormatInt(int64(failed), 10))
 	if code != 0 {
 		t.Fatalf("code = %d:\n%s", code, out)
 	}
@@ -220,7 +221,7 @@ func TestTurnsOfAnEntryWithNoReply(t *testing.T) {
 
 func TestTurnsDump(t *testing.T) {
 	dir, entry, _ := filled(t)
-	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "-dump", strconv.FormatInt(int64(entry), 10))
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "dump", strconv.FormatInt(int64(entry), 10))
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -291,7 +292,7 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 	s.Close()
 
 	id := strconv.FormatInt(int64(entry), 10)
-	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", id)
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "show", id)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -304,7 +305,7 @@ func TestTurnsShowsTheCallsAReplyMade(t *testing.T) {
 		t.Errorf("the second call reads %q", row)
 	}
 
-	code, out, errOut = exec(t, "-config", turnsConfig(t, dir), "turns", "-dump", id)
+	code, out, errOut = exec(t, "-config", turnsConfig(t, dir), "turns", "dump", id)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -347,7 +348,7 @@ func TestTurnsNamesAPictureBySize(t *testing.T) {
 	s.Close()
 
 	id := strconv.FormatInt(int64(entry), 10)
-	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "-dump", id)
+	code, out, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "dump", id)
 	if code != 0 {
 		t.Fatalf("code = %d, stderr %s", code, errOut)
 	}
@@ -368,10 +369,10 @@ func TestTurnsShowsWhenBodiesWerePruned(t *testing.T) {
 	s.Close()
 
 	cfg := turnsConfig(t, dir)
-	if _, out, _ := exec(t, "-config", cfg, "turns", strconv.FormatInt(int64(entry), 10)); !strings.Contains(out, "bodies pruned (engine.log_keep)") {
+	if _, out, _ := exec(t, "-config", cfg, "turns", "show", strconv.FormatInt(int64(entry), 10)); !strings.Contains(out, "bodies pruned (engine.log_keep)") {
 		t.Errorf("the entry does not say the bodies are gone:\n%s", out)
 	}
-	_, out, _ := exec(t, "-config", cfg, "turns", "-dump", strconv.FormatInt(int64(entry), 10))
+	_, out, _ := exec(t, "-config", cfg, "turns", "dump", strconv.FormatInt(int64(entry), 10))
 	if !strings.Contains(out, "bodies pruned (engine.log_keep)") {
 		t.Errorf("output does not say the bodies are gone:\n%s", out)
 	}
@@ -386,7 +387,7 @@ func TestTurnsShowsWhenBodiesWerePruned(t *testing.T) {
 
 func TestTurnsOfAnEntryThatIsNotThere(t *testing.T) {
 	dir, _, _ := filled(t)
-	code, _, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "99")
+	code, _, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "show", "99")
 	if code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
@@ -398,20 +399,31 @@ func TestTurnsOfAnEntryThatIsNotThere(t *testing.T) {
 func TestTurnsUsage(t *testing.T) {
 	dir, _, _ := filled(t)
 	cfg := turnsConfig(t, dir)
-	if code, _, _ := exec(t, "-config", cfg, "turns", "nope"); code != 2 {
-		t.Error("an entry that is not a number was taken")
+	if code, _, errOut := exec(t, "-config", cfg, "turns"); code != 2 || !strings.Contains(errOut, "usage: paula turns") {
+		t.Errorf("turns alone = %d, %q, want one of its commands asked for", code, errOut)
 	}
-	if code, _, _ := exec(t, "-config", cfg, "turns", "-dump"); code != 2 {
-		t.Error("-dump with no entry was taken")
+	if code, _, errOut := exec(t, "-config", cfg, "turns", "42"); code != 2 || !strings.Contains(errOut, `unknown command "42"`) {
+		t.Errorf("an entry with no command = %d, %q", code, errOut)
 	}
-	if code, _, _ := exec(t, "-config", cfg, "turns", "1", "2"); code != 2 {
-		t.Error("two entries at once were taken")
+	if code, _, _ := exec(t, "-config", cfg, "turns", "list", "1"); code != 2 {
+		t.Error("list took an argument")
+	}
+	for _, verb := range []string{"show", "dump"} {
+		if code, _, errOut := exec(t, "-config", cfg, "turns", verb, "nope"); code != 2 || !strings.Contains(errOut, `"nope" is no entry`) {
+			t.Errorf("%s of an entry that is not a number = %d, %q", verb, code, errOut)
+		}
+		if code, _, errOut := exec(t, "-config", cfg, "turns", verb); code != 2 || !strings.Contains(errOut, "which entry") {
+			t.Errorf("%s with no entry = %d, %q", verb, code, errOut)
+		}
+		if code, _, errOut := exec(t, "-config", cfg, "turns", verb, "1", "2"); code != 2 || !strings.Contains(errOut, "one entry at a time") {
+			t.Errorf("%s of two entries = %d, %q", verb, code, errOut)
+		}
 	}
 }
 
 func TestTurnsLimit(t *testing.T) {
 	dir, _, failed := filled(t)
-	_, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "-n", "1")
+	_, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "list", "-n", "1")
 	rows := strings.Split(strings.TrimSpace(out), "\n")
 	if len(rows) != 2 {
 		t.Fatalf("rows = %d, want the header and one entry:\n%s", len(rows), out)
@@ -426,7 +438,7 @@ func TestTurnsWithoutADatabase(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	code, _, errOut := exec(t, "-config", turnsConfig(t, dir), "turns")
+	code, _, errOut := exec(t, "-config", turnsConfig(t, dir), "turns", "list")
 	if code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
@@ -440,7 +452,7 @@ func TestTurnsWithoutADatabase(t *testing.T) {
 
 func TestTurnsCountMustBeACount(t *testing.T) {
 	dir, _, _ := filled(t)
-	code, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "-n", "-1")
+	code, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "list", "-n", "-1")
 	if code != 2 {
 		t.Errorf("code = %d, want the count to be refused; output %q", code, out)
 	}
@@ -477,7 +489,7 @@ func TestTurnsOfARequestThatCarriedNoBody(t *testing.T) {
 	}
 	s.Close()
 
-	_, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", strconv.FormatInt(int64(entry.ID), 10))
+	_, out, _ := exec(t, "-config", turnsConfig(t, dir), "turns", "show", strconv.FormatInt(int64(entry.ID), 10))
 	if strings.Contains(out, "bodies pruned") {
 		t.Errorf("a request that carried no body is called pruned:\n%s", out)
 	}
