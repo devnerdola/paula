@@ -605,17 +605,19 @@ func TestANoteGoesBelowWhatWasWritten(t *testing.T) {
 	} {
 		tk.publish(e)
 	}
-	waitFor(t, "the reply to end", sawLine(s.screen, "end stream"))
-
-	var got []string
-	for _, l := range s.log() {
-		if l != "writing" && l != "stopped writing" {
-			got = append(got, l)
-		}
-	}
 	want := []string{"stream let me check", "end stream", "note looking up Ana",
 		"stream found it", "end stream"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
+	shown := func() []string {
+		var out []string
+		for _, l := range s.log() {
+			if l != "writing" && l != "stopped writing" {
+				out = append(out, l)
+			}
+		}
+		return out
+	}
+	waitFor(t, "the reply to be shown", func() bool { return len(shown()) >= len(want) })
+	if got := shown(); !slices.Equal(got, want) {
 		t.Errorf("the screen shows %q, want %q", got, want)
 	}
 }
