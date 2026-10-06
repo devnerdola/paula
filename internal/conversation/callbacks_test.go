@@ -105,7 +105,7 @@ func dones(e *Engine) int {
 // first.
 func callbacksAsked(t *testing.T, r *replyEngine) []store.Message {
 	t.Helper()
-	all, err := r.store.Messages(context.Background(), 0, 0)
+	all, err := r.store.MessagesAfter(context.Background(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,8 +155,7 @@ func TestACallbackThatComesDueIsAMessageSheAnswers(t *testing.T) {
 	if last.Role != api.RoleSystem || text(last) != want {
 		t.Errorf("the prompt ends with %s: %q, want the note %q", last.Role, text(last), want)
 	}
-	// The tool asks for the reason as one sentence, so a model often ends it
-	// with a stop of its own, which the note does not double.
+	// A reason that ends with a stop of its own is not given a second one.
 	sentence := store.Message{CreatedAt: newClock().Now(), Parts: []store.Part{{Type: store.PartText, Text: "Ask how the interview went."}}}
 	if got := r.cameDue(sentence); !strings.HasSuffix(got, ": Ask how the interview went.") {
 		t.Errorf("a reason that is a sentence is told as %q, want its one stop", got)

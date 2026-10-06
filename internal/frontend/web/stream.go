@@ -235,7 +235,7 @@ func (a *adapter) History() int { return shown }
 // A browser that opened the stream again holding everything that had happened
 // is given the number alone: the conversation on the screen is the
 // conversation, and showing it again would scroll away from what is being read.
-func (a *adapter) ShowHistory(_ context.Context, ms []store.Message) error {
+func (a *adapter) ShowHistory(_ context.Context, ms []store.Message, _ int) error {
 	out := struct {
 		Page string `json:"page"`
 		// Character is who the page is a conversation with, which is what it

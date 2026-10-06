@@ -13,7 +13,7 @@ import (
 )
 
 // captionPrompt is what a model with vision is asked of an image.
-const captionPrompt = "Describe this image in one or two sentences."
+const captionPrompt = "Describe this image in detail, including any abnormal features."
 
 // described is the line that stands for an image that is not sent as one. The
 // reply that needs it asks for it, and an image is asked about once.

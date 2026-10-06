@@ -56,7 +56,7 @@ func TestASearchForNothingFindsNothing(t *testing.T) {
 	s := open(t)
 	keepAll(t, s)
 	for _, words := range [][]string{nil, {"NOT"}, {"NEAR"}, {`"`}, {"*"}} {
-		found, err := s.SearchMemories(ctx, words, 10)
+		found, _, err := s.SearchMemories(ctx, words, 10)
 		if err != nil {
 			t.Errorf("searching %q: %v", words, err)
 		}
@@ -83,7 +83,7 @@ func TestAMemoryIsFoundByTheWordsItHolds(t *testing.T) {
 		{[]string{"favourite", "food"}, nil},
 		{[]string{"coriander"}, nil},
 	} {
-		found, err := s.SearchMemories(ctx, c.words, 10)
+		found, _, err := s.SearchMemories(ctx, c.words, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,17 +96,20 @@ func TestAMemoryIsFoundByTheWordsItHolds(t *testing.T) {
 }
 
 // What holds more of the words, and rarer ones, comes first, and no more than
-// the limit come back.
+// the limit come back, with how many hold any of the words in all.
 func TestWhatTheWordsSayMostAboutComesFirst(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
 	m := keepAll(t, s)
-	found, err := s.SearchMemories(ctx, []string{"sister", "Recife", "airport"}, 1)
+	found, total, err := s.SearchMemories(ctx, []string{"sister", "Recife", "airport"}, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := ids(found); !slices.Equal(got, []MemoryID{m[1]}) {
 		t.Errorf("found %v, want the memory that holds all three words", got)
+	}
+	if total != 2 {
+		t.Errorf("total = %d, want the two memories that hold any of the words", total)
 	}
 	if found[0].Content != kept[1] || found[0].SaidAt.IsZero() {
 		t.Errorf("found %+v, want the whole memory", found[0])
@@ -120,12 +123,15 @@ func TestWhatIsSearchedIsWhatStands(t *testing.T) {
 	s := open(t)
 	was := remembers(t, s, "Ana lives in Porto", "Caio's sister Ana lives in Porto.")
 	now := remembers(t, s, "Ana moved to Lisbon", "Caio's sister Ana lives in Lisbon.", was.ID)
-	found, err := s.SearchMemories(ctx, []string{"sister"}, 10)
+	found, total, err := s.SearchMemories(ctx, []string{"sister"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := ids(found); !slices.Equal(got, []MemoryID{now.ID}) {
-		t.Errorf("found %v, want only the memory that stands", got)
+	if got := ids(found); !slices.Equal(got, []MemoryID{now.ID}) || total != 1 {
+		t.Errorf("found %v of %d, want only the memory that stands", got, total)
+	}
+	if latest, n, err := s.LatestMemories(ctx, 0, 10); err != nil || n != 1 || len(latest) != 1 {
+		t.Errorf("the latest are %+v of %d, %v, want the one memory that stands", latest, n, err)
 	}
 }
 
@@ -147,7 +153,7 @@ func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
 		t.Fatalf("forgot %+v, want the memory and the one it replaced, oldest first", gone)
 	}
 
-	latest, err := s.LatestMemories(ctx, 0, 10)
+	latest, _, err := s.LatestMemories(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +161,7 @@ func TestForgettingTakesWhatTheMemoryReplaced(t *testing.T) {
 		t.Errorf("what is left is %+v, want the memory about the bicycle", latest)
 	}
 	// Their words go with them: nothing finds a memory that is not there.
-	found, err := s.SearchMemories(ctx, []string{"sister", "bicycle"}, 10)
+	found, _, err := s.SearchMemories(ctx, []string{"sister", "bicycle"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +193,7 @@ func TestANumberGivenAgainTakesNoWordsWithIt(t *testing.T) {
 	if now.ID != going.ID {
 		t.Fatalf("the new memory is %d, want the number %d given again", now.ID, going.ID)
 	}
-	found, err := s.SearchMemories(ctx, []string{"sister"}, 10)
+	found, _, err := s.SearchMemories(ctx, []string{"sister"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -226,7 +232,7 @@ func TestADatabaseThatSearchedByVectorsIsSearchedByWords(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	found, err := s.SearchMemories(ctx, []string{"sister"}, 10)
+	found, _, err := s.SearchMemories(ctx, []string{"sister"}, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

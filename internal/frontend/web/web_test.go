@@ -114,7 +114,7 @@ func (s *sessions) run(ctx context.Context, a api.Adapter) error {
 		return err
 	}
 	page := a.(*adapter)
-	if err := page.ShowHistory(ctx, s.history); err != nil {
+	if err := page.ShowHistory(ctx, s.history, len(s.history)); err != nil {
 		return err
 	}
 	s.adapters <- page

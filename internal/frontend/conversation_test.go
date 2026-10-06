@@ -126,7 +126,7 @@ func TestALineIsAnsweredAndKept(t *testing.T) {
 		return strings.Contains(strings.Join(s.log(), "\n"), "send hey you")
 	})
 
-	messages, err := conv.History(context.Background(), 0, 10)
+	messages, _, err := conv.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestAReplyIsStoppedOnTheScreenAndInTheConversation(t *testing.T) {
 		entries, err := conv.store.Entries(context.Background(), 1)
 		return err == nil && len(entries) == 1 && entries[0].Status == store.StatusStopped
 	})
-	messages, err := conv.History(context.Background(), 0, 10)
+	messages, _, err := conv.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

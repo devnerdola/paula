@@ -25,21 +25,21 @@ func (e *Engine) Forget(ctx context.Context, id store.MemoryID) ([]store.Memory,
 }
 
 // Memories are the memories that hold the words of a query, or the newest ones
-// when there is no query.
-func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
+// when there is no query, and how many there are of either in all.
+func (e *Engine) Memories(ctx context.Context, query string, limit int) ([]store.Memory, int, error) {
 	return SearchMemories(ctx, e.store, e.persona, query, limit)
 }
 
-// SearchMemories are the memories of a conversation that hold the words of a
-// query, the ones the words say most about first, or the newest ones when there
-// is no query.
-func SearchMemories(ctx context.Context, s *store.Store, card *persona.Card, query string, limit int) ([]store.Memory, error) {
+// SearchMemories are the memories of a conversation that hold any word of a
+// query, the ones the words say most about first, and how many hold one in
+// all; or, when there is no query, the newest ones, and how many stand.
+func SearchMemories(ctx context.Context, s *store.Store, card *persona.Card, query string, limit int) ([]store.Memory, int, error) {
 	if query == "" {
 		return s.LatestMemories(ctx, 0, limit)
 	}
 	words := searchWords(card, query)
 	if len(words) == 0 {
-		return nil, fmt.Errorf("%q has no word to look for: every memory names %s or %s, so a search is for what it is about",
+		return nil, 0, fmt.Errorf("%q has no word to look for: every memory names %s or %s, so a search is for what it is about",
 			query, card.User.Name, card.Name)
 	}
 	return s.SearchMemories(ctx, words, limit)

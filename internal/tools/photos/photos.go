@@ -66,11 +66,11 @@ func (t take) Instructions() string {
 	n := t.h.Names
 	return "You can take photos of yourself with take_photo and send them to " + n.User + " with send_photo, " +
 		"as you would from your phone: when " + n.User + " asks for one, or when a photo says what words " +
-		"would not. Every photo costs money, so take one only to send it. Look at what comes back before you " +
-		"send it: one that is not what you meant, or does not look like you, is taken again with a clearer " +
-		"prompt, or not sent at all. A photo you send goes with your reply, after what you write. After a " +
-		"message of yours that carried a photo, a message from the app you and " + n.User + " text through " +
-		"says what the photo showed; it is for you to know, never to answer."
+		"would not. Look at what comes back before you send it: one that is not what you meant, or does not " +
+		"look like you, is taken again with a clearer prompt. A photo you send goes with " +
+		"your reply, after what you write. After a message of yours that carried a photo, a message from the " +
+		"app you and " + n.User + " text through says what the photo showed; it is for you to know, never " +
+		"to answer."
 }
 
 type takeArgs struct {

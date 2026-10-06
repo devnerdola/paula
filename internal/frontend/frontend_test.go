@@ -41,9 +41,12 @@ type talk struct {
 
 	summary   *store.Summary
 	memories  []store.Memory
+	matched   int
 	asked     []string
+	limits    []int
 	forgot    []store.MemoryID
 	forgetErr error
+	said      int
 }
 
 func newTalk() *talk {
@@ -183,12 +186,13 @@ func (t *talk) Events(ctx context.Context, after conversation.Seq) iter.Seq2[con
 }
 
 // History answers with the newest messages older than one, as the
-// conversation does, and with the newest of all when before is zero.
-func (t *talk) History(_ context.Context, before store.MessageID, limit int) ([]store.Message, error) {
+// conversation does, and with the newest of all when before is zero, of as
+// many as said says were said.
+func (t *talk) History(_ context.Context, before store.MessageID, limit int) ([]store.Message, int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.historyErr != nil {
-		return nil, t.historyErr
+		return nil, 0, t.historyErr
 	}
 	var out []store.Message
 	for _, m := range t.history {
@@ -199,7 +203,7 @@ func (t *talk) History(_ context.Context, before store.MessageID, limit int) ([]
 	if limit > 0 && len(out) > limit {
 		out = out[len(out)-limit:]
 	}
-	return out, nil
+	return out, t.said, nil
 }
 
 func (t *talk) Since(_ context.Context, after store.MessageID) ([]store.Message, error) {
@@ -243,14 +247,14 @@ func (t *talk) Summary(context.Context) (*store.Summary, error) {
 	return t.summary, nil
 }
 
-func (t *talk) Memories(_ context.Context, query string, limit int) ([]store.Memory, error) {
+// Memories answers with the test's memories, as many as were asked for, of as
+// many as matched say, or as there are when it says none.
+func (t *talk) Memories(_ context.Context, query string, limit int) ([]store.Memory, int, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.asked = append(t.asked, query)
-	if len(t.memories) > limit {
-		return t.memories[:limit], nil
-	}
-	return t.memories, nil
+	t.limits = append(t.limits, limit)
+	return t.memories[:min(limit, len(t.memories))], max(t.matched, len(t.memories)), nil
 }
 
 func (t *talk) Forget(_ context.Context, id store.MemoryID) ([]store.Memory, error) {
@@ -267,8 +271,10 @@ func (t *talk) Forget(_ context.Context, id store.MemoryID) ([]store.Memory, err
 type screen struct {
 	mu       sync.Mutex
 	features api.Features
-	// history is how much a screen that shows it asks for.
+	// history is how much a screen that shows it asks for, and said how many
+	// messages it was told were said in all.
 	history int
+	said    int
 	inputs  chan api.Input
 	lines   []string
 	sent    []api.Outgoing
@@ -354,9 +360,10 @@ func (s *showing) ShowUserMessage(_ context.Context, m *store.Message) error {
 	return nil
 }
 
-func (s *showing) ShowHistory(_ context.Context, ms []store.Message) error {
+func (s *showing) ShowHistory(_ context.Context, ms []store.Message, said int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.said = said
 	for _, m := range ms {
 		s.write("history " + m.Role + ": " + m.Text())
 	}
@@ -803,15 +810,21 @@ func TestWhatWasSaidBefore(t *testing.T) {
 		{ID: 1, Role: store.RoleUser, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "hey"}}},
 		{ID: 2, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartText, Text: "hello"}}},
 	}
+	tk.said = 1234
 	run(t, s, tk)
 
 	waitFor(t, "the history", sawLine(base, "history assistant: hello"))
 	waitFor(t, "the prompt", sawLine(base, "prompt"))
+	// It is shown with how many messages were said in all.
+	base.mu.Lock()
+	defer base.mu.Unlock()
+	if base.said != 1234 {
+		t.Errorf("the history was shown of %d messages, want the 1234 said", base.said)
+	}
 }
 
 // A call back that came due is the app's message, not part of the chat: a
-// frontend is shown neither the one that fires nor one read back with what
-// was said before. What it shows is her reply.
+// frontend is not shown the one that fires. What it shows is her reply.
 func TestACallbackThatCameDueIsNotShown(t *testing.T) {
 	base := newScreen(api.Features{Channel: "repl"})
 	base.history = 10
@@ -825,7 +838,6 @@ func TestACallbackThatCameDueIsNotShown(t *testing.T) {
 	tk := newTalk()
 	tk.history = []store.Message{
 		{ID: 1, Role: store.RoleUser, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "talk later"}}},
-		{ID: 2, Role: store.RoleCallback, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "say good night"}}},
 		{ID: 3, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartText, Text: "good night, love"}}},
 	}
 	run(t, s, tk)
@@ -840,7 +852,7 @@ func TestACallbackThatCameDueIsNotShown(t *testing.T) {
 	waitFor(t, "her reply", sawLine(base, "send morning, love"))
 
 	for _, line := range base.log() {
-		if strings.Contains(line, "say good night") || strings.Contains(line, "say good morning") {
+		if strings.Contains(line, "say good morning") {
 			t.Errorf("the screen shows %q, want no call back on it", line)
 		}
 	}
@@ -859,7 +871,7 @@ func (o *opening) History() int {
 	return o.screen.history
 }
 
-func (o *opening) ShowHistory(_ context.Context, ms []store.Message) error {
+func (o *opening) ShowHistory(_ context.Context, ms []store.Message, _ int) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for _, m := range ms {
@@ -1197,32 +1209,60 @@ func TestTheMemoryCommands(t *testing.T) {
 	tk.mu.Unlock()
 
 	// A memory is listed by the number it can be forgotten by, and the day it
-	// was said.
+	// was said, after how many of how many it is, one said as one.
 	s.inputs <- api.Input{Text: "/memory lisbon"}
 	waitFor(t, "the memories", func() bool { return len(s.messages()) == 2 })
-	if got := s.messages()[1].Text; got != "#7 (said on Monday, 14 September 2026) Caio's sister lives in Lisbon." {
+	if got := s.messages()[1].Text; got != "1 memory holds a word of \"lisbon\":\n"+
+		"#7 (said on Monday, 14 September 2026) Caio's sister lives in Lisbon." {
+		t.Errorf("message = %q", got)
+	}
+	s.inputs <- api.Input{Text: "/memory"}
+	waitFor(t, "the memories", func() bool { return len(s.messages()) == 3 })
+	if got := s.messages()[2].Text; !strings.HasPrefix(got, "1 of 1 memory:\n#7 ") {
 		t.Errorf("message = %q", got)
 	}
 
 	s.inputs <- api.Input{Text: "/forget 7"}
-	waitFor(t, "what was forgotten", func() bool { return len(s.messages()) == 3 })
-	if got := s.messages()[2].Text; !strings.HasPrefix(got, "forgot:\n#7 ") {
+	waitFor(t, "what was forgotten", func() bool { return len(s.messages()) == 4 })
+	if got := s.messages()[3].Text; !strings.HasPrefix(got, "forgot:\n#7 ") {
 		t.Errorf("message = %q", got)
 	}
 
 	// A number is what it takes, and it says so when it is given anything else.
 	s.inputs <- api.Input{Text: "/forget everything"}
-	waitFor(t, "the answer", func() bool { return len(s.messages()) == 4 })
-	if got := s.messages()[3].Text; !strings.HasPrefix(got, "/forget takes the number") {
+	waitFor(t, "the answer", func() bool { return len(s.messages()) == 5 })
+	if got := s.messages()[4].Text; !strings.HasPrefix(got, "/forget takes the number") {
 		t.Errorf("message = %q", got)
+	}
+
+	// -n says how many to show, of a listing or a search; a number that is a
+	// query stays one; -n with no count above zero is said to want one.
+	tk.mu.Lock()
+	tk.matched = 54
+	tk.mu.Unlock()
+	for i, c := range []struct{ typed, want string }{
+		{"/memory -n 30", "1 of 54 memories:\n#7 "},
+		{"/memory -n 5 lisbon", "1 of the 54 memories that hold a word of \"lisbon\":\n#7 "},
+		{"/memory 2026", "1 of the 54 memories that hold a word of \"2026\":\n#7 "},
+		{"/memory -n", "/memory -n takes how many to show"},
+		{"/memory -n 0 lisbon", "/memory -n takes how many to show"},
+	} {
+		s.inputs <- api.Input{Text: c.typed}
+		waitFor(t, c.typed, func() bool { return len(s.messages()) == 6+i })
+		if got := s.messages()[5+i].Text; !strings.HasPrefix(got, c.want) {
+			t.Errorf("%s answered %q, want %q", c.typed, got, c.want)
+		}
 	}
 
 	tk.mu.Lock()
 	defer tk.mu.Unlock()
 	// What was typed after the command is what she is asked for; nothing after
 	// it is the newest.
-	if !slices.Equal(tk.asked, []string{"", "lisbon"}) {
-		t.Errorf("asked for %q, want the listing and then the query", tk.asked)
+	if !slices.Equal(tk.asked, []string{"", "lisbon", "", "", "lisbon", "2026"}) {
+		t.Errorf("asked for %q, want the listing and then each query", tk.asked)
+	}
+	if !slices.Equal(tk.limits, []int{10, 10, 10, 30, 5, 10}) {
+		t.Errorf("asked for %v memories, want ten unless -n says otherwise", tk.limits)
 	}
 	if !slices.Equal(tk.forgot, []store.MemoryID{7}) {
 		t.Errorf("forgot %v, want the memory that was named", tk.forgot)

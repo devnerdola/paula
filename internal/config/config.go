@@ -128,7 +128,7 @@ func DefaultEngine() Engine {
 		HistoryRatio:  0.6,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
-		ToolRounds:    3,
+		ToolRounds:    5,
 	}
 }
 

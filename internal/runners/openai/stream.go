@@ -99,7 +99,9 @@ type streamUsage struct {
 
 // stream reads the answer to a chat request. A stream that carried no events
 // at all is the transport's to read as the error the API wrote in its body,
-// and one whose caller stopped taking it is left where it stopped.
+// and one whose caller stopped taking it is left where it stopped. One that
+// ended with neither the event a stream ends with nor a reason the answer
+// finished was cut off by the host, and what arrived of it is not the answer.
 func stream(r io.Reader, res *api.Result, fn func(api.Chunk) error, hooks Hooks, answers transport.Answers) error {
 	var (
 		reasoning strings.Builder
@@ -107,7 +109,7 @@ func stream(r io.Reader, res *api.Result, fn func(api.Chunk) error, hooks Hooks,
 		arrived   bool
 	)
 
-	err := events(r, func(data []byte) error {
+	done, err := events(r, func(data []byte) error {
 		arrived = true
 		var chunk streamChunk
 		if err := json.Unmarshal(data, &chunk); err != nil {
@@ -167,6 +169,9 @@ func stream(r io.Reader, res *api.Result, fn func(api.Chunk) error, hooks Hooks,
 	if !arrived {
 		return transport.ErrNoAnswer
 	}
+	if !done && res.FinishReason == "" {
+		return api.ErrUnfinished
+	}
 
 	res.Reasoning = reasoning.String()
 	res.ToolCalls = asked.whole()
@@ -175,8 +180,9 @@ func stream(r io.Reader, res *api.Result, fn func(api.Chunk) error, hooks Hooks,
 }
 
 // events reads server-sent events, skipping the comments both APIs send to
-// keep a connection alive, and stops at the end of the stream.
-func events(r io.Reader, fn func(data []byte) error) error {
+// keep a connection alive, and stops at the end of the stream. It reports
+// whether the stream ended with the event both APIs end one with.
+func events(r io.Reader, fn func(data []byte) error) (done bool, err error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64<<10), lineLimit)
 
@@ -203,9 +209,9 @@ func events(r io.Reader, fn func(data []byte) error) error {
 		case line == "":
 			if err := dispatch(); err != nil {
 				if err == io.EOF {
-					return nil
+					return true, nil
 				}
-				return err
+				return false, err
 			}
 		case strings.HasPrefix(line, ":"):
 		case strings.HasPrefix(line, "data:"):
@@ -213,12 +219,16 @@ func events(r io.Reader, fn func(data []byte) error) error {
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return err
+		return false, err
 	}
-	if err := dispatch(); err != nil && err != io.EOF {
-		return err
+	switch err := dispatch(); err {
+	case nil:
+		return false, nil
+	case io.EOF:
+		return true, nil
+	default:
+		return false, err
 	}
-	return nil
 }
 
 // code reads an error code, which the APIs give as a string or a number.

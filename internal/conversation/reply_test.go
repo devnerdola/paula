@@ -256,7 +256,7 @@ func TestAReplyIsStoredAndPublished(t *testing.T) {
 	r := openReply(t, f)
 	r.say(t, "hey")
 
-	history, err := r.History(context.Background(), 0, 10)
+	history, _, err := r.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,10 +296,12 @@ func TestAReplyIsStoredAndPublished(t *testing.T) {
 	}
 }
 
-// plain is what every model is told right after the card: every frontend shows
-// her messages as the characters they are written in.
-const plain = "Your messages reach Caio as plain text, the way a text message does: write no markdown or HTML, " +
-	"and write an address as it is rather than as a link."
+// plain is what every model is told right after the card.
+const plain = "Everything you write is a message you send to Caio, except an answer of [nothing] alone, which " +
+	"sends nothing. Your messages reach Caio as plain text, the way a text message does: write no markdown or " +
+	"HTML, and write an address as it is rather than as a link. A blank line between two paragraphs is where " +
+	"one text ends and the next begins. When you answer with no text at all, a message from the app, not from " +
+	"Caio, says so, and you answer again."
 
 func TestThePromptOfAReply(t *testing.T) {
 	f := &fakeRunner{model: chatModel(), chat: says("hello")}
@@ -322,8 +324,8 @@ func TestThePromptOfAReply(t *testing.T) {
 	if !strings.HasPrefix(shape[0], "system: You are Paula, texting with Caio.") {
 		t.Errorf("the prompt opens with %q, want the card", shape[0])
 	}
-	// Every model is told after the card that her messages arrive as plain
-	// text. A model no family extension serves reads the times as system
+	// Every model is told after the card how her messages arrive, whatever the
+	// card says. A model no family extension serves reads the times as system
 	// messages, which need no word on whose they are.
 	if !strings.HasSuffix(shape[0], "\n\n"+plain) {
 		t.Errorf("the card is followed by %q, want %q and nothing on whose the times are", shape[0], plain)
@@ -582,25 +584,157 @@ func TestAPictureSentWithNothingSaidAboutIt(t *testing.T) {
 	}
 }
 
+// A reply with no text fails, saying how the model finished. One the model
+// ended itself is asked for once more first; one cut off at the most it
+// writes, or one that ended without saying how, is not.
 func TestAReplyWithNoText(t *testing.T) {
+	for _, c := range []struct {
+		finish, said string
+		asked        int
+	}{{"stop", "stop", 2}, {"length", "length", 1}, {"", "none", 1}} {
+		t.Run(c.said, func(t *testing.T) {
+			f := &fakeRunner{model: chatModel()}
+			f.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
+				return &api.Result{FinishReason: c.finish}, nil
+			}
+			r := openReply(t, f)
+			r.say(t, "hey")
+
+			var failed Event
+			for _, ev := range published(r.Engine) {
+				if ev.Kind == ReplyFailed {
+					failed = ev
+				}
+			}
+			if want := "the model returned no text (finish reason " + c.said + ")"; failed.Text != want {
+				t.Errorf("failure = %q, want %q", failed.Text, want)
+			}
+			if n := len(f.all()); n != c.asked {
+				t.Errorf("the model was asked %d times, want %d", n, c.asked)
+			}
+			if history, _, _ := r.History(context.Background(), 0, 10); len(history) != 1 {
+				t.Errorf("history = %+v, want nothing stored", history)
+			}
+		})
+	}
+}
+
+// An answer with nothing in it is asked for once more, saying what sends
+// nothing, and what she writes then is her reply. The note is told in the role
+// the model's family gives her notes, which the system message names as the
+// app's.
+func TestAnAnswerWithNothingInItIsAskedForOnceMore(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		extension api.Extension
+		role      string
+	}{{"no family", nil, api.RoleSystem}, {"notes as user", notesAsUser{}, api.RoleUser}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeRunner{model: chatModel(), chat: answering(round{}, round{text: "sorry, I was miles away"})}
+			set := setup(f)
+			set.Models[0].Settings.Extension = c.extension
+			r := openReplyWith(t, f, set)
+			r.say(t, "hey")
+
+			requests := f.all()
+			if len(requests) != 2 {
+				t.Fatalf("the model was asked %d times, want twice", len(requests))
+			}
+			first, again := requests[0].Messages, requests[1].Messages
+			if len(again) != len(first)+1 || !reflect.DeepEqual(again[:len(first)], first) {
+				t.Fatalf("asked again with %+v, want the first prompt and a note after it", again)
+			}
+			note := again[len(first)]
+			if want := "You wrote nothing, so nothing was sent. To send nothing, answer with [nothing] alone; " +
+				"otherwise write your message."; note.Role != c.role || text(note) != want {
+				t.Errorf("the note is %s: %q, want %s: %q", note.Role, text(note), c.role, want)
+			}
+			if named := "When you answer with no text at all, a message from the app, not from Caio, says so"; !strings.Contains(text(first[0]), named) {
+				t.Errorf("the system message is %q, want it to name the note as the app's", text(first[0]))
+			}
+			if reply, _ := stored(t, r); reply.Text() != "sorry, I was miles away" {
+				t.Errorf("the reply is %q, want what she wrote when asked again", reply.Text())
+			}
+		})
+	}
+}
+
+// An answer of what sends nothing ends the turn answered with nothing sent, and
+// none of it is shown as it arrives, whatever its case.
+func TestAnAnswerOfNothingSendsNothing(t *testing.T) {
 	f := &fakeRunner{model: chatModel()}
-	f.chat = func(context.Context, api.ChatRequest, func(api.Chunk) error) (*api.Result, error) {
-		return &api.Result{FinishReason: "length"}, nil
+	f.chat = func(_ context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		for _, piece := range []string{"[No", "thing", "]\n"} {
+			if err := fn(api.Chunk{Kind: api.ChunkText, Text: piece}); err != nil {
+				return nil, err
+			}
+		}
+		return &api.Result{FinishReason: "stop"}, nil
 	}
 	r := openReply(t, f)
-	r.say(t, "hey")
+	ctx := context.Background()
+	r.say(t, "ok, good night")
 
-	var failed Event
+	if n := len(f.all()); n != 1 {
+		t.Errorf("the model was asked %d times, want once", n)
+	}
+	entries, err := r.store.Entries(ctx, 1)
+	if err != nil || len(entries) != 1 || entries[0].Status != store.StatusDone {
+		t.Fatalf("entries = %+v, %v, want the turn ended done", entries, err)
+	}
+	if reply, err := r.store.ReplyOfEntry(ctx, entries[0].ID); err == nil {
+		t.Errorf("the turn stored the reply %+v, want none", reply)
+	}
+	if answered, _ := r.store.AnsweredUpto(ctx); answered != entries[0].UptoMessageID || answered == 0 {
+		t.Errorf("answered up to %d, want the message she sent nothing to, %d", answered, entries[0].UptoMessageID)
+	}
+	var done []Event
 	for _, ev := range published(r.Engine) {
-		if ev.Kind == ReplyFailed {
-			failed = ev
+		switch ev.Kind {
+		case ReplyText:
+			t.Errorf("%q was shown", ev.Text)
+		case ReplyFailed:
+			t.Errorf("the turn failed: %s", ev.Text)
+		case ReplyDone:
+			done = append(done, ev)
 		}
 	}
-	if want := "the model returned no text (finish reason length)"; failed.Text != want {
-		t.Errorf("failure = %q, want %q", failed.Text, want)
+	if len(done) != 1 || done[0].Message != nil {
+		t.Errorf("reply done events = %+v, want one carrying no message", done)
 	}
-	if history, _ := r.History(context.Background(), 0, 10); len(history) != 1 {
-		t.Errorf("history = %+v, want nothing stored", history)
+}
+
+// What begins as the answer that sends nothing does is shown once it is
+// something else, and so is what ends before it is.
+func TestWhatOnlyBeginsLikeNothingIsShown(t *testing.T) {
+	for _, pieces := range [][]string{{"[nothing]", " to report, I'm fine"}, {"[no"}} {
+		want := strings.Join(pieces, "")
+		t.Run(want, func(t *testing.T) {
+			f := &fakeRunner{model: chatModel()}
+			f.chat = func(_ context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+				for _, piece := range pieces {
+					if err := fn(api.Chunk{Kind: api.ChunkText, Text: piece}); err != nil {
+						return nil, err
+					}
+				}
+				return &api.Result{FinishReason: "stop"}, nil
+			}
+			r := openReply(t, f)
+			r.say(t, "how was it?")
+
+			var shown string
+			for _, ev := range published(r.Engine) {
+				if ev.Kind == ReplyText {
+					shown = ev.Text
+				}
+			}
+			if shown != want {
+				t.Errorf("shown %q, want %q", shown, want)
+			}
+			if reply, _ := stored(t, r); reply.Text() != want {
+				t.Errorf("the reply is %q, want %q", reply.Text(), want)
+			}
+		})
 	}
 }
 
@@ -645,7 +779,7 @@ func TestAStoppedReplyKeepsWhatItHadWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := r.History(context.Background(), 0, 10)
+	history, _, err := r.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,12 +819,86 @@ func TestARestartedReplyKeepsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := r.History(context.Background(), 0, 10)
+	history, _, err := r.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(history) != 3 || history[2].Text() != "both then" {
 		t.Errorf("history = %+v, want the restarted reply kept nothing", history)
+	}
+}
+
+// What may yet be the answer that sends nothing is not shown, so it has not
+// started the reply: a message that arrives while it streams restarts the
+// reply, as it does one that has written nothing.
+func TestAReplyHoldingBackWhatMaySendNothingIsRestarted(t *testing.T) {
+	started := make(chan struct{})
+	var once sync.Once
+	f := &fakeRunner{model: chatModel()}
+	f.chat = func(ctx context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		first := false
+		once.Do(func() { first = true })
+		if !first {
+			fn(api.Chunk{Kind: api.ChunkText, Text: "both then"})
+			return &api.Result{FinishReason: "stop"}, nil
+		}
+		fn(api.Chunk{Kind: api.ChunkText, Text: "[noth"})
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	r := openReply(t, f)
+	post(t, r.Engine, "good night")
+	r.clock.Advance(config.DefaultEngine().Debounce.Duration())
+	<-started
+	post(t, r.Engine, "wait, one more thing")
+
+	waitFor(t, "the restart", func() bool { return seen(r.Engine, ReplyRestarted) })
+	r.clock.Advance(config.DefaultEngine().Debounce.Duration())
+	if _, err := r.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	history, _, err := r.History(context.Background(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[2].Text() != "both then" {
+		t.Errorf("history = %+v, want one reply to both messages", history)
+	}
+}
+
+// A stop that lands while what may yet be the answer that sends nothing is
+// held back keeps none of it: it was never shown, and it may have been that
+// answer.
+func TestAStopWhileHoldingBackWhatMaySendNothingKeepsNoneOfIt(t *testing.T) {
+	started := make(chan struct{})
+	f := &fakeRunner{model: chatModel()}
+	f.chat = func(ctx context.Context, _ api.ChatRequest, fn func(api.Chunk) error) (*api.Result, error) {
+		fn(api.Chunk{Kind: api.ChunkText, Text: "[noth"})
+		close(started)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	r := openReply(t, f)
+	post(t, r.Engine, "good night")
+	r.clock.Advance(config.DefaultEngine().Debounce.Duration())
+	<-started
+	if stopped, err := r.Stop(context.Background()); err != nil || !stopped {
+		t.Fatalf("Stop = %v, %v", stopped, err)
+	}
+	if _, err := r.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if history, _, _ := r.History(context.Background(), 0, 10); len(history) != 1 {
+		t.Errorf("history = %+v, want nothing of the reply kept", history)
+	}
+	for _, ev := range published(r.Engine) {
+		if ev.Kind == ReplyText {
+			t.Errorf("%q was shown", ev.Text)
+		}
 	}
 }
 
@@ -807,7 +1015,7 @@ func sendPhoto(t *testing.T, r *replyEngine, text string, data []byte) string {
 	if _, err := r.Wait(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	history, err := r.History(context.Background(), 0, 100)
+	history, _, err := r.History(context.Background(), 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -994,7 +1202,7 @@ func TestARestartedReplyThatFinishedKeepsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := r.History(context.Background(), 0, 10)
+	history, _, err := r.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1039,7 +1247,7 @@ func TestWaitDoesNotHangOnceTheConversationIsClosed(t *testing.T) {
 	}
 
 	// A run that ends keeps nothing of the half sentence it was writing.
-	history, err := r.History(context.Background(), 0, 10)
+	history, _, err := r.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1308,7 @@ func TestAReplyThatLandsAsTheRunStopsIsKept(t *testing.T) {
 	<-writing
 	r.Close()
 
-	history, err := r.History(ctx, 0, 10)
+	history, _, err := r.History(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

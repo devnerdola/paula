@@ -15,8 +15,9 @@ import (
 // channel names the repl in the conversation.
 const channel = "repl"
 
-// history is how much of the conversation a terminal being typed at asks for.
-const history = 10
+// History is how many messages a terminal being typed at opens on when it is
+// given no other number.
+const History = 10
 
 // serve reads the hello of one connection and keeps a session for it.
 func serve(ctx context.Context, conn io.ReadWriter, names api.Names, pictures *media.Files, session func(context.Context, api.Adapter) error) error {
@@ -193,8 +194,14 @@ func (a *adapter) EndStream(_ context.Context) error { return a.out.endLine() }
 // terminal's own business.
 func (a *adapter) Prompt(_ context.Context) error { return a.out.ready() }
 
-// ShowHistory shows what was said before this terminal opened.
-func (a *adapter) ShowHistory(_ context.Context, ms []store.Message) error {
+// ShowHistory shows what was said before this terminal opened, after how many
+// messages it is of all there are when it is not all of them.
+func (a *adapter) ShowHistory(_ context.Context, ms []store.Message, said int) error {
+	if len(ms) > 0 && len(ms) < said {
+		if err := a.out.line(fmt.Sprintf("the last %d of %d messages", len(ms), said)); err != nil {
+			return err
+		}
+	}
 	for _, m := range ms {
 		if err := a.out.line(a.messageLine(&m)); err != nil {
 			return err

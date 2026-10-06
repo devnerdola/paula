@@ -25,14 +25,38 @@ var errNoRoom = errors.New("the prompt is past the context, and the history is c
 
 // tooLong is what a model is sent in place of an answer that would take the
 // round past the context. The call ran, which the model is told so it does
-// not run it again.
-const tooLong = "error: the call ran, but what it answered is too long for the room left in the context, so it was not sent"
+// not run it again. tooMuch is sent in place of the answer of a call that only
+// looks something up, which tells the model to ask it for less.
+const (
+	tooLong = "error: the call ran, but what it answered is too long for the room left in the context, so it was not sent"
+	tooMuch = "error: what the call answered is too long for the room left in the context, so it was not sent; " +
+		"ask it for less at a time"
+)
 
 // lastRound is what a model is told after the answers of the last round of
 // calls a reply may take, so it answers with what it has.
 const lastRound = "This reply has taken every round of calls it may, so write your answer now. " +
 	"A call that only looks something up, or whose answer you would have to act on, is not run any more; " +
 	"one that changes something still runs."
+
+// nothing is the answer that sends nothing, which her system message tells her
+// of, and wroteNothing what she is told when she answers with no text at all.
+const (
+	nothing      = "[nothing]"
+	wroteNothing = "You wrote nothing, so nothing was sent. To send nothing, answer with " + nothing +
+		" alone; otherwise write your message."
+)
+
+// meantNothing says an answer is the one that sends nothing, and mayMeanNothing
+// that it could still turn out to be, as it arrives.
+func meantNothing(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), nothing)
+}
+
+func mayMeanNothing(text string) bool {
+	t := strings.TrimSpace(text)
+	return t != "" && len(t) <= len(nothing) && strings.EqualFold(t, nothing[:len(t)])
+}
 
 // model is a configured model and what its runner says it can do.
 type model struct {
@@ -112,8 +136,29 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	var thought []string
 	var details []json.RawMessage
 	var res *api.Result
+	// meant says a round answered with what sends nothing, and askedAgain that
+	// an answer with nothing in it was asked for once more.
+	meant, askedAgain := false, false
 	kept := func(interrupted bool) *store.Message {
 		return e.replyMessage(a, written.String(), strings.Join(thought, "\n\n"), details, interrupted)
+	}
+	// unsaid says the reply has sent nothing and meant to send nothing: no
+	// text, no photo, no answer of what sends nothing, and no call back to put
+	// the answer off.
+	unsaid := func() bool {
+		return strings.TrimSpace(written.String()) == "" && len(a.photos) == 0 && !meant && !a.putOff
+	}
+	// askAgain asks once more for an answer the model ended itself with nothing
+	// in it, saying what sends nothing. One cut off, at the most it writes or by
+	// a filter, is not asked for again.
+	askAgain := func() bool {
+		ended := res.FinishReason == api.FinishStop || res.FinishReason == api.FinishToolCalls
+		if askedAgain || !ended || !unsaid() {
+			return false
+		}
+		askedAgain = true
+		messages = append(messages, api.Text(m.notes().Role, wroteNothing))
+		return true
 	}
 	// past ends a reply whose next round is past the context, which no host
 	// takes. One that has run a tool keeps what it wrote, as it does however
@@ -138,6 +183,26 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		}
 		rec := e.recorder(a, store.PurposeReply)
 		var said strings.Builder
+		// show puts what the round wrote on the frontends: all of it the first
+		// time, after a blank line when a round wrote before it, since what came
+		// before is what she said before a call, and then what is new. A reply a
+		// new message restarted shows nothing, not even what landed while it was
+		// being cancelled.
+		shown := false
+		show := func(text string) {
+			if !a.started() {
+				return
+			}
+			if !shown {
+				shown = true
+				written.WriteString(gap(written.String()))
+				text = said.String()
+			}
+			written.WriteString(text)
+			e.events.publish(Event{
+				Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: written.String(),
+			})
+		}
 		res, err = m.Runner.Chat(ctx, api.ChatRequest{
 			Model:      m.ID,
 			Messages:   messages,
@@ -161,21 +226,13 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 					return nil
 				}
 			}
-			// A reply a new message restarted shows nothing, not even what
-			// landed while it was being cancelled.
-			if !a.started() {
-				return nil
-			}
-			// What a round writes after another has is a text of its own: what
-			// came before it is what she said before a call.
-			if said.Len() == 0 {
-				written.WriteString(gap(written.String()))
-			}
 			said.WriteString(text)
-			written.WriteString(text)
-			e.events.publish(Event{
-				Kind: ReplyText, Entry: a.entry.ID, Channel: a.entry.Channel, Text: written.String(),
-			})
+			// What may yet be the answer that sends nothing is held back until
+			// it is something else, and has not started the reply: a message
+			// that arrives meanwhile takes its place.
+			if !mayMeanNothing(said.String()) {
+				show(text)
+			}
 			return nil
 		})
 
@@ -189,6 +246,17 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		// A restart keeps nothing, even when the reply finished as it landed.
 		if a.was(restarted) {
 			return nil, context.Canceled
+		}
+		// A round that answered with what sends nothing wrote nothing, and the
+		// reply sends nothing unless a round after it writes something. A round
+		// that ended on what was held back for looking like that answer shows
+		// it, since it was not; one cut short leaves it out, since it may yet
+		// have been.
+		switch {
+		case meantNothing(said.String()):
+			meant = true
+		case err == nil && !shown && said.Len() > 0:
+			show("")
 		}
 		if err != nil {
 			// A reply that was stopped keeps what it had written, and so does
@@ -210,7 +278,13 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 		// to the response it was in. What the rounds before it thought went
 		// back with their calls.
 		details = res.ReasoningDetails
+		// The answer asked for again takes the place of the one with nothing
+		// in it, so it is the same round, and takes none of the rounds of calls.
 		if len(res.ToolCalls) == 0 {
+			if askAgain() {
+				round--
+				continue
+			}
 			break
 		}
 
@@ -220,6 +294,10 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			// is its answer.
 			for _, c := range res.ToolCalls {
 				e.call(ctx, a, rec.last, c, errNotRun, nil)
+			}
+			if askAgain() {
+				round--
+				continue
 			}
 			break
 		}
@@ -268,7 +346,11 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 			// An answer that takes the next round past the context would have
 			// the host refuse the round, so the model is told so in its place.
 			if e.excess(m, append(messages, answer)) > 0 {
-				answer.Parts = append([]api.Part{{Type: api.PartText, Text: tooLong}}, note...)
+				told := tooLong
+				if e.tools.looksUp(c.Name) {
+					told = tooMuch
+				}
+				answer.Parts = append([]api.Part{{Type: api.PartText, Text: told}}, note...)
 			}
 			messages = append(messages, answer)
 		}
@@ -292,14 +374,10 @@ func (e *Engine) reply(ctx context.Context, a *attempt) (*store.Message, error) 
 	// What she wrote in any round is what she said: a model often puts the
 	// whole of its answer beside the call it makes, and has nothing to add
 	// once the call is answered. A photo she sent is a reply on its own.
-	// Nothing at all is her putting the answer off when she scheduled a call
-	// back for it: the messages are answered, and stay in the history for when
-	// it comes due.
-	if strings.TrimSpace(written.String()) == "" && len(a.photos) == 0 {
-		if a.putOff {
-			a.finished()
-			return nil, nil
-		}
+	// Nothing at all is her sending nothing, when she answered with what sends
+	// nothing or put the answer off with a call back: the messages are
+	// answered, and stay in the history, with no reply after them.
+	if unsaid() {
 		return nil, fmt.Errorf("the model returned no text (finish reason %s)", reason(res))
 	}
 	a.finished()

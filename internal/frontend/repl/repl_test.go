@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -138,6 +139,7 @@ func dial(t *testing.T, f *repl.Frontend, interactive bool) *terminal {
 		Out:         writerTo(term),
 		Err:         writerTo(term),
 		Interactive: interactive,
+		History:     repl.History,
 		Interrupts:  term.interrupts,
 	}
 	go func() {
@@ -273,13 +275,16 @@ func TestAPhotoOfHersIsWhereItsFileIs(t *testing.T) {
 		}
 		return a.(api.HistoryShower).ShowHistory(ctx, []store.Message{
 			{ID: 2, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartImage, SHA256: sha, MIME: "image/jpeg"}}},
-		})
+		}, 1)
 	})
 	term := dial(t, f, true)
 
 	term.waitFor(t, "the photo in what was said before", "Paula: me right now\nPaula: (photo: "+path+")\nPaula: (photo: "+path+")\n")
 }
 
+// What was said before opens the terminal, after how many messages it is of
+// how many were said when it is not all of them, and so does what was said on
+// another frontend.
 func TestWhatWasSaidBeforeAndSomewhereElse(t *testing.T) {
 	f := open(t, dir(t), "")
 	serving(t, f, func(ctx context.Context, a api.Adapter) error {
@@ -290,7 +295,7 @@ func TestWhatWasSaidBeforeAndSomewhereElse(t *testing.T) {
 		err := shower.ShowHistory(ctx, []store.Message{
 			{ID: 1, Role: store.RoleUser, Channel: "repl", Parts: []store.Part{{Type: store.PartText, Text: "hey"}}},
 			{ID: 2, Role: store.RoleAssistant, Parts: []store.Part{{Type: store.PartText, Text: "hey you"}}},
-		})
+		}, 1234)
 		if err != nil {
 			return err
 		}
@@ -303,9 +308,34 @@ func TestWhatWasSaidBeforeAndSomewhereElse(t *testing.T) {
 	term := dial(t, f, true)
 
 	term.waitFor(t, "the other channel", "[telegram] Caio: from my phone\n")
-	for _, want := range []string{"Caio: hey\n", "Paula: hey you\n"} {
-		if !strings.Contains(term.shown(), want) {
-			t.Errorf("output has no %q:\n%q", want, term.shown())
+	if want := "the last 2 of 1234 messages\nCaio: hey\nPaula: hey you\n"; !strings.Contains(term.shown(), want) {
+		t.Errorf("output has no %q:\n%q", want, term.shown())
+	}
+}
+
+// A terminal asks for as many of the latest messages as it was told to, and
+// one fed a file asks for none.
+func TestATerminalAsksForAsManyAsItIsTold(t *testing.T) {
+	for _, c := range []struct {
+		history     int
+		interactive bool
+		want        int
+	}{{25, true, 25}, {0, true, 0}, {25, false, 0}} {
+		f := open(t, dir(t), "")
+		asked := make(chan int, 1)
+		serving(t, f, func(ctx context.Context, a api.Adapter) error {
+			asked <- a.(api.HistoryShower).History()
+			return nil
+		})
+		go repl.Client{Socket: f.Socket(), In: strings.NewReader(""), Out: io.Discard, Err: io.Discard,
+			Interactive: c.interactive, History: c.history}.Run(context.Background())
+		select {
+		case got := <-asked:
+			if got != c.want {
+				t.Errorf("a terminal told %d, typed at %v, asked for %d, want %d", c.history, c.interactive, got, c.want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("the terminal never said hello")
 		}
 	}
 }
@@ -875,7 +905,7 @@ func TestTheTerminalUsesTheNamesOnTheCard(t *testing.T) {
 			err := shower.ShowHistory(ctx, []store.Message{
 				{ID: 1, Role: store.RoleUser, Channel: "repl",
 					Parts: []store.Part{{Type: store.PartText, Text: "hey"}}},
-			})
+			}, 1)
 			if err != nil {
 				return err
 			}

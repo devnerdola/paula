@@ -318,7 +318,7 @@ func TestADescriptionCutShortIsNotKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	history, err := r.History(context.Background(), 0, 100)
+	history, _, err := r.History(context.Background(), 0, 100)
 	if err != nil {
 		t.Fatal(err)
 	}

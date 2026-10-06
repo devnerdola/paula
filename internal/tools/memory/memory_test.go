@@ -18,9 +18,11 @@ import (
 )
 
 // fakeEnv is a conversation holding the memories a test gives it, which
-// writes a day in a way of its own.
+// writes a day in a way of its own. A search finds them all, and as many as
+// matched say in all, or as many as there are when it says none.
 type fakeEnv struct {
 	memories []store.Memory
+	matched  int
 
 	query    string
 	limit    int
@@ -34,23 +36,24 @@ func (f *fakeEnv) Date(t time.Time) string { return t.UTC().Format("2 Jan") }
 
 func (f *fakeEnv) Time(t time.Time) string { return t.UTC().Format("2 Jan 15:04") }
 
-func (f *fakeEnv) Memories(_ context.Context, query string, limit int) ([]store.Memory, error) {
+func (f *fakeEnv) Memories(_ context.Context, query string, limit int) ([]store.Memory, int, error) {
 	f.searched, f.query, f.limit = true, query, limit
-	return f.memories, nil
+	return f.memories[:min(limit, len(f.memories))], max(f.matched, len(f.memories)), nil
 }
 
 // LatestMemories are the test's memories, which it gives oldest first, newest
 // first from the one at from on.
-func (f *fakeEnv) LatestMemories(_ context.Context, from, limit int) ([]store.Memory, error) {
+func (f *fakeEnv) LatestMemories(_ context.Context, from, limit int) ([]store.Memory, int, error) {
+	f.limit = limit
 	newest := slices.Clone(f.memories)
 	slices.Reverse(newest)
 	if from >= len(newest) {
-		return nil, nil
+		return nil, len(newest), nil
 	}
-	return newest[from:min(from+limit, len(newest))], nil
+	return newest[from:min(from+limit, len(newest))], len(newest), nil
 }
 
-func (f *fakeEnv) Images(context.Context, int, int) ([]store.Image, error) { return nil, nil }
+func (f *fakeEnv) Images(context.Context, int, int) ([]store.Image, int, error) { return nil, 0, nil }
 
 func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return nil, store.ErrNotFound }
 
@@ -135,14 +138,16 @@ func TestASearchForNothingIsNotMade(t *testing.T) {
 }
 
 // Each memory is found with the number it is forgotten by and the day it was
-// said, written the way the conversation writes a day.
+// said, written the way the conversation writes a day, after how many hold a
+// word of the query.
 func TestASearchAnswersWithTheNumberAndTheDayOfEachMemory(t *testing.T) {
 	e := env()
 	got, err := call(t, "search_memories", e, `{"query":" where does Ana live "}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon.\n" +
+	want := "2 memories hold a word of this:\n" +
+		"#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon.\n" +
 		"#7 (said on 20 Sep) Ana visits in December."
 	if got != want {
 		t.Errorf("the search answered\n%s\nwant\n%s", got, want)
@@ -152,13 +157,40 @@ func TestASearchAnswersWithTheNumberAndTheDayOfEachMemory(t *testing.T) {
 	}
 
 	e.memories = nil
-	if got, err := call(t, "search_memories", e, `{"query":"bicycle"}`); err != nil || got != "no memories match" {
+	if got, err := call(t, "search_memories", e, `{"query":"bicycle"}`); err != nil || got != "no memory holds a word of this" {
 		t.Errorf("a search that found nothing answered %q, %v", got, err)
 	}
 }
 
+// A search that finds more than it lists says how many it found, and which of
+// them it lists; a call asks for as many as it wants, and one below one is
+// refused.
+func TestASearchSaysHowManyHoldAWordOfIt(t *testing.T) {
+	e := env()
+	e.matched = 14
+	got, err := call(t, "search_memories", e, `{"query":"Ana","limit":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.limit != 2 || !strings.HasPrefix(got, "14 memories hold a word of this; these are the 2 that hold most of them:\n#3 ") {
+		t.Errorf("a search for 2 of 14 was asked for %d and answered\n%s", e.limit, got)
+	}
+	if got, _ := call(t, "search_memories", e, `{"query":"Ana","limit":1}`); !strings.HasPrefix(got,
+		"14 memories hold a word of this; this is the one that holds most of them:\n#3 ") {
+		t.Errorf("a search for 1 of 14 answered\n%s", got)
+	}
+	e.memories, e.matched = e.memories[:1], 0
+	if got, _ := call(t, "search_memories", e, `{"query":"Ana"}`); !strings.HasPrefix(got, "1 memory holds a word of this:\n") {
+		t.Errorf("a search that found one answered\n%s", got)
+	}
+	if _, err := call(t, "search_memories", e, `{"query":"Ana","limit":-1}`); err == nil {
+		t.Error("a search for fewer than one was answered")
+	}
+}
+
 // The memories are listed newest first, with the number each is forgotten by
-// and the day it was said, and a conversation that has none says so.
+// and the day it was said, after which they are of how many, and a
+// conversation that has none says so.
 func TestAListIsTheNewestMemories(t *testing.T) {
 	e := env()
 	e.memories = nil
@@ -171,7 +203,8 @@ func TestAListIsTheNewestMemories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#7 (said on 20 Sep) Ana visits in December.\n" +
+	want := "1 to 2 of 2 memories, newest first:\n" +
+		"#7 (said on 20 Sep) Ana visits in December.\n" +
 		"#3 (said on 19 Sep) Caio's sister Ana lives in Lisbon."
 	if got != want {
 		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
@@ -182,7 +215,8 @@ func TestAListIsTheNewestMemories(t *testing.T) {
 }
 
 // What a call answers goes into the prompt of the round after it, so a list of
-// many memories answers fifty at a time, saying where the older ones are.
+// many memories answers fifty at a time unless it asks for another number,
+// saying which of how many it is and where the older ones are.
 func TestAListOfManyMemoriesAnswersAPageAtATime(t *testing.T) {
 	e := env()
 	e.memories = nil
@@ -192,22 +226,27 @@ func TestAListOfManyMemoriesAnswersAPageAtATime(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		args        string
+		head        string
 		first, last string
 		lines       int
 		older       string
 	}{
-		{`{}`, "#120 ", "#71 ", 50, "list_memories with from 50"},
-		{`{"from":50}`, "#70 ", "#21 ", 50, "list_memories with from 100"},
-		{`{"from":100}`, "#20 ", "#1 ", 20, ""},
+		{`{}`, "1 to 50 of 120 memories", "#120 ", "#71 ", 50, "list_memories with from 50"},
+		{`{"from":50}`, "51 to 100 of 120 memories", "#70 ", "#21 ", 50, "list_memories with from 100"},
+		{`{"from":100}`, "101 to 120 of 120 memories", "#20 ", "#1 ", 20, ""},
+		{`{"from":10,"limit":5}`, "11 to 15 of 120 memories", "#110 ", "#106 ", 5, "list_memories with from 15"},
 	} {
 		got, err := call(t, "list_memories", e, tc.args)
 		if err != nil {
 			t.Fatal(err)
 		}
 		lines := strings.Split(got, "\n")
-		memories := lines
+		if !strings.HasPrefix(lines[0], tc.head) {
+			t.Errorf("%s: the list opens with %q, want %q", tc.args, lines[0], tc.head)
+		}
+		memories := lines[1:]
 		if tc.older != "" {
-			memories = lines[:len(lines)-1]
+			memories = lines[1 : len(lines)-1]
 			if !strings.Contains(lines[len(lines)-1], tc.older) {
 				t.Errorf("%s: the list ends with %q, want it to say %q", tc.args, lines[len(lines)-1], tc.older)
 			}
@@ -218,11 +257,13 @@ func TestAListOfManyMemoriesAnswersAPageAtATime(t *testing.T) {
 				memories[0], memories[len(memories)-1], tc.lines, tc.first, tc.last)
 		}
 	}
-	if got, err := call(t, "list_memories", e, `{"from":200}`); err != nil || got != "no memories past the newest 200" {
+	if got, err := call(t, "list_memories", e, `{"from":200}`); err != nil || got != "no memories past the newest 200: there are 120 in all" {
 		t.Errorf("listing past every memory answered %q, %v", got, err)
 	}
-	if _, err := call(t, "list_memories", e, `{"from":-1}`); err == nil {
-		t.Error("listing from below zero was answered")
+	for _, args := range []string{`{"from":-1}`, `{"limit":-1}`} {
+		if _, err := call(t, "list_memories", e, args); err == nil {
+			t.Errorf("listing with %s was answered", args)
+		}
 	}
 }
 
@@ -352,6 +393,7 @@ func section(t *testing.T, memory string) config.Section {
 func TestTheSettingsAreHeldToWhatTheyCanBe(t *testing.T) {
 	for _, tc := range []struct{ memory, want string }{
 		{"    results: 0\n", "tools.memory: results: 0 is below one"},
+		{"    page: 0\n", "tools.memory: page: 0 is below one"},
 		{"    size: 5\n", "size"},
 	} {
 		_, err := Open(section(t, tc.memory), host)
@@ -373,5 +415,25 @@ func TestASearchAnswersWithAsManyAsTheFileSays(t *testing.T) {
 	}
 	if e.limit != 3 {
 		t.Errorf("the conversation was asked for %d, want the 3 the file says", e.limit)
+	}
+}
+
+// A list answers with as many as the file says when the call asks for no
+// number, and says so in its description.
+func TestAListAnswersWithAsManyAsTheFileSays(t *testing.T) {
+	tools, err := Open(section(t, "    page: 7\n"), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(tools, func(t api.Tool) bool { return t.Definition().Name == "list_memories" })
+	e := env()
+	if _, err := tools[i].Call(context.Background(), e, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if e.limit != 7 {
+		t.Errorf("the conversation was asked for %d, want the 7 the file says", e.limit)
+	}
+	if d := tools[i].Definition(); !strings.Contains(d.Description, "7 at a time") || !strings.Contains(string(d.Parameters), "leave it out for 7") {
+		t.Errorf("the list is described as %q with %s, want the 7 the file says", d.Description, d.Parameters)
 	}
 }

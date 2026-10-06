@@ -104,13 +104,21 @@ func (s *Store) Images(ctx context.Context) ([]Image, error) {
 }
 
 // ImagesFrom are the pictures of the conversation, newest first, from the one
-// at from on and at most limit of them.
-func (s *Store) ImagesFrom(ctx context.Context, from, limit int) ([]Image, error) {
-	rows, err := s.ro.QueryContext(ctx, imagesFrom+` ORDER BY messages.id DESC, part.key LIMIT ? OFFSET ?`, limit, from)
-	if err != nil {
-		return nil, err
-	}
-	return scanImages(rows)
+// at from on and at most limit of them, and how many there are in all, a
+// picture sent twice counted each time, as Images lists them.
+func (s *Store) ImagesFrom(ctx context.Context, from, limit int) (found []Image, total int, err error) {
+	err = s.snapshot(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM (`+imagesFrom+`)`).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, imagesFrom+` ORDER BY messages.id DESC, part.key LIMIT ? OFFSET ?`, limit, from)
+		if err != nil {
+			return err
+		}
+		found, err = scanImages(rows)
+		return err
+	})
+	return found, total, err
 }
 
 func scanImages(rows *sql.Rows) ([]Image, error) {

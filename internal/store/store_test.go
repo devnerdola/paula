@@ -183,15 +183,15 @@ func TestMessageListing(t *testing.T) {
 		ids = append(ids, m.ID)
 	}
 
-	got, err := s.Messages(ctx, 0, 3)
+	got, said, err := s.Messages(ctx, 0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0].ID != ids[2] || got[2].ID != ids[4] {
-		t.Errorf("newest three = %v", messageIDs(got))
+	if len(got) != 3 || got[0].ID != ids[2] || got[2].ID != ids[4] || said != 5 {
+		t.Errorf("newest three = %v of %d", messageIDs(got), said)
 	}
 
-	got, err = s.Messages(ctx, ids[2], 10)
+	got, _, err = s.Messages(ctx, ids[2], 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +296,9 @@ func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
 	if err != nil || len(images) != 0 {
 		t.Fatalf("images of a conversation with none = %+v, %v", images, err)
 	}
+	if page, n, err := s.ImagesFrom(ctx, 0, 10); err != nil || len(page) != 0 || n != 0 {
+		t.Errorf("a page of a conversation with no pictures = %+v of %d, %v", page, n, err)
+	}
 	if _, err := s.Image(ctx, 1); !errors.Is(err, ErrNotFound) {
 		t.Errorf("an image of a conversation with none = %v, want not found", err)
 	}
@@ -341,6 +344,12 @@ func TestThePicturesOfTheConversationAreWhatItsMessagesCarried(t *testing.T) {
 	}
 	if images[1].ID != images[2].ID || images[0].ID == images[1].ID {
 		t.Errorf("numbers = %d, %d, %d, want one for each file", images[0].ID, images[1].ID, images[2].ID)
+	}
+	// A page of them is of every picture the messages carry, as they are
+	// listed.
+	if page, n, err := s.ImagesFrom(ctx, 1, 1); err != nil || len(page) != 1 || page[0].SHA256 != "sha-a" ||
+		page[0].MessageID != again || n != 3 {
+		t.Errorf("the second picture = %+v of %d, %v, want the first file as sent again, of 3", page, n, err)
 	}
 
 	// A number is the picture as it was first sent.

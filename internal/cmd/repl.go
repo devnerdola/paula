@@ -14,19 +14,24 @@ import (
 func replCommand() *command {
 	return &command{
 		name:  "repl",
+		args:  "[-n N]",
 		short: "talk to her in the terminal",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
+			n := fs.Int("n", repl.History, "how many of the latest messages to open on")
 			return func(g *globals, args []string) error {
 				if len(args) > 0 {
 					return usagef("no arguments are taken")
 				}
-				return talk(g)
+				if *n < 0 {
+					return usagef("-n takes a count of zero or more")
+				}
+				return talk(g, *n)
 			}
 		},
 	}
 }
 
-func talk(g *globals) error {
+func talk(g *globals, history int) error {
 	cfg, err := config.Load(g.config)
 	if err != nil {
 		return err
@@ -66,6 +71,7 @@ func talk(g *globals) error {
 		Out:         g.stdout,
 		Err:         g.stderr,
 		Interactive: typedAt(g.stdin),
+		History:     history,
 		Interrupts:  interrupts,
 	}.Run(g.ctx)
 	if code != 0 {

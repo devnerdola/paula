@@ -120,7 +120,7 @@ func TestAHistoryPastItsReservationIsCompactedAfterTheTurn(t *testing.T) {
 
 	// The summary covers every message of that turn, so the next one carries
 	// none of them: its history is empty.
-	messages, err := r.store.Messages(ctx, 0, 0)
+	messages, _, err := r.store.Messages(ctx, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestACompactionIsTheSummaryAndTheWholeHistory(t *testing.T) {
 	ctx := context.Background()
 
 	talkPast(t, r)
-	talked, err := r.store.Messages(ctx, 0, 0)
+	talked, _, err := r.store.Messages(ctx, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +352,7 @@ func TestACompactionTheContextCannotHoldIsWrittenInParts(t *testing.T) {
 		}
 	}
 	last := parts[len(parts)-1]
-	messages, err := r.store.Messages(ctx, 0, 2)
+	messages, _, err := r.store.Messages(ctx, 0, 2)
 	if err != nil {
 		t.Fatal(err)
 	}

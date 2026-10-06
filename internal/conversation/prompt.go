@@ -37,8 +37,7 @@ func (e *Engine) now() string {
 // cameDue says a call back she scheduled came due, when, and why: the whole
 // of what she answers, told the way a time is, since none of it is from the
 // user. It reads the same in every prompt after it, so what a host cached
-// stands. The reason is asked for as one sentence, and one that ends as a
-// sentence does is not given a second stop.
+// stands. A reason that ends as a sentence does is not given a second stop.
 func (e *Engine) cameDue(msg store.Message) string {
 	reason := msg.Text()
 	if !strings.HasSuffix(reason, ".") && !strings.HasSuffix(reason, "!") && !strings.HasSuffix(reason, "?") {
@@ -111,16 +110,19 @@ func (m *model) notes() api.Notes {
 }
 
 // card is the character card as a model reads it, with what the app and the
-// tools have her told after it. Every model is told that what she writes
-// arrives as plain text: every frontend shows markup as the characters it is
-// written in, and a model that has read a page written in markdown writes it
-// back. A model told her notes as user messages is told
+// tools have her told after it: that what she writes is sent, but for the
+// answer that sends nothing; that it arrives as plain text, a blank line
+// ending one text and beginning the next; and that the app says so of an
+// answer with no text at all. A model told her notes as user messages is told
 // whose they are, where it stands as long as the card does, naming the ones it
 // is told.
 func (e *Engine) card(m *model) string {
 	user := e.persona.User.Name
-	sections := []string{e.rendered, "Your messages reach " + user + " as plain text, the way a text message " +
-		"does: write no markdown or HTML, and write an address as it is rather than as a link."}
+	sections := []string{e.rendered, "Everything you write is a message you send to " + user + ", except an " +
+		"answer of " + nothing + " alone, which sends nothing. Your messages reach " + user + " as plain text, " +
+		"the way a text message does: write no markdown or HTML, and write an address as it is rather than as " +
+		"a link. A blank line between two paragraphs is where one text ends and the next begins. When you " +
+		"answer with no text at all, a message from the app, not from " + user + ", says so, and you answer again."}
 	if notes := m.notes(); notes.Role != api.RoleSystem {
 		told := "the one before each of " + user + "'s messages saying when it was sent"
 		if !notes.LastAsSent {

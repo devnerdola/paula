@@ -27,7 +27,7 @@ type Conversation interface {
 	Events(ctx context.Context, after Seq) iter.Seq2[conversation.Event, error]
 	Standing(ctx context.Context) (seq Seq, message store.MessageID, err error)
 	Wait(ctx context.Context) (Seq, error)
-	History(ctx context.Context, before store.MessageID, limit int) ([]store.Message, error)
+	History(ctx context.Context, before store.MessageID, limit int) ([]store.Message, int, error)
 	Since(ctx context.Context, after store.MessageID) ([]store.Message, error)
 
 	Models(ctx context.Context) (conversation.Models, error)
@@ -35,6 +35,6 @@ type Conversation interface {
 	ResetModels(ctx context.Context) error
 
 	Summary(ctx context.Context) (*store.Summary, error)
-	Memories(ctx context.Context, query string, limit int) ([]store.Memory, error)
+	Memories(ctx context.Context, query string, limit int) ([]store.Memory, int, error)
 	Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error)
 }

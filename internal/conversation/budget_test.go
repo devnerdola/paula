@@ -435,7 +435,7 @@ func TestAMessageTooLongForTheContextIsRefusedAsItIsSent(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "too long") {
 		t.Fatalf("a message of more words than the context = %v, want it refused", err)
 	}
-	if history, _ := r.History(ctx, 0, 10); len(history) != 0 {
+	if history, _, _ := r.History(ctx, 0, 10); len(history) != 0 {
 		t.Errorf("history = %+v, want nothing of the message stored", history)
 	}
 
@@ -522,7 +522,8 @@ func TestAModelTheCardFillsIsRefusedWhenTheConversationOpens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	words := len(strings.Fields(rendered))
+	// The card is sent with what the app tells every model after it.
+	words := len(strings.Fields(rendered)) + len(strings.Fields(plain))
 	open := func(tokens int) error {
 		t.Helper()
 		st, err := store.Open(filepath.Join(t.TempDir(), "data"))

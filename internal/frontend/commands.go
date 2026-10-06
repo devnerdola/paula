@@ -18,7 +18,7 @@ func (s *Session) commands() []api.Command {
 		{Name: "models", Args: "[reset]", Short: "which model serves each role"},
 		{Name: "model", Args: "ROLE NAME", Short: "have a role served by a model"},
 		{Name: "summary", Short: "what she was told of the conversation before this"},
-		{Name: "memory", Args: "[QUERY]", Short: "what she remembers, or what of it a question is about"},
+		{Name: "memory", Args: "[-n N] [QUERY]", Short: "what she remembers, or what of it a question is about"},
 		{Name: "forget", Args: "ID", Short: "take a memory away"},
 		{Name: "stop", Short: "stop the reply being written"},
 	}
@@ -82,7 +82,8 @@ func (s *Session) setModel(ctx context.Context, args string) error {
 	return s.say(ctx, fmt.Sprintf("%s: %s", role, name))
 }
 
-// memoriesShown is how many memories a frontend lists at once.
+// memoriesShown is how many memories a frontend lists when -n asks for no
+// other number.
 const memoriesShown = 10
 
 func (s *Session) summary(ctx context.Context) error {
@@ -99,18 +100,38 @@ func (s *Session) summary(ctx context.Context) error {
 		summary.CoversUpto.Format("Monday, 2 January 2006, 15:04"), summary.Content))
 }
 
-func (s *Session) memories(ctx context.Context, query string) error {
-	found, err := s.conv.Memories(ctx, query, memoriesShown)
+func (s *Session) memories(ctx context.Context, args string) error {
+	limit, query := memoriesShown, args
+	if rest, ok := strings.CutPrefix(args, "-n"); ok && (rest == "" || rest[0] == ' ') {
+		n, after, _ := strings.Cut(strings.TrimSpace(rest), " ")
+		v, err := strconv.Atoi(n)
+		if err != nil || v < 1 {
+			return s.say(ctx, "/memory -n takes how many to show, such as /memory -n 30")
+		}
+		limit, query = v, strings.TrimSpace(after)
+	}
+	found, total, err := s.conv.Memories(ctx, query, limit)
 	if err != nil {
 		return s.failed(ctx, err)
 	}
 	if len(found) == 0 {
 		if query != "" {
-			return s.say(ctx, "no memories match")
+			return s.say(ctx, "no memory holds a word of it")
 		}
 		return s.say(ctx, "no memories yet")
 	}
-	return s.say(ctx, memoryLines(found))
+	var head string
+	switch {
+	case query == "" && total == 1:
+		head = "1 of 1 memory:\n"
+	case query == "":
+		head = fmt.Sprintf("%d of %d memories:\n", len(found), total)
+	case total == 1:
+		head = fmt.Sprintf("1 memory holds a word of %q:\n", query)
+	default:
+		head = fmt.Sprintf("%d of the %d memories that hold a word of %q:\n", len(found), total, query)
+	}
+	return s.say(ctx, head+memoryLines(found))
 }
 
 func (s *Session) forget(ctx context.Context, args string) error {

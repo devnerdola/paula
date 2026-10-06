@@ -528,7 +528,7 @@ func TestAMessageIsStoredAndPublished(t *testing.T) {
 		t.Errorf("channel = %q", stored.Channel)
 	}
 
-	history, err := e.History(context.Background(), 0, 10)
+	history, _, err := e.History(context.Background(), 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -972,7 +972,7 @@ func TestTheReplyIsStoredWhereTheEventsAreNumbered(t *testing.T) {
 		t.Errorf("the messages were published in the order %v", ids)
 	}
 
-	messages, err := e.History(ctx, 0, 10)
+	messages, _, err := e.History(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -58,26 +58,23 @@ func imagesListCommand() *command {
 					return err
 				}
 
-				ctx := context.Background()
-				images, err := s.ImagesFrom(ctx, *from, *n)
+				images, total, err := s.ImagesFrom(context.Background(), *from, *n)
 				if err != nil {
 					return err
 				}
-				if len(images) == 0 {
-					// An empty page past the newest says nothing about whether
-					// there are any at all.
-					any, err := s.ImagesFrom(ctx, 0, 1)
-					if err != nil {
-						return err
-					}
-					if len(any) > 0 {
-						fmt.Fprintf(g.stdout, "no pictures past the newest %d\n", *from)
-					} else {
-						fmt.Fprintln(g.stdout, "no pictures")
-					}
+				switch {
+				case total == 0:
+					fmt.Fprintln(g.stdout, "no pictures")
+					return nil
+				case len(images) == 0:
+					fmt.Fprintf(g.stdout, "no pictures past the newest %d: there are %d in all\n", *from, total)
 					return nil
 				}
-				return listImages(g.stdout, card, images)
+				if err := listImages(g.stdout, card, images); err != nil {
+					return err
+				}
+				fmt.Fprintf(g.stdout, "\n%d to %d of %s\n", *from+1, *from+len(images), counted(total, "picture", "pictures"))
+				return nil
 			}
 		},
 	}

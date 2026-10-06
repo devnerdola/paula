@@ -33,9 +33,13 @@ func (f *fakeEnv) Time(t time.Time) string { return t.In(now.Location()).Format(
 
 func (f *fakeEnv) Now() time.Time { return now }
 
-func (f *fakeEnv) Memories(context.Context, string, int) ([]store.Memory, error) { return nil, nil }
+func (f *fakeEnv) Memories(context.Context, string, int) ([]store.Memory, int, error) {
+	return nil, 0, nil
+}
 
-func (f *fakeEnv) LatestMemories(context.Context, int, int) ([]store.Memory, error) { return nil, nil }
+func (f *fakeEnv) LatestMemories(context.Context, int, int) ([]store.Memory, int, error) {
+	return nil, 0, nil
+}
 
 func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Memory, error) {
 	return nil, nil
@@ -43,7 +47,7 @@ func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Me
 
 func (f *fakeEnv) Forget(context.Context, store.MemoryID) ([]store.Memory, error) { return nil, nil }
 
-func (f *fakeEnv) Images(context.Context, int, int) ([]store.Image, error) { return nil, nil }
+func (f *fakeEnv) Images(context.Context, int, int) ([]store.Image, int, error) { return nil, 0, nil }
 
 func (f *fakeEnv) Image(context.Context, int64) (*store.Image, error) { return nil, store.ErrNotFound }
 

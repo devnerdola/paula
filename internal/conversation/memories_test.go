@@ -29,13 +29,14 @@ func TestMemoriesWithNoQueryAreTheNewest(t *testing.T) {
 		t.Fatalf("memories = %+v, %v", stored, err)
 	}
 
-	found, err := r.Memories(ctx, "", 1)
+	found, total, err := r.Memories(ctx, "", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The newest first, and nothing was asked of a model to say so.
-	if len(found) != 1 || found[0].ID != stored[len(stored)-1].ID {
-		t.Errorf("found %+v, want the newest memory", found)
+	// The newest first, of how many stand, and nothing was asked of a model to
+	// say so.
+	if len(found) != 1 || found[0].ID != stored[len(stored)-1].ID || total != len(stored) {
+		t.Errorf("found %+v of %d, want the newest memory of %d", found, total, len(stored))
 	}
 }
 
@@ -73,7 +74,7 @@ func TestASearchLooksPastTheNames(t *testing.T) {
 		{"Paula's piano practice", ids[2:]},
 		{"Caio's favourite food", nil},
 	} {
-		found, err := r.Memories(ctx, c.query, 10)
+		found, _, err := r.Memories(ctx, c.query, 10)
 		if err != nil {
 			t.Fatalf("searching %q: %v", c.query, err)
 		}
@@ -86,7 +87,7 @@ func TestASearchLooksPastTheNames(t *testing.T) {
 		}
 	}
 
-	if _, err := r.Memories(ctx, "Caio's", 10); err == nil || !strings.Contains(err.Error(), "names Caio or Paula") {
+	if _, _, err := r.Memories(ctx, "Caio's", 10); err == nil || !strings.Contains(err.Error(), "names Caio or Paula") {
 		t.Errorf("searching for a name alone = %v, want it said that every memory names them", err)
 	}
 }

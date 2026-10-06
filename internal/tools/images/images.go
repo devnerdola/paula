@@ -19,14 +19,28 @@ import (
 // Kind is the key written in the configuration file.
 const Kind = "images"
 
-// Open reads the images section, which takes no settings, and builds the two
-// tools.
+// defaultPage is how many pictures a list answers with when the file says
+// nothing.
+const defaultPage = 50
+
+type settings struct {
+	// Page is how many pictures a list answers with, unless the call asks for
+	// another number.
+	Page int `yaml:"page"`
+}
+
+// Open reads the images section and builds the two tools.
 func Open(s config.Section, h api.Host) ([]api.Tool, error) {
-	var none struct{}
-	if err := s.Decode(&none); err != nil {
+	cfg := settings{Page: defaultPage}
+	if err := s.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	return []api.Tool{list{h}, get{h}}, nil
+	if cfg.Page < 1 {
+		p := &config.Problems{Path: s.Path()}
+		p.Addf("page: %d is below one", cfg.Page)
+		return nil, p.Err()
+	}
+	return []api.Tool{list{h: h, page: cfg.Page}, get{h}}, nil
 }
 
 // arrangement is what both tools tell a model of where the pictures are.
@@ -36,29 +50,30 @@ func arrangement(n api.Names) string {
 		"summary of your conversation, which mentions a picture at most."
 }
 
-// page is how many pictures a list answers with at once. What a call answers
-// goes into the prompt of the round after it, and a list of every picture of a
-// long conversation would take more of it than the round has.
-const page = 50
-
-type list struct{ h api.Host }
+type list struct {
+	h    api.Host
+	page int
+}
 
 func (t list) Definition() api.Definition {
 	n := t.h.Names
 	return api.Definition{
 		Name: "list_images",
-		Description: fmt.Sprintf("List the pictures %s has sent and the photos you have sent, newest first, %d "+
-			"at a time: its number, when it was sent and by whom, and what it showed. ", n.User, page) +
+		Description: fmt.Sprintf("List the pictures %s has sent and the photos you have sent, newest first: its "+
+			"number, when it was sent and by whom, and what it showed, %d at a time, or as many as limit asks "+
+			"for. The answer says how many pictures there are in all. ", n.User, t.page) +
 			arrangement(n) + " List them when " + n.User +
 			" brings up a picture you do not have in front of you, and look at one again with get_image, by " +
 			"its number. A list with older pictures after it says so, and from lists them.",
-		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"from":{"type":"integer","description":"how many of the newest pictures to pass over; leave it out for the newest"}}}`),
+		Parameters: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{`+
+			`"from":{"type":"integer","description":"how many of the newest pictures to pass over; leave it out for the newest"},`+
+			`"limit":{"type":"integer","description":"how many pictures to list; leave it out for %d"}}}`, t.page)),
 	}
 }
 
 type listArgs struct {
-	From int `json:"from"`
+	From  int `json:"from"`
+	Limit int `json:"limit"`
 }
 
 func (list) Note(json.RawMessage) string { return "listing pictures" }
@@ -73,27 +88,31 @@ func (t list) Call(ctx context.Context, env api.Env, args json.RawMessage) (stri
 	if a.From < 0 {
 		return "", fmt.Errorf("from is %d, below zero", a.From)
 	}
-	// One past the page says whether there are older ones to list.
-	images, err := env.Images(ctx, a.From, page+1)
+	limit, err := api.Count("limit", a.Limit, t.page)
+	if err != nil {
+		return "", err
+	}
+	images, total, err := env.Images(ctx, a.From, limit)
 	if err != nil {
 		return "", err
 	}
 	if len(images) == 0 {
-		if a.From > 0 {
-			return fmt.Sprintf("no pictures past the newest %d", a.From), nil
+		if total > 0 {
+			return fmt.Sprintf("no pictures past the newest %d: there are %d in all", a.From, total), nil
 		}
 		return "no pictures yet", nil
 	}
-	older := len(images) > page
-	if older {
-		images = images[:page]
+	shown := a.From + len(images)
+	pictures := fmt.Sprintf("%d pictures", total)
+	if total == 1 {
+		pictures = "1 picture"
 	}
-	out := make([]string, len(images))
-	for i, img := range images {
-		out[i] = line(env, t.h.Names, img)
+	out := []string{fmt.Sprintf("%d to %d of %s, newest first:", a.From+1, shown, pictures)}
+	for _, img := range images {
+		out = append(out, line(env, t.h.Names, img))
 	}
-	if older {
-		out = append(out, fmt.Sprintf("There are older pictures: list_images with from %d lists them.", a.From+page))
+	if shown < total {
+		out = append(out, fmt.Sprintf("There are older pictures: list_images with from %d lists them.", shown))
 	}
 	return strings.Join(out, "\n"), nil
 }

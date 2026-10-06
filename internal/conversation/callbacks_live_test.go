@@ -34,9 +34,11 @@ func TestLiveCallbacks(t *testing.T) {
 	r := lv.run("first run", clock)
 	r.send([]string{"hey, I'm starting a meeting. ping me in 2 minutes to remind me to drink some water, ok?"}, nil)
 	pending := lv.pending(ctx)
-	scheduled := len(pending) == 1 && within(pending[0].DueAt, clock.Now().Add(2*time.Minute), time.Minute)
+	// It is moved next, so it has to be still pending.
+	scheduled, found := lv.dueAbout(r.turns[0], pending, 2*time.Minute)
+	scheduled = scheduled && len(pending) == 1
 	lv.check("asked to ping in 2 minutes, she schedules a call back for then", scheduled,
-		"one call back due in about 2 minutes", callbackTexts(pending), lv.ids(r.turns[0].entry)...)
+		"one call back due about 2 minutes after the message", found, lv.ids(r.turns[0].entry)...)
 	if !scheduled {
 		r.end()
 		lv.printf("\n%d checks passed, %d failed.", lv.passed, lv.failed)
@@ -46,9 +48,10 @@ func TestLiveCallbacks(t *testing.T) {
 
 	r.send([]string{"actually make it 4 minutes, the meeting runs long"}, nil)
 	pending = lv.pending(ctx)
-	moved := len(pending) == 1 && pending[0].DueAt.After(was.DueAt) && within(pending[0].DueAt, clock.Now().Add(4*time.Minute), time.Minute)
+	moved, found := lv.dueAbout(r.turns[1], pending, 4*time.Minute)
+	moved = moved && len(pending) == 1 && pending[0].DueAt.After(was.DueAt)
 	lv.check("asked to make it 4 minutes, she moves the call back", moved,
-		"one call back due in about 4 minutes", callbackTexts(pending), lv.ids(r.turns[1].entry)...)
+		"the call back due later, about 4 minutes after the message", found, lv.ids(r.turns[1].entry)...)
 
 	r.send([]string{"never mind, I'll just drink now. cancel that reminder"}, nil)
 	pending = lv.pending(ctx)
@@ -57,9 +60,9 @@ func TestLiveCallbacks(t *testing.T) {
 
 	r.send([]string{"ok one more: in 1 minute, tell me something nice, I need it before this call"}, nil)
 	pending = lv.pending(ctx)
-	again := len(pending) == 1 && within(pending[0].DueAt, clock.Now().Add(time.Minute), time.Minute)
+	again, found := lv.dueAbout(r.turns[3], pending, time.Minute)
 	lv.check("asked for a call back in 1 minute, she schedules one", again,
-		"one call back due in about a minute", callbackTexts(pending), lv.ids(r.turns[3].entry)...)
+		"one call back due about a minute after the message", found, lv.ids(r.turns[3].entry)...)
 	if !again {
 		r.end()
 		lv.printf("\n%d checks passed, %d failed.", lv.passed, lv.failed)
@@ -123,8 +126,43 @@ func callbackTexts(pending []store.Callback) string {
 	return strings.Join(out, "; ")
 }
 
-func within(t, of time.Time, d time.Duration) bool {
-	return t.After(of.Add(-d)) && t.Before(of.Add(d))
+// dueAbout says the one call back she scheduled in a turn is due about so long
+// after its message, and what was found. She is told the time to the minute,
+// so it is counted from the minute the message was sent to when the turn
+// ended, a minute either way: "in 4 minutes" said a few seconds after a minute
+// begins may be read from the minute before. For the same reason "in 1 minute"
+// may be due seconds after the message, and fire as the turn ends, before the
+// call backs pending are read: then it is the message it fired as, at the time
+// it fired.
+func (lv *live) dueAbout(turn liveTurn, pending []store.Callback, after time.Duration) (bool, string) {
+	ctx := context.Background()
+	found := callbackTexts(pending)
+	msg, err := lv.st.Message(ctx, turn.message)
+	if err != nil {
+		return false, found + "; the message: " + err.Error()
+	}
+	entry, err := lv.st.Entry(ctx, turn.entry)
+	if err != nil {
+		return false, found + "; the turn: " + err.Error()
+	}
+	found += fmt.Sprintf("; sent %s, answered %s", msg.CreatedAt.Format(time.TimeOnly), entry.EndedAt.Format(time.TimeOnly))
+	var due time.Time
+	switch len(pending) {
+	case 0:
+		fired, err := lv.st.LastAsked(ctx)
+		if err != nil || fired.Role != store.RoleCallback || fired.ID < turn.message {
+			return false, found
+		}
+		due = fired.CreatedAt
+		found += fmt.Sprintf("; fired at %s as message %d", due.Format(time.TimeOnly), fired.ID)
+	case 1:
+		due = pending[0].DueAt
+	default:
+		return false, found
+	}
+	from := msg.CreatedAt.Truncate(time.Minute).Add(after - time.Minute)
+	to := entry.EndedAt.Add(after + time.Minute)
+	return !due.Before(from) && !due.After(to), found
 }
 
 // awaitCallback waits for a call back to fire as a message and for the turn

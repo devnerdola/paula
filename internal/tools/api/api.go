@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	runnersapi "nerdola.dev/x/paula/internal/runners/api"
@@ -40,6 +41,18 @@ type Lookup interface {
 	LooksUp()
 }
 
+// Count is how many a call asked for under name, or given when it asked for
+// none, which its arguments carry as zero. Fewer than one is refused.
+func Count(name string, asked, given int) (int, error) {
+	switch {
+	case asked < 0:
+		return 0, fmt.Errorf("%s is %d, below one", name, asked)
+	case asked == 0:
+		return given, nil
+	}
+	return asked, nil
+}
+
 // Definition is what a model is told of a tool: what it is called, what it
 // does, and the JSON schema of what it takes.
 type Definition struct {
@@ -56,19 +69,21 @@ type Env interface {
 	// answers reads like the prompt it goes back into, and Time a moment of one.
 	Date(t time.Time) string
 	Time(t time.Time) string
-	// Memories are the memories that hold the words of a query.
-	Memories(ctx context.Context, query string, limit int) ([]store.Memory, error)
+	// Memories are the memories that hold a word of a query, at most limit of
+	// them, and how many hold one in all.
+	Memories(ctx context.Context, query string, limit int) ([]store.Memory, int, error)
 	// LatestMemories are the memories that stand, newest first, from the one
-	// at from on and at most limit of them.
-	LatestMemories(ctx context.Context, from, limit int) ([]store.Memory, error)
+	// at from on and at most limit of them, and how many stand in all.
+	LatestMemories(ctx context.Context, from, limit int) ([]store.Memory, int, error)
 	// Remember keeps a memory, said in the newest message the reply answers,
 	// in place of the memories it replaces.
 	Remember(ctx context.Context, content string, replaces []store.MemoryID) (*store.Memory, error)
 	// Forget takes a memory away, and the ones it replaced with it.
 	Forget(ctx context.Context, id store.MemoryID) ([]store.Memory, error)
 	// Images are the pictures of the conversation, newest first, from the one
-	// at from on and at most limit of them, and Image the one of a number.
-	Images(ctx context.Context, from, limit int) ([]store.Image, error)
+	// at from on and at most limit of them, and how many there are in all;
+	// Image is the one of a number.
+	Images(ctx context.Context, from, limit int) ([]store.Image, int, error)
 	Image(ctx context.Context, id int64) (*store.Image, error)
 	// Show has a picture sent to the model in the call's answer, and reports
 	// whether it will be: a model shown a picture there is sent it, and any

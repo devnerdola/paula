@@ -159,15 +159,15 @@ func (v env) Date(t time.Time) string { return dateText(v.e.clock.Now().Location
 
 func (v env) Time(t time.Time) string { return timeText(v.e.clock.Now().Location(), t) }
 
-func (v env) Memories(ctx context.Context, query string, limit int) ([]store.Memory, error) {
+func (v env) Memories(ctx context.Context, query string, limit int) ([]store.Memory, int, error) {
 	return v.e.Memories(ctx, query, limit)
 }
 
-func (v env) LatestMemories(ctx context.Context, from, limit int) ([]store.Memory, error) {
+func (v env) LatestMemories(ctx context.Context, from, limit int) ([]store.Memory, int, error) {
 	return v.e.store.LatestMemories(ctx, from, limit)
 }
 
-func (v env) Images(ctx context.Context, from, limit int) ([]store.Image, error) {
+func (v env) Images(ctx context.Context, from, limit int) ([]store.Image, int, error) {
 	return v.e.store.ImagesFrom(ctx, from, limit)
 }
 

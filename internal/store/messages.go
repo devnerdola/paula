@@ -126,21 +126,31 @@ func (s *Store) Message(ctx context.Context, id MessageID) (*Message, error) {
 	return m, err
 }
 
-// Messages returns up to limit messages older than before, oldest first.
-// before 0 means the newest ones, and limit 0 means all of them.
-func (s *Store) Messages(ctx context.Context, before MessageID, limit int) ([]Message, error) {
+// Messages returns up to limit of the messages the two of them said, the
+// user's and hers, older than before, oldest first, and how many they said in
+// all. A call back that came due is the app's, and is not among them. before 0
+// means the newest ones, and limit 0 means all of them.
+func (s *Store) Messages(ctx context.Context, before MessageID, limit int) (found []Message, said int, err error) {
 	if limit <= 0 {
 		limit = -1
 	}
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+messageColumns+` FROM (
-			SELECT `+messageColumns+` FROM messages
-			 WHERE ? = 0 OR id < ?
-			 ORDER BY id DESC LIMIT ?
-		) ORDER BY id`, before, before, limit)
-	if err != nil {
-		return nil, err
-	}
-	return scanMessages(rows)
+	err = s.snapshot(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM messages WHERE role IN (?, ?)`,
+			RoleUser, RoleAssistant).Scan(&said); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT `+messageColumns+` FROM (
+				SELECT `+messageColumns+` FROM messages
+				 WHERE role IN (?, ?) AND (? = 0 OR id < ?)
+				 ORDER BY id DESC LIMIT ?
+			) ORDER BY id`, RoleUser, RoleAssistant, before, before, limit)
+		if err != nil {
+			return err
+		}
+		found, err = scanMessages(rows)
+		return err
+	})
+	return found, said, err
 }
 
 // MessagesAfter returns the messages newer than after, oldest first.

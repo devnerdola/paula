@@ -603,35 +603,100 @@ func TestAReplyIsWhatEveryRoundWrote(t *testing.T) {
 	}
 }
 
+// A round after a call that writes nothing, or answers with what sends
+// nothing, leaves what she wrote beside the call as the reply.
 func TestARoundWithNothingAfterItsCallIsStillAReply(t *testing.T) {
+	for _, after := range []string{"", "[nothing]"} {
+		t.Run(after, func(t *testing.T) {
+			look := &fakeTool{name: "search_memories", answer: "remembered"}
+			f := &fakeRunner{model: chatModel(), chat: answering(
+				round{text: "got it, I will remember that", calls: []api.ToolCall{lookup("call_1", `{"query":"x"}`)}},
+				round{text: after},
+			)}
+			r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
+			r.say(t, "remember my sister is Ana")
+
+			if n := len(f.all()); n != 2 {
+				t.Errorf("the model was asked %d times, want the round that called and the one after it", n)
+			}
+			reply, _ := stored(t, r)
+			if reply.Text() != "got it, I will remember that" {
+				t.Errorf("the reply is %q, want what she wrote beside the call", reply.Text())
+			}
+			for _, ev := range published(r.Engine) {
+				if ev.Kind == ReplyText && ev.Text != "got it, I will remember that" {
+					t.Errorf("%q was shown", ev.Text)
+				}
+			}
+		})
+	}
+}
+
+// What sends nothing, answered beside a call, is meant when the round after
+// the call writes nothing: the turn ends answered with nothing sent, rather
+// than asking for an answer again.
+func TestNothingBesideACallIsMeantWhenNothingFollows(t *testing.T) {
 	look := &fakeTool{name: "search_memories", answer: "remembered"}
 	f := &fakeRunner{model: chatModel(), chat: answering(
-		round{text: "got it, I will remember that", calls: []api.ToolCall{lookup("call_1", `{"query":"x"}`)}},
+		round{text: "[nothing]", calls: []api.ToolCall{lookup("call_1", `{"query":"x"}`)}},
 		round{},
 	)}
 	r := openReplyOffering(t, f, setup(f), config.DefaultEngine(), look)
-	r.say(t, "remember my sister is Ana")
+	ctx := context.Background()
+	r.say(t, "ok, night night")
 
-	reply, _ := stored(t, r)
-	if reply.Text() != "got it, I will remember that" {
-		t.Errorf("the reply is %q, want what she wrote beside the call", reply.Text())
+	if n := len(f.all()); n != 2 {
+		t.Errorf("the model was asked %d times, want the round that called and the one after it", n)
+	}
+	entries, err := r.store.Entries(ctx, 1)
+	if err != nil || len(entries) != 1 || entries[0].Status != store.StatusDone {
+		t.Fatalf("entries = %+v, %v, want the turn ended done", entries, err)
+	}
+	if reply, err := r.store.ReplyOfEntry(ctx, entries[0].ID); err == nil {
+		t.Errorf("the turn stored the reply %+v, want none", reply)
+	}
+}
+
+// The answer asked for again after one with nothing in it takes that one's
+// place, so it takes none of the rounds of calls a reply may take: with one
+// round, a call to look something up in it still runs.
+func TestAnAnswerAskedForAgainTakesNoRoundOfCalls(t *testing.T) {
+	look := lookingUp{&fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}}
+	f := &fakeRunner{model: chatModel(), chat: answering(
+		round{},
+		round{calls: []api.ToolCall{lookup("call_1", `{"query":"Ana"}`)}},
+		round{text: "she lives in Lisbon"},
+	)}
+	cfg := config.DefaultEngine()
+	cfg.ToolRounds = 1
+	r := openReplyOffering(t, f, setup(f), cfg, look)
+	r.say(t, "where does Ana live?")
+
+	if got := look.calls(); len(got) != 1 {
+		t.Errorf("the tool ran %d times, want once, in the answer asked for again", len(got))
+	}
+	if reply, _ := stored(t, r); reply.Text() != "she lives in Lisbon" {
+		t.Errorf("the reply is %q, want the answer after the call", reply.Text())
 	}
 }
 
 // An answer that would take the next round past the context would have the
 // host refuse the round, so the model is told in its place that the call ran
-// and its answer did not fit. An answer that fits goes as it is.
+// and its answer did not fit, or, of a call that only looks something up, to
+// ask it for less. An answer that fits goes as it is.
 func TestAnAnswerTooLongForTheContextIsNotSent(t *testing.T) {
 	short := &fakeTool{name: "search_memories", answer: "Ana lives in Lisbon"}
-	long := &fakeTool{name: "list_memories", answer: manyWords(1000)}
+	long := lookingUp{&fakeTool{name: "list_memories", answer: manyWords(1000)}}
+	kept := &fakeTool{name: "remember", answer: manyWords(1000)}
 	f := &fakeRunner{model: chatModel(), chat: countedAtThree(answering(
 		round{calls: []api.ToolCall{
 			{ID: "call_1", Name: "search_memories", Arguments: `{"query":"Ana"}`},
 			{ID: "call_2", Name: "list_memories", Arguments: `{}`},
+			{ID: "call_3", Name: "remember", Arguments: `{"memory":"Ana lives in Lisbon."}`},
 		}},
 		round{text: "Ana is in Lisbon"},
 	))}
-	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), short, long)
+	r := openReplyOffering(t, f, sized(f, 2000), config.DefaultEngine(), short, long, kept)
 	r.say(t, "where does Ana live?")
 
 	requests := f.all()
@@ -647,8 +712,13 @@ func TestAnAnswerTooLongForTheContextIsNotSent(t *testing.T) {
 	if got := answers["call_1"]; got != "Ana lives in Lisbon" {
 		t.Errorf("the answer that fits went as %q", got)
 	}
-	if got := answers["call_2"]; !strings.HasPrefix(got, "error: ") || strings.Contains(got, manyWords(10)) {
-		t.Errorf("the answer too long for the context went as %.60q…, want an error in its place", got)
+	for id, want := range map[string]string{
+		"call_2": "error: what the call answered is too long for the room left in the context, so it was not sent; ask it for less at a time",
+		"call_3": "error: the call ran, but what it answered is too long for the room left in the context, so it was not sent",
+	} {
+		if got := answers[id]; got != want {
+			t.Errorf("the answer of %s too long for the context went as %.60q…, want %q in its place", id, got, want)
+		}
 	}
 	if reply, _ := stored(t, r); reply.Text() != "Ana is in Lisbon" {
 		t.Errorf("the reply is %q, want the round after the answers", reply.Text())
@@ -1143,7 +1213,7 @@ func (shower) Definition() toolsapi.Definition {
 func (shower) Note(json.RawMessage) string { return "looking" }
 
 func (shower) Call(ctx context.Context, env toolsapi.Env, _ json.RawMessage) (string, error) {
-	images, err := env.Images(ctx, 0, 1)
+	images, _, err := env.Images(ctx, 0, 1)
 	if err != nil || len(images) == 0 {
 		return "", fmt.Errorf("no picture: %v", err)
 	}
@@ -1301,7 +1371,7 @@ func TestAMemoryKeptInAReplyIsSaidInTheMessageItAnswers(t *testing.T) {
 	r.clock.Advance(time.Second)
 	r.say(t, "she lives in Lisbon")
 
-	history, err := r.History(ctx, 0, 10)
+	history, _, err := r.History(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

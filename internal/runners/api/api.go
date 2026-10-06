@@ -22,13 +22,17 @@ var (
 	// time ran out. The request timeout it was given is named with it, since a
 	// runner sets its own.
 	ErrSlow = errors.New("the answer took longer than a request may take")
+	// ErrUnfinished says a stream ended before the answer did: it carried
+	// neither the event a stream ends with nor a reason the answer finished,
+	// however cleanly the host closed it.
+	ErrUnfinished = errors.New("the stream ended before the answer did")
 )
 
 // Gone reports whether an error is a request that never finished: the
 // connection went, or it was given up on. What a host said is not one of
 // these, and nothing is learned from a request that was cut off.
 func Gone(err error) bool {
-	return errors.Is(err, ErrIdle) || errors.Is(err, ErrSlow) ||
+	return errors.Is(err, ErrIdle) || errors.Is(err, ErrSlow) || errors.Is(err, ErrUnfinished) ||
 		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
@@ -224,6 +228,13 @@ type Usage struct {
 // FinishLength is the finish reason of an answer cut off at the most the model
 // writes in one answer, or at the max_tokens the request held it to.
 const FinishLength = "length"
+
+// FinishStop and FinishToolCalls are the finish reasons of an answer the model
+// ended itself: one with nothing more to write, and one that asks for calls.
+const (
+	FinishStop      = "stop"
+	FinishToolCalls = "tool_calls"
+)
 
 type Result struct {
 	Provider     string

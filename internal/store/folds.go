@@ -84,22 +84,31 @@ func (s *Store) Memories(ctx context.Context) ([]Memory, error) {
 
 // LatestMemories are the memories that still stand, newest first, from the one
 // at from on and at most limit of them: what she has been told most recently.
-func (s *Store) LatestMemories(ctx context.Context, from, limit int) ([]Memory, error) {
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
-		 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ? OFFSET ?`, limit, from)
-	if err != nil {
-		return nil, err
-	}
-	return scanMemories(rows)
+// It says as well how many stand in all.
+func (s *Store) LatestMemories(ctx context.Context, from, limit int) (found []Memory, total int, err error) {
+	err = s.snapshot(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memories WHERE replaced_by IS NULL`).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
+			 WHERE replaced_by IS NULL ORDER BY memories.id DESC LIMIT ? OFFSET ?`, limit, from)
+		if err != nil {
+			return err
+		}
+		found, err = scanMemories(rows)
+		return err
+	})
+	return found, total, err
 }
 
 // SearchMemories are the memories that still stand and hold any of the words,
-// the ones the words say most about first, at most limit of them. A word finds
-// its other forms, as "sisters" finds a memory of a sister, and a word most
-// memories hold says little of which one is meant.
-func (s *Store) SearchMemories(ctx context.Context, words []string, limit int) ([]Memory, error) {
+// the ones the words say most about first, at most limit of them, and how many
+// hold any of them in all. A word finds its other forms, as "sisters" finds a
+// memory of a sister, and a word most memories hold says little of which one is
+// meant.
+func (s *Store) SearchMemories(ctx context.Context, words []string, limit int) (found []Memory, total int, err error) {
 	if len(words) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 	// Each word is looked for as a word, whatever it spells: AND or NOT in a
 	// query are what was asked about, not how.
@@ -107,14 +116,24 @@ func (s *Store) SearchMemories(ctx context.Context, words []string, limit int) (
 	for i, w := range words {
 		quoted[i] = `"` + strings.ReplaceAll(w, `"`, `""`) + `"`
 	}
-	rows, err := s.ro.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
-		  JOIN memory_words ON memory_words.rowid = memories.id
-		 WHERE memory_words MATCH ? AND replaced_by IS NULL
-		 ORDER BY bm25(memory_words) LIMIT ?`, strings.Join(quoted, " OR "), limit)
-	if err != nil {
-		return nil, err
-	}
-	return scanMemories(rows)
+	match := strings.Join(quoted, " OR ")
+	err = s.snapshot(ctx, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM memories
+			  JOIN memory_words ON memory_words.rowid = memories.id
+			 WHERE memory_words MATCH ? AND replaced_by IS NULL`, match).Scan(&total); err != nil {
+			return err
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT `+memoryColumns+` `+memoriesFrom+`
+			  JOIN memory_words ON memory_words.rowid = memories.id
+			 WHERE memory_words MATCH ? AND replaced_by IS NULL
+			 ORDER BY bm25(memory_words) LIMIT ?`, match, limit)
+		if err != nil {
+			return err
+		}
+		found, err = scanMemories(rows)
+		return err
+	})
+	return found, total, err
 }
 
 // Forget deletes a memory and the ones it took the place of, which stand for

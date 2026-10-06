@@ -22,15 +22,20 @@ type fakeEnv struct {
 	images []store.Image
 	sees   bool
 	shown  []store.Image
+	limit  int
 }
 
 func (f *fakeEnv) Date(t time.Time) string { return t.UTC().Format("2 Jan") }
 
 func (f *fakeEnv) Time(t time.Time) string { return t.UTC().Format("2 Jan 15:04") }
 
-func (f *fakeEnv) Memories(context.Context, string, int) ([]store.Memory, error) { return nil, nil }
+func (f *fakeEnv) Memories(context.Context, string, int) ([]store.Memory, int, error) {
+	return nil, 0, nil
+}
 
-func (f *fakeEnv) LatestMemories(context.Context, int, int) ([]store.Memory, error) { return nil, nil }
+func (f *fakeEnv) LatestMemories(context.Context, int, int) ([]store.Memory, int, error) {
+	return nil, 0, nil
+}
 
 func (f *fakeEnv) Remember(context.Context, string, []store.MemoryID) (*store.Memory, error) {
 	return nil, nil
@@ -54,11 +59,12 @@ func (f *fakeEnv) Recorder() runnersapi.Recorder { return nil }
 
 // Images are the test's pictures, which it gives newest first, from the one at
 // from on.
-func (f *fakeEnv) Images(_ context.Context, from, limit int) ([]store.Image, error) {
+func (f *fakeEnv) Images(_ context.Context, from, limit int) ([]store.Image, int, error) {
+	f.limit = limit
 	if from >= len(f.images) {
-		return nil, nil
+		return nil, len(f.images), nil
 	}
-	return f.images[from:min(from+limit, len(f.images))], nil
+	return f.images[from:min(from+limit, len(f.images))], len(f.images), nil
 }
 
 func (f *fakeEnv) Image(_ context.Context, id int64) (*store.Image, error) {
@@ -121,7 +127,8 @@ func TestAListIsEveryPicture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "#2 (sent 21 Sep 19:50 by you) nothing was said of what it shows\n" +
+	want := "1 to 2 of 2 pictures, newest first:\n" +
+		"#2 (sent 21 Sep 19:50 by you) nothing was said of what it shows\n" +
 		"#1 (sent 21 Sep 19:44 by Caio) White pixelated text on a dark screen that reads THERE IS NO KNOWLEDGE THAT IS NOT POWER."
 	if got != want {
 		t.Errorf("the list answered\n%s\nwant\n%s", got, want)
@@ -129,7 +136,8 @@ func TestAListIsEveryPicture(t *testing.T) {
 }
 
 // What a call answers goes into the prompt of the round after it, so a list of
-// many pictures answers fifty at a time, saying where the older ones are.
+// many pictures answers fifty at a time unless it asks for another number,
+// saying which of how many it is and where the older ones are.
 func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
 	e := &fakeEnv{}
 	for i := 120; i > 0; i-- {
@@ -138,22 +146,27 @@ func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		args        string
+		head        string
 		first, last string
 		lines       int
 		older       string
 	}{
-		{`{}`, "#120 ", "#71 ", 50, "list_images with from 50"},
-		{`{"from":50}`, "#70 ", "#21 ", 50, "list_images with from 100"},
-		{`{"from":100}`, "#20 ", "#1 ", 20, ""},
+		{`{}`, "1 to 50 of 120 pictures", "#120 ", "#71 ", 50, "list_images with from 50"},
+		{`{"from":50}`, "51 to 100 of 120 pictures", "#70 ", "#21 ", 50, "list_images with from 100"},
+		{`{"from":100}`, "101 to 120 of 120 pictures", "#20 ", "#1 ", 20, ""},
+		{`{"from":10,"limit":5}`, "11 to 15 of 120 pictures", "#110 ", "#106 ", 5, "list_images with from 15"},
 	} {
 		got, err := call(t, "list_images", e, tc.args)
 		if err != nil {
 			t.Fatal(err)
 		}
 		lines := strings.Split(got, "\n")
-		pictures := lines
+		if !strings.HasPrefix(lines[0], tc.head) {
+			t.Errorf("%s: the list opens with %q, want %q", tc.args, lines[0], tc.head)
+		}
+		pictures := lines[1:]
 		if tc.older != "" {
-			pictures = lines[:len(lines)-1]
+			pictures = lines[1 : len(lines)-1]
 			if !strings.Contains(lines[len(lines)-1], tc.older) {
 				t.Errorf("%s: the list ends with %q, want it to say %q", tc.args, lines[len(lines)-1], tc.older)
 			}
@@ -164,11 +177,35 @@ func TestAListOfManyPicturesAnswersAPageAtATime(t *testing.T) {
 				pictures[0], pictures[len(pictures)-1], tc.lines, tc.first, tc.last)
 		}
 	}
-	if got, err := call(t, "list_images", e, `{"from":200}`); err != nil || got != "no pictures past the newest 200" {
+	if got, err := call(t, "list_images", e, `{"from":200}`); err != nil || got != "no pictures past the newest 200: there are 120 in all" {
 		t.Errorf("listing past every picture answered %q, %v", got, err)
 	}
-	if _, err := call(t, "list_images", e, `{"from":-1}`); err == nil {
-		t.Error("listing from below zero was answered")
+	for _, args := range []string{`{"from":-1}`, `{"limit":-1}`} {
+		if _, err := call(t, "list_images", e, args); err == nil {
+			t.Errorf("listing with %s was answered", args)
+		}
+	}
+}
+
+// A list answers with as many as the file says when the call asks for no
+// number, and says so in its description.
+func TestAListAnswersWithAsManyAsTheFileSays(t *testing.T) {
+	tools, err := Open(section(t, "    page: 7\n"), host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := env()
+	if _, err := tools[0].Call(context.Background(), e, json.RawMessage(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if e.limit != 7 {
+		t.Errorf("the conversation was asked for %d, want the 7 the file says", e.limit)
+	}
+	if d := tools[0].Definition(); !strings.Contains(d.Description, "7 at a time") || !strings.Contains(string(d.Parameters), "leave it out for 7") {
+		t.Errorf("the list is described as %q with %s, want the 7 the file says", d.Description, d.Parameters)
+	}
+	if _, err := Open(section(t, "    page: 0\n"), host); err == nil || !strings.Contains(err.Error(), "tools.images: page: 0 is below one") {
+		t.Errorf("a page of 0 = %v", err)
 	}
 }
 
@@ -235,12 +272,20 @@ func TestTheImageToolsSayWhereThePicturesAre(t *testing.T) {
 	}
 }
 
-// The section takes no settings, and a key written in it is named where the
-// file has it.
-func TestTheImagesSectionTakesNoSettings(t *testing.T) {
+// A key the section does not take is named where the file has it.
+func TestTheImagesSectionTakesOnlyItsSettings(t *testing.T) {
+	if _, err := Open(section(t, "    results: 3\n"), host); err == nil || !strings.Contains(err.Error(), "tools.images") ||
+		!strings.Contains(err.Error(), "results") {
+		t.Errorf("a key in the section = %v, want it named", err)
+	}
+}
+
+// section is the images section of a configuration file, written as given.
+func section(t *testing.T, images string) config.Section {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "paula.yaml")
 	file := "persona: paula.yaml\nrunners:\n  r:\n    type: venice\nmodels:\n  chat:\n    runner: r\n    id: x\n" +
-		"default_models:\n  chat: chat\ntools:\n  images:\n    results: 3\n"
+		"default_models:\n  chat: chat\ntools:\n  images:\n" + images
 	if err := os.WriteFile(path, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -248,8 +293,5 @@ func TestTheImagesSectionTakesNoSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(cfg.Tools[0].Section, host); err == nil || !strings.Contains(err.Error(), "tools.images") ||
-		!strings.Contains(err.Error(), "results") {
-		t.Errorf("a key in the section = %v, want it named", err)
-	}
+	return cfg.Tools[0].Section
 }

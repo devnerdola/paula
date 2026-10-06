@@ -249,7 +249,7 @@ func (s *Session) open(ctx context.Context) error {
 	if !ok || shower.History() <= 0 {
 		return s.prompt(ctx)
 	}
-	messages, err := s.conv.History(ctx, 0, shower.History())
+	messages, said, err := s.conv.History(ctx, 0, shower.History())
 	if err != nil {
 		return err
 	}
@@ -260,22 +260,10 @@ func (s *Session) open(ctx context.Context) error {
 		s.entries = max(s.entries, m.EntryID)
 		s.shown = max(s.shown, m.ID)
 	}
-	if err := shower.ShowHistory(ctx, spoken(messages)); err != nil {
+	if err := shower.ShowHistory(ctx, messages, said); err != nil {
 		return err
 	}
 	return s.prompt(ctx)
-}
-
-// spoken is what a frontend shows of stored messages: what the user and she
-// said. A call back that came due is the app's, and stays out of the chat.
-func spoken(messages []store.Message) []store.Message {
-	out := make([]store.Message, 0, len(messages))
-	for _, m := range messages {
-		if m.Role != store.RoleCallback {
-			out = append(out, m)
-		}
-	}
-	return out
 }
 
 // older shows what was said before a message that is on the screen already.
@@ -288,13 +276,13 @@ func (s *Session) older(ctx context.Context, before store.MessageID) error {
 	}
 	// An ask is answered whatever came of it: a frontend that is told nothing
 	// waits for an answer that is not coming.
-	messages, err := s.conv.History(ctx, before, shower.History())
+	messages, _, err := s.conv.History(ctx, before, shower.History())
 	if err != nil {
 		if err := s.failed(ctx, err); err != nil {
 			return err
 		}
 	}
-	return shower.ShowOlder(ctx, before, spoken(messages))
+	return shower.ShowOlder(ctx, before, messages)
 }
 
 // prompt asks a frontend that shows one for the next line. One that shows none

@@ -23,7 +23,7 @@ func personaCommand() *command {
 func personaCheckCommand() *command {
 	return &command{
 		name:  "check",
-		short: "print the card as a model is given it, or what is wrong with it",
+		short: "print the card as its template renders it, or what is wrong with it",
 		flags: func(fs *flag.FlagSet) func(*globals, []string) error {
 			return func(g *globals, args []string) error {
 				if len(args) > 0 {

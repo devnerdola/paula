@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -46,7 +47,8 @@ import (
 //     reservation, and compacts it before its first turn, whose messages wait
 //     for it;
 //   - the same again in a third run, whose compaction takes the summary so far
-//     with it, and which then asks for her memories and for the picture again.
+//     with it, and which then tells her what changed of what she remembered in
+//     the first run, and asks for her memories and for the picture again.
 //
 // What a word costs is read off the host's count of every reply, so the past
 // written before a run is measured at the most a word has cost in the runs
@@ -104,6 +106,11 @@ func TestLive(t *testing.T) {
 	lv.requestsTable(second)
 
 	third := lv.talkPast("third run", []*liveRun{first, second}, p, clock)
+	before, err := lv.st.Memories(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	third.send([]string{"Beatriz moved to Lisbon last week, she got a job there."}, nil)
 	third.send([]string{"Tell me everything you have saved in your memories about me."}, nil)
 	third.send([]string{"Please open the picture I sent you a while ago and look at it again. Which colour is on its left side?"}, nil)
 	third.end()
@@ -113,6 +120,7 @@ func TestLive(t *testing.T) {
 	lv.checkParts(third)
 	lv.checkResent(third)
 	lv.checkNoMemoryTold(third)
+	lv.checkMemoryUpdated(third.turns[len(third.turns)-3], before)
 	lv.checkMemories(third.turns[len(third.turns)-2])
 	lv.checkPictureGot(third, third.turns[len(third.turns)-1])
 	lv.requestsTable(third)
@@ -725,18 +733,23 @@ func (lv *live) historySize(e *Engine, m *model) int {
 	return size(msgs, e.costs.rate(m.Name), e.costs.image(m.Name))
 }
 
-// checkAnswered holds every turn of a run to having been answered.
+// checkAnswered holds every turn of a run to having been answered: its entry
+// ended done, with her reply or with nothing sent, which she may choose. The
+// turns she sent nothing to are named.
 func (lv *live) checkAnswered(r *liveRun) {
-	var found []string
+	var found, silent []string
 	for _, turn := range r.turns {
 		entry, err := lv.st.Entry(context.Background(), turn.entry)
-		reply, _ := lv.st.ReplyOfEntry(context.Background(), turn.entry)
-		if err != nil || entry.Status != store.StatusDone || reply == nil {
+		if err != nil || entry.Status != store.StatusDone {
 			found = append(found, fmt.Sprintf("%q not answered", clip(turn.said(), 40)))
+			continue
+		}
+		if _, err := lv.st.ReplyOfEntry(context.Background(), turn.entry); errors.Is(err, store.ErrNotFound) {
+			silent = append(silent, fmt.Sprintf("%q sent nothing", clip(turn.said(), 40)))
 		}
 	}
-	lv.check("every message is answered", len(found) == 0, "a reply ended done for each turn",
-		fmt.Sprintf("%d turns; %s", len(r.turns), strings.Join(found, "; ")))
+	lv.check("every message is answered", len(found) == 0, "an entry ended done for each turn",
+		fmt.Sprintf("%d turns; %s", len(r.turns), strings.Join(append(found, silent...), "; ")))
 }
 
 // checkCompactedFirst holds a run that starts on a history past its
@@ -956,6 +969,49 @@ func (lv *live) checkMemories(turn liveTurn) {
 	reply, _ := lv.st.ReplyOfEntry(ctx, turn.entry)
 	lv.check("the answer holds what was remembered", strings.Contains(textOfMessage(reply), "Beatriz"),
 		"a reply naming Beatriz", textOfMessage(reply), lv.ids(turn.entry)...)
+}
+
+// checkMemoryUpdated holds a message that changes where Beatriz lives to her
+// looking the memory of it up once and keeping the change once, in its place:
+// the memories that said Recife before it no longer stand, and one says
+// Lisbon. A memory of Beatriz that held another fact may stay, and the change
+// may still say where she lived before. Only the calls that ran are counted,
+// and the ones that failed are shown with why.
+func (lv *live) checkMemoryUpdated(turn liveTurn, before []store.Memory) {
+	ctx := context.Background()
+	calls, _ := lv.st.ToolCalls(ctx, turn.entry)
+	var lookups, kept int
+	var called []string
+	for _, c := range calls {
+		call := c.Name + " " + c.Arguments
+		if c.Error != "" {
+			called = append(called, call+" (failed: "+c.Error+")")
+			continue
+		}
+		switch c.Name {
+		case "search_memories", "list_memories":
+			lookups++
+		case "remember":
+			kept++
+		}
+		called = append(called, call)
+	}
+	memories, _ := lv.st.Memories(ctx)
+	var was []store.Memory
+	replaced := true
+	for _, m := range before {
+		if strings.Contains(m.Content, "Recife") {
+			was = append(was, m)
+			replaced = replaced && !slices.ContainsFunc(memories, func(now store.Memory) bool { return now.ID == m.ID })
+		}
+	}
+	lisbon := slices.ContainsFunc(memories, func(m store.Memory) bool {
+		return strings.Contains(m.Content, "Beatriz") && strings.Contains(m.Content, "Lisbon")
+	})
+	lv.check("a fact that changed is looked up once and kept once, in place of the memory it changes",
+		lookups == 1 && kept == 1 && len(was) > 0 && replaced && lisbon,
+		"one search or list, one remember, the memories that said Recife no longer standing, and one of Beatriz in Lisbon",
+		fmt.Sprintf("calls %v; before %s; after %s", called, memoryTexts(was), memoryTexts(memories)), lv.ids(turn.entry)...)
 }
 
 // checkPictureSent holds the picture to being kept as a file and a caption,

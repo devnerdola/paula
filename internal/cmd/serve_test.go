@@ -216,7 +216,7 @@ tools:
 	}
 	defer s.Close()
 	ctx := context.Background()
-	messages, err := s.Messages(ctx, 0, 10)
+	messages, _, err := s.Messages(ctx, 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

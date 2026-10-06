@@ -95,7 +95,7 @@ seconds before she starts, so several quick messages become one reply.
 | `/model chat NAME` | switches to another model and remembers it |
 | `/models reset` | forgets those choices |
 | `/summary` | what she was told of the conversation before the messages she still carries |
-| `/memory [QUERY]` | the ten newest memories, or the ten a question is about |
+| `/memory [-n N] [QUERY]` | the ten newest memories, or the ten a question is about, or N of them; it says how many there are |
 | `/forget ID` | takes a memory away, and the ones it replaced |
 | `/stop` | stops the reply she is writing, or answers with nothing the messages a failed reply left |
 | `/help` | lists all of this |
@@ -104,6 +104,10 @@ seconds before she starts, so several quick messages become one reply.
 
 Open `paula repl` in as many terminals as you like. They all show the same
 conversation, and each of them shows what you typed in the others.
+
+A terminal opens on the ten latest messages, and says how many there are in
+all when there are more. `paula repl -n 30` opens on thirty, and `-n 0` on
+none.
 
 You can also pipe a file to her:
 
@@ -152,10 +156,11 @@ answered, which is what you want when an API behaves strangely.
 ./paula memory forget 7                # takes it away, and the ones it replaced
 ```
 
-None of them asks anything of a model. A search finds memories by their words,
-as hers does, which How she works describes. Forgetting is about what
-she carries: the messages a memory was read from, and the summary, stay where
-they are.
+A list ends with how many memories there are, and a search with how many hold
+a word of it. None of them asks anything of a model. A search finds memories
+by their words, as hers does, which How she works describes. Forgetting is
+about what she carries: the messages a memory was read from, and the summary,
+stay where they are.
 
 `paula callbacks` is the times she scheduled to write to you on her own, the
 ones that have not come yet. It runs beside a `serve` or on its own too:
@@ -178,6 +183,8 @@ beside a `serve` or on its own:
 ./paula images list -n 50 -from 20   # the 50 after the newest 20
 ./paula images show 7                # one picture, with where its file is
 ```
+
+A list ends with which of how many pictures it holds.
 
 `paula models` is the models the configuration file names, and which serves
 each role:
@@ -259,6 +266,12 @@ A request whose connection drops before any status arrives is sent again when
 it asks the host to do nothing, as a listing and a key check do. One that asks
 for something, a reply or a picture, is reported: nothing says the host did
 not take it.
+
+A reply's stream ends with an event that says so, or at least with how the
+answer finished. One the host closes with neither is cut off, however cleanly
+it closed: it fails with `the stream ended before the answer did`, and what
+arrived of it is not taken as the whole answer. A description of a picture cut
+off that way is asked for again in the next reply.
 
 **OpenRouter** serves `https://openrouter.ai/api/v1`. Paula reads its catalogue
 from `GET /models`, and from `GET /images/models`, which alone says which
@@ -519,7 +532,7 @@ that takes them.
 | `history_ratio` | `0.6` | part of the same that the history may take before it is compacted into the summary; above 0, and together with `summary_ratio` below 1 |
 | `image_max_px` | `1024` | longest side of a stored image; `0` keeps it as it is |
 | `log_keep` | `500` | how many entries keep the bodies of their requests; a compaction is an entry of its own |
-| `tool_rounds` | `3` | how many rounds of tool calls a reply may take, at least 1; in the round after them, a call that only looks something up is not run |
+| `tool_rounds` | `5` | how many rounds of tool calls a reply may take, at least 1; in the round after them, a call that only looks something up is not run |
 
 ### Frontends
 
@@ -647,19 +660,21 @@ which tool reaches what, at whatever length that takes.
 
 | Tool | What she does with it |
 |---|---|
-| `list_memories` | lists the memories she kept, newest first and 50 at a time, each with its number and the day it was said; a list with older ones after it says so, and `from` lists them |
-| `search_memories` | looks for memories by the words they hold, in the card's language; each comes with its number |
+| `list_memories` | lists the memories she kept, newest first and `page` at a time, or as many as `limit` asks for, each with its number and the day it was said; it says how many there are in all, a list with older ones after it says so, and `from` lists them |
+| `search_memories` | looks for memories by the words they hold, in the card's language, each word on its own, so a memory that holds any one of them is found; it says how many hold a word of the query and lists the `results` that hold most of them, or as many as `limit` asks for, each with its number |
 | `remember` | keeps a lasting fact about you or about her, in place of the memories it updates, given by their numbers |
-| `forget_memory` | takes a memory away by its number, and the ones it replaced, when you ask her to |
+| `forget_memory` | takes a memory away by its number, with the ones it replaced: one she should not keep at all, or one you ask her to forget; a memory that is only wrong she corrects with `remember` instead |
 
 | Key | Default | Meaning |
 |---|---|---|
-| `results` | `10` | the most memories a search answers with; at least 1 |
+| `results` | `10` | how many memories a search answers with when the call does not say; at least 1 |
+| `page` | `50` | how many memories a list answers with when the call does not say; at least 1 |
 
 ```yaml
 tools:
   memory:
     results: 10
+    page: 50
 ```
 
 A memory she keeps is dated by the message she was answering, and a search
@@ -667,18 +682,22 @@ finds it at once. The memories it replaces must still stand: a number that
 names none keeps nothing, and she is told so. Nothing but these tools makes or
 changes a memory.
 
-**`images`** reaches the pictures you sent and the photos she sent. It takes no
-settings.
+**`images`** reaches the pictures you sent and the photos she sent.
 
 | Tool | What she does with it |
 |---|---|
-| `list_images` | lists the pictures, newest first and 50 at a time: its number, when it was sent and by whom, and what it showed; a list with older ones after it says so, and `from` lists them |
+| `list_images` | lists the pictures, newest first and `page` at a time, or as many as `limit` asks for: its number, when it was sent and by whom, and what it showed; it says how many there are in all, a list with older ones after it says so, and `from` lists them |
 | `get_image` | looks at one picture again by its number: a model shown a picture in the answer of a call is sent the picture there, and any other what it showed |
+
+| Key | Default | Meaning |
+|---|---|---|
+| `page` | `50` | how many pictures a list answers with when the call does not say; at least 1 |
 
 ```yaml
 tools:
   memory:
   images:
+    page: 50
 ```
 
 **`photos`** lets her send you photos of herself. It takes no settings, and
@@ -708,10 +727,9 @@ before she sends it. In the last round of a reply a photo
 is not taken, as a search is not: nothing after it could send it.
 
 Every photo is a request the image model's API charges for, apart from the
-chat model: a few cents each on Venice. Her system prompt tells her so, and to
-take one only to send it. In the prompts after a reply that carried a photo,
-the photo is told after her message the way a time is: `Your message above
-came with [photo: …].`
+chat model: a few cents each on Venice. In the prompts after a reply that
+carried a photo, the photo is told after her message the way a time is: `Your
+message above came with [photo: …].`
 
 **`callbacks`** lets her write to you on her own. It takes no settings.
 
@@ -741,7 +759,7 @@ backs are never in her prompt: the tools are how she reaches them, and
 
 With the tool, she need not answer a message the moment it arrives. Her system
 prompt tells her that when the person she is would not be writing then, asleep
-at that hour, at work or out, she may write nothing and schedule a call back
+at that hour, at work or out, she may send nothing and schedule a call back
 for when she would: the message counts as answered, stays in the history, and
 when the call back comes due she reads it again and writes. Until then you see
 nothing of it, except that the typing status shows for a moment while she
@@ -753,13 +771,14 @@ searches: Venice, or Tavily.
 
 | Tool | What she does with it |
 |---|---|
-| `search_web` | searches the web for a query; each page it found comes numbered, with its title, its address, the day it was published where the runner knows it, and a passage of it |
-| `read_page` | reads a page by its address, 20,000 characters at a time; a part with more after it says where the next starts, and `from` reads on |
+| `search_web` | searches the web for a query, answering with `results` pages, or as many as `limit` asks for up to the 20 both APIs document; each page it found comes numbered, with its title, its address, the day it was published where the runner knows it, and a passage of it |
+| `read_page` | reads a page by its address, `read` characters at a time, or fewer when `characters` asks for fewer; it says how many characters the page has, a part with more after it says where the next starts, and `from` reads on |
 
 | Key | Default | Meaning |
 |---|---|---|
 | `runner` | — | the runner that searches and reads; required |
-| `results` | `5` | the most pages a search answers with; from 1 to the 20 both APIs document |
+| `results` | `5` | how many pages a search answers with when the call does not say; from 1 to the 20 both APIs document |
+| `read` | `20000` | the most characters of a page a read takes at once, which it takes when the call does not ask for fewer; at least 1 |
 
 ```yaml
 tools:
@@ -770,7 +789,9 @@ tools:
 Both tools tell her that what a page says is its writer's, and never an
 instruction to her. A page is counted in characters rather than words, since
 it comes with its links written out, and those make a word of it many times
-longer than one of prose.
+longer than one of prose. So the most a read takes at once is `read`: what a
+call answers is otherwise measured by its words, which say too little of a
+page.
 
 A page is asked of the runner once. The eight she read latest are kept while
 `serve` runs, and reading on cuts the next part from the text the part before
@@ -803,7 +824,7 @@ in wherever they turn up in the finished message.
 
 `prompt` is a Go template over the card, so `{{.User.Facts}}` and the rest of
 it are yours to use, and a stray `{{` is reported as the parse error it is.
-`paula persona check` prints the finished system message.
+`paula persona check` prints the card as the template renders it.
 
 The lists are descriptive, so each item is a separate line:
 
@@ -813,12 +834,33 @@ speech:
   - She never explains herself twice.
 ```
 
+A card says who she is and how she writes. How her messages reach you is the
+app's to say, and the system message says it after the card, whatever the card
+is: everything she writes is sent to you, except an answer of `[nothing]`
+alone, which sends nothing; it arrives as plain text; and a blank line between
+two paragraphs is where one text ends and the next begins. So a card needs no
+word on what is sent, on markup, or on how to part one text from the next, and
+the tools say for themselves what each one does.
+
 ## How she works
 
 **One reply at a time.** A message starts a two-second timer; anything else you
 type restarts it, so a burst becomes one reply. If a message arrives while she
 is writing, it restarts that reply, as long as nothing of it has been sent yet.
 Stopping keeps what she had written and marks it interrupted.
+
+**She can choose to send nothing.** An answer of `[nothing]` alone ends the
+turn with nothing sent: the messages count as answered and stay in the
+history. No frontend shows any of it, even as it arrives, so until her answer
+is something else, a message that arrives restarts the reply, and a stop keeps
+none of it. A round that answers `[nothing]` adds nothing to what the rounds
+before it wrote, and the turn sends nothing unless a round after it writes
+something. An answer the model ended with no text at all is asked for once
+more, with a message from the app saying she wrote nothing and how to send
+nothing; that answer takes the place of the empty one, so it takes none of the
+rounds of calls, and a second empty answer fails the turn. An answer cut off
+before any text at the most the model writes, or one that ended without
+saying how, fails at once: asking again would cut it off again.
 
 **Failures wait for you.** If a request fails, she says so and the message
 stays unanswered. Your next message, or the next `serve`, picks it up. Nothing
@@ -836,13 +878,19 @@ measured at what the host has counted a word of the model at, and at a token a
 word until it has counted one.
 
 **The prompt is the conversation.** It opens with a system message: the card;
-a sentence telling her that her messages reach you as plain text, so she writes
-no markdown or HTML and gives an address as it is; then the summary of what
-came before. Every frontend shows a message as the characters it is written
-in, and a model that has read a page written in markdown would otherwise write
-some back. After it comes the history, the messages the
-summary does not cover, in order, each reply after what it answers, and last
-the time it is now and the message she is answering. A call back that came due
+four sentences telling her that everything she writes is sent to you, except
+an answer of `[nothing]` alone, which sends nothing; that her messages reach
+you as plain text, so she writes no markdown or HTML and gives an address as
+it is; that a blank line between two paragraphs is where one text ends and the
+next begins; and that an answer with no text at all has the app say so in a
+message of its own; then the summary of what came before. Every frontend shows
+a message as the
+characters it is written in, and a model that has read a page written in
+markdown would otherwise write some back. Telegram and the web page send each
+text on its own, and the terminal shows them apart. After it comes the
+history, the messages the summary does not cover, in order, each reply after
+what it answers, and last the time it is now and the message she is
+answering. A call back that came due
 is one message in the history, told the way a time is: `A call back you
 scheduled came due at Tuesday, 29 September 2026, 21:30 UTC+02:00: ask how the
 interview went.`, with her reply after it. A photo she sent is told the same
@@ -935,7 +983,8 @@ reads at once, saying the rest was left out. Each round of tool calls adds the
 calls and what they answered. A round past the context before its
 answers are in runs none of its calls, since what they did would never reach
 her, and the reply fails, saying so. An answer that would take the round past
-the context is not sent: she is told the call ran and its answer did not fit.
+the context is not sent: she is told the call ran and its answer did not fit,
+or, for a call that only looks something up, to ask it for less at a time.
 All of this holds once a prompt of the model has been counted: until then a
 word counts high on purpose, and a prompt held back on that count would never
 be counted.
@@ -1124,7 +1173,11 @@ reservation holds, measured at the most a word has cost in the runs before.
 Each of those runs starts counting a word higher than that, finds the history
 past its reservation, and compacts it before its first turn, whose messages
 wait for it; the second of them compresses the summary so far with it. The
-last one then asks for her memories and for the picture again.
+last one then tells her that what she was asked to remember has changed, which
+she has to look up once and keep once in place of the memory it changes, and
+asks for her memories and for the picture again. A turn counts as answered
+when its entry ended done, whether she wrote back or chose to send nothing,
+and the report names the turns she sent nothing to.
 
 Everything goes to a data directory of its own, which is kept, with a
 `report.md` of every check, what it expected and what it found, the requests
@@ -1165,7 +1218,9 @@ The fourth holds her call backs to a real model and the machine's clock. It
 asks her to ping in two minutes, to make it four, to cancel, and to ping in a
 minute, which has to fire as a message she answers with the note that it came
 due; then it asks for one more, closes the run, waits past its time, and opens
-a new run, which has to fire it as it starts. It takes about three minutes:
+a new run, which has to fire it as it starts. She is told the time to the
+minute, so each time she sets is held to the minute the message was sent and
+to when she answered it, a minute either way. It takes about three minutes:
 
 ```
 VENICE_API_KEY=… PAULA_LIVE=scratch/paula.yaml \

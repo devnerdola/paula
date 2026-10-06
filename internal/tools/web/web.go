@@ -22,20 +22,26 @@ import (
 // Kind is the key written in the configuration file.
 const Kind = "web"
 
-// defaultResults is how many pages a search answers with when the file says
-// nothing.
-const defaultResults = 5
+// defaultResults is how many pages a search answers with, and defaultRead how
+// many characters of a page a read does, when the file says nothing.
+const (
+	defaultResults = 5
+	defaultRead    = 20000
+)
 
 type settings struct {
 	// Runner is the runner that searches and reads.
 	Runner string `yaml:"runner"`
-	// Results is the most pages a search answers with.
+	// Results is how many pages a search answers with, unless the call asks
+	// for another number, and Read the most characters of a page a read takes
+	// at once, which it takes unless the call asks for fewer.
 	Results int `yaml:"results"`
+	Read    int `yaml:"read"`
 }
 
 // Open reads the web section and builds the two tools.
 func Open(s config.Section, h api.Host) ([]api.Tool, error) {
-	cfg := settings{Results: defaultResults}
+	cfg := settings{Results: defaultResults, Read: defaultRead}
 	if err := s.Decode(&cfg); err != nil {
 		return nil, err
 	}
@@ -54,12 +60,15 @@ func Open(s config.Section, h api.Host) ([]api.Tool, error) {
 	case ok && cfg.Results > searcher.MostResults():
 		p.Addf("results: %d is above the %d %s answers a search with", cfg.Results, searcher.MostResults(), cfg.Runner)
 	}
+	if cfg.Read < 1 {
+		p.Addf("read: %d is below one", cfg.Read)
+	}
 	if err := p.Err(); err != nil {
 		return nil, err
 	}
 	return []api.Tool{
 		search{h: h, searcher: searcher, results: cfg.Results},
-		read{h: h, searcher: searcher, pages: &pages{}},
+		read{h: h, searcher: searcher, pages: &pages{}, part: cfg.Read},
 	}, nil
 }
 
@@ -80,15 +89,19 @@ func (t search) Definition() api.Definition {
 		Description: "Search the web for what you want to know and do not: what is on, the news, a place, a fact " +
 			"you are not sure of, anything that may have changed since you learned what you know. Each result is " +
 			"a page: its title, its address, when it was published when that is known, and a passage of it. " +
+			fmt.Sprintf("A search answers with %d results, or as many as limit asks for, up to %d. ",
+				t.results, t.searcher.MostResults()) +
 			"read_page reads one whole. " + whose(t.h.Names),
-		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"query":{"type":"string","description":"what to search for, as you would type it into a search engine"}},` +
-			`"required":["query"]}`),
+		Parameters: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{`+
+			`"query":{"type":"string","description":"what to search for, as you would type it into a search engine"},`+
+			`"limit":{"type":"integer","description":"how many results to answer with, up to %d; leave it out for %d"}},`+
+			`"required":["query"]}`, t.searcher.MostResults(), t.results)),
 	}
 }
 
 type searchArgs struct {
 	Query string `json:"query"`
+	Limit int    `json:"limit"`
 }
 
 func (search) Note(args json.RawMessage) string {
@@ -108,7 +121,14 @@ func (t search) Call(ctx context.Context, env api.Env, args json.RawMessage) (st
 	if query == "" {
 		return "", errors.New("no query was given")
 	}
-	found, err := t.searcher.Search(ctx, runnersapi.SearchRequest{Query: query, Limit: t.results, Recorder: env.Recorder()})
+	limit, err := api.Count("limit", a.Limit, t.results)
+	if err != nil {
+		return "", err
+	}
+	if limit > t.searcher.MostResults() {
+		return "", fmt.Errorf("limit is %d, above the %d a search answers with at most", limit, t.searcher.MostResults())
+	}
+	found, err := t.searcher.Search(ctx, runnersapi.SearchRequest{Query: query, Limit: limit, Recorder: env.Recorder()})
 	if err != nil {
 		return "", err
 	}
@@ -126,17 +146,15 @@ func (t search) Call(ctx context.Context, env api.Env, args json.RawMessage) (st
 	return strings.Join(out, "\n\n"), nil
 }
 
-// part is how many characters of a page a read answers with at once. What a
-// call answers goes into the prompt of the round after it, and a whole page
-// can take more of it than the round has. It is counted in characters rather
-// than words, since a page is read with its links written out, which make a
-// word of it many times longer than one of prose.
-const part = 20000
-
+// read reads a page at most part characters at a time, and fewer when a call
+// asks for fewer. A part is counted in characters rather than words, since a
+// page is read with its links written out, which make a word of it many times
+// longer than one of prose.
 type read struct {
 	h        api.Host
 	searcher runnersapi.Searcher
 	pages    *pages
+	part     int
 }
 
 // kept is how many of the pages read latest are kept to read on from.
@@ -180,18 +198,21 @@ func (t read) Definition() api.Definition {
 	return api.Definition{
 		Name: "read_page",
 		Description: fmt.Sprintf("Read a page of the web by its address: one a search found, or one %s sent "+
-			"you. A long page is read %d characters at a time: a part with more after it says so, and from "+
-			"reads on. ", t.h.Names.User, part) + whose(t.h.Names),
-		Parameters: json.RawMessage(`{"type":"object","properties":{` +
-			`"url":{"type":"string","description":"the address of the page"},` +
-			`"from":{"type":"integer","description":"the character to read on from, as the part before says; leave it out for the start of the page"}},` +
-			`"required":["url"]}`),
+			"you. A page is read %d characters at a time, or fewer when characters asks for fewer. The answer "+
+			"says how many characters the page has and which of them it is; a part with more after it says so, "+
+			"and from reads on. ", t.h.Names.User, t.part) + whose(t.h.Names),
+		Parameters: json.RawMessage(fmt.Sprintf(`{"type":"object","properties":{`+
+			`"url":{"type":"string","description":"the address of the page"},`+
+			`"from":{"type":"integer","description":"the character to read on from, as the part before says; leave it out for the start of the page"},`+
+			`"characters":{"type":"integer","description":"how many characters to read, up to %d; leave it out for %d"}},`+
+			`"required":["url"]}`, t.part, t.part)),
 	}
 }
 
 type readArgs struct {
-	URL  string `json:"url"`
-	From int    `json:"from"`
+	URL        string `json:"url"`
+	From       int    `json:"from"`
+	Characters int    `json:"characters"`
 }
 
 func (read) Note(args json.RawMessage) string {
@@ -214,6 +235,13 @@ func (t read) Call(ctx context.Context, env api.Env, args json.RawMessage) (stri
 	if a.From < 0 {
 		return "", fmt.Errorf("from is %d, below zero", a.From)
 	}
+	part, err := api.Count("characters", a.Characters, t.part)
+	if err != nil {
+		return "", err
+	}
+	if part > t.part {
+		return "", fmt.Errorf("characters is %d, above the %d a read takes at once", part, t.part)
+	}
 	// A page read from its start is asked for as it is now; one read on is the
 	// page the part before was cut from, while it is kept.
 	page, ok := "", false
@@ -221,7 +249,6 @@ func (t read) Call(ctx context.Context, env api.Env, args json.RawMessage) (stri
 		page, ok = t.pages.get(url)
 	}
 	if !ok {
-		var err error
 		page, err = t.searcher.Read(ctx, runnersapi.PageRequest{URL: url, Recorder: env.Recorder()})
 		if err != nil {
 			return "", err
@@ -235,26 +262,28 @@ func (t read) Call(ctx context.Context, env api.Env, args json.RawMessage) (stri
 	case a.From >= len(text):
 		return "", fmt.Errorf("from is %d, past the end of the page, which is %d characters", a.From, len(text))
 	}
-	got, next := cut(text, a.From)
+	got, next := cut(text, a.From, part)
 	switch {
 	case next < len(text):
 		got += fmt.Sprintf("\n\nThe page goes on: this is characters %d to %d of %d, and read_page with from %d reads on.",
 			a.From, next, len(text), next)
 	case a.From > 0:
 		got += fmt.Sprintf("\n\nThat is the end of the page: characters %d to %d of %d.", a.From, next, len(text))
+	default:
+		got += fmt.Sprintf("\n\nThat is the whole page: %d characters.", len(text))
 	}
 	return got, nil
 }
 
-// cut is the part of a page that starts at from, and where the next part
-// starts, which is the length of the page for the last. A part ends where a
-// word does, so no word is split between two of them, unless a word is as
-// long as a whole part.
-func cut(text []rune, from int) (string, int) {
-	end := from + part
-	if end >= len(text) {
+// cut is the part of a page of so many characters that starts at from, and
+// where the next part starts, which is the length of the page for the last. A
+// part ends where a word does, so no word is split between two of them, unless
+// a word is as long as a whole part.
+func cut(text []rune, from, part int) (string, int) {
+	if part >= len(text)-from {
 		return strings.TrimSpace(string(text[from:])), len(text)
 	}
+	end := from + part
 	for i := end; i > from; i-- {
 		if unicode.IsSpace(text[i]) {
 			end = i

@@ -79,7 +79,7 @@ func (t schedule) Definition() api.Definition {
 			"scheduled, move it with move_callback rather than schedule another: both would come.",
 		Parameters: json.RawMessage(`{"type":"object","properties":{` +
 			`"at":{"type":"string","description":"when, as an RFC 3339 time with its offset, such as 2026-09-29T21:30:00+02:00"},` +
-			`"reason":{"type":"string","description":"why you want to write then, in one sentence: it is what you are told when the time comes"}},` +
+			`"reason":{"type":"string","description":"why you want to write then: it is what you are told when the time comes"}},` +
 			`"required":["at","reason"]}`),
 	}
 }
@@ -92,7 +92,7 @@ func (t schedule) Instructions() string {
 	return "When a call back you scheduled comes due, a message saying so, and why, comes from the app you and " +
 		n.User + " text through, not from " + n.User + ": you answer it by writing to " + n.User + ". " +
 		"You need not answer a message the moment it arrives. When you would not be writing right then, " +
-		"asleep at that hour, at work, or out, write nothing and schedule a call back with schedule_callback " +
+		"asleep at that hour, at work, or out, send nothing and schedule a call back with schedule_callback " +
 		"for when you would, saying in its reason what " + n.User + " wrote. The message waits: when the call " +
 		"back comes due you are shown it again, and you write then, as you would have. Before you schedule a " +
 		"call back, list the ones you have with list_callbacks: one you have already is moved with " +

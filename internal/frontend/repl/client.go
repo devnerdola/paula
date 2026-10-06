@@ -26,6 +26,8 @@ type Client struct {
 	Err    io.Writer
 	// Interactive says the terminal is being typed at, rather than fed a file.
 	Interactive bool
+	// History is how many messages a terminal being typed at opens on.
+	History int
 	// Interrupts is Ctrl-C.
 	Interrupts <-chan struct{}
 }
@@ -187,7 +189,7 @@ func (c Client) hello() fromClient {
 	// answered, not read back.
 	want := 0
 	if c.Interactive {
-		want = history
+		want = c.History
 	}
 	return fromClient{Hello: &clientHello{Version: version, History: want}}
 }

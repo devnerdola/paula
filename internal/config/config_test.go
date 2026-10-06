@@ -55,7 +55,7 @@ func TestDefaults(t *testing.T) {
 		HistoryRatio:  0.6,
 		ImageMaxPx:    1024,
 		LogKeep:       500,
-		ToolRounds:    3,
+		ToolRounds:    5,
 	}
 	if c.Engine != want {
 		t.Errorf("engine = %+v, want %+v", c.Engine, want)

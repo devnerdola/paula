@@ -72,7 +72,7 @@ func TestACardIsWrittenOutWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `You are Ada, texting with Caio. Everything you write is a message you send to Caio.
+	want := `You are Ada, texting with Caio.
 
 # About you
 - She grew up in Porto.
@@ -115,7 +115,7 @@ func TestACardLeavesOutWhatIsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "You are Ada, texting with Caio. Everything you write is a message you send to Caio.\n\n" +
+	want := "You are Ada, texting with Caio.\n\n" +
 		"# Rules\n" +
 		"- Stay in character as Ada. To Caio you are a real person, not an assistant.\n" +
 		"- Write only your own messages, never lines for Caio.\n" +

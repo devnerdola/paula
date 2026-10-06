@@ -463,8 +463,10 @@ func (e *Engine) Standing(ctx context.Context) (seq Seq, message store.MessageID
 	}
 }
 
-// History returns the messages older than a message, oldest first.
-func (e *Engine) History(ctx context.Context, before store.MessageID, limit int) ([]store.Message, error) {
+// History returns what the two of them said before a message, oldest first,
+// and how many messages they said in all. A call back that came due is the
+// app's, and no frontend shows it.
+func (e *Engine) History(ctx context.Context, before store.MessageID, limit int) ([]store.Message, int, error) {
 	return e.store.Messages(ctx, before, limit)
 }
 

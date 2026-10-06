@@ -84,6 +84,13 @@ func TestMemoryList(t *testing.T) {
 	if !strings.Contains(out, strconv.FormatInt(int64(newest), 10)) {
 		t.Errorf("out = %q, want the number it is forgotten by", out)
 	}
+	// It ends with how many of how many stand it lists.
+	if !strings.HasSuffix(out, "\n\n2 of 2 memories\n") {
+		t.Errorf("out = %q, want it to end with how many of how many it lists", out)
+	}
+	if _, out, _ := exec(t, "-config", cfg, "memory", "list", "-n", "1"); !strings.HasSuffix(out, "\n\n1 of 2 memories\n") {
+		t.Errorf("-n 1 listed %q, want one of the two", out)
+	}
 }
 
 func TestMemorySearch(t *testing.T) {
@@ -98,6 +105,9 @@ func TestMemorySearch(t *testing.T) {
 	}
 	if !strings.Contains(out, "Lisbon") || strings.Contains(out, "bicycle") {
 		t.Errorf("out = %q, want the memory about Caio's sister", out)
+	}
+	if !strings.HasSuffix(out, "\n\n1 memory holds a word of it\n") {
+		t.Errorf("out = %q, want it to end with how many hold a word of it, one said as one", out)
 	}
 	// And one about the bicycle finds the other.
 	if _, out, _ := exec(t, "-config", cfg, "memory", "search", "was the bicycle ever mended"); !strings.Contains(out, "bicycle") {

@@ -51,11 +51,15 @@ func memoryListCommand() *command {
 				}
 				defer s.Close()
 
-				found, err := s.LatestMemories(context.Background(), 0, *n)
+				found, total, err := s.LatestMemories(context.Background(), 0, *n)
 				if err != nil {
 					return err
 				}
-				return listMemories(g.stdout, found)
+				if err := listMemories(g.stdout, found); err != nil || len(found) == 0 {
+					return err
+				}
+				fmt.Fprintf(g.stdout, "\n%d of %s\n", len(found), counted(total, "memory", "memories"))
+				return nil
 			}
 		},
 	}
@@ -87,12 +91,20 @@ func memorySearchCommand() *command {
 					return err
 				}
 
-				found, err := conversation.SearchMemories(context.Background(), s, card,
+				found, total, err := conversation.SearchMemories(context.Background(), s, card,
 					strings.Join(args, " "), *n)
 				if err != nil {
 					return err
 				}
-				return listMemories(g.stdout, found)
+				if err := listMemories(g.stdout, found); err != nil || len(found) == 0 {
+					return err
+				}
+				if total == 1 {
+					fmt.Fprintln(g.stdout, "\n1 memory holds a word of it")
+					return nil
+				}
+				fmt.Fprintf(g.stdout, "\n%d of the %d memories that hold a word of it\n", len(found), total)
+				return nil
 			}
 		},
 	}

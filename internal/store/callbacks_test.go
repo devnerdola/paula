@@ -135,6 +135,12 @@ func TestAFiredCallbackIsTheMessageSheAnswers(t *testing.T) {
 	if err != nil || newest.ID != m.ID {
 		t.Errorf("the newest message is %+v, %v, want the one it fired as", newest, err)
 	}
+	// A call back that came due is the app's, not something either of them
+	// said: the newest of what was said passes over it, and it is not counted.
+	history, n, err := s.Messages(ctx, 0, 1)
+	if err != nil || len(history) != 1 || history[0].Role != RoleUser || n != 1 {
+		t.Errorf("the newest said = %+v of %d, %v, want the one message the user sent", history, n, err)
+	}
 }
 
 // The messages an entry answered include a call back that fired.

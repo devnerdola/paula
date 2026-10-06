@@ -5,6 +5,7 @@ package store
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"database/sql"
 	"embed"
 	"errors"
@@ -142,6 +143,18 @@ func openStore(dataDir string, writable bool, list []migration) (*Store, error) 
 		return nil, err
 	}
 	return s, nil
+}
+
+// snapshot runs reads that have to agree, such as a page of rows and how many
+// there are in all, in one read transaction: WAL holds every read in it to the
+// same state of the database, whatever is written beside them.
+func (s *Store) snapshot(ctx context.Context, read func(tx *sql.Tx) error) error {
+	tx, err := s.ro.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	return read(tx)
 }
 
 // file is the database as a URI, with whatever a directory name holds escaped:

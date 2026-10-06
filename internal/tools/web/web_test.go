@@ -162,6 +162,26 @@ func TestASearchAnswersEveryPageItFound(t *testing.T) {
 	}
 }
 
+// A search asks for as many results as the call wants, up to what the runner
+// answers with, and one for fewer than one or more than that is refused
+// without asking.
+func TestASearchAsksForAsManyAsTheCallWants(t *testing.T) {
+	f := &fakeSearcher{found: found(t)}
+	if _, err := call(t, f, "    runner: tavily\n", "search_web", nil, `{"query":"fado","limit":12}`); err != nil || f.searched[0].Limit != 12 {
+		t.Errorf("a search for 12 asked for %+v, %v", f.searched, err)
+	}
+	for _, args := range []string{`{"query":"fado","limit":21}`, `{"query":"fado","limit":-1}`} {
+		f := &fakeSearcher{found: found(t)}
+		if _, err := call(t, f, "    runner: tavily\n", "search_web", nil, args); err == nil || len(f.searched) != 0 {
+			t.Errorf("a search with %s answered %v, and asked %d times", args, err, len(f.searched))
+		}
+	}
+	d := opened(t, &fakeSearcher{}, "    runner: tavily\n", "search_web").Definition()
+	if !strings.Contains(d.Description, "5 results") || !strings.Contains(d.Description, "up to 20") {
+		t.Errorf("the search is described as %q, want how many it answers with and how many it can", d.Description)
+	}
+}
+
 // A query of nothing is refused without asking, and a search that found
 // nothing says so.
 func TestASearchForNothingOrThatFindsNothingSaysSo(t *testing.T) {
@@ -175,8 +195,14 @@ func TestASearchForNothingOrThatFindsNothingSaysSo(t *testing.T) {
 	}
 }
 
-// A page shorter than a part is read whole, with nothing added, by the address
-// as written and with the recorder of the reply that asked.
+// whole is a page read in one part, as the answer has it: the page, and how
+// many characters it is.
+func whole(text string) string {
+	return strings.TrimSpace(text) + fmt.Sprintf("\n\nThat is the whole page: %d characters.", utf8.RuneCountInString(text))
+}
+
+// A page shorter than a part is read whole, saying how long it is, by the
+// address as written and with the recorder of the reply that asked.
 func TestAShortPageIsReadWhole(t *testing.T) {
 	text := page(t, "short.md")
 	f := &fakeSearcher{page: text}
@@ -186,7 +212,7 @@ func TestAShortPageIsReadWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != strings.TrimSpace(text) {
+	if got != whole(text) {
 		t.Errorf("the page was answered as %q, want it whole", got)
 	}
 	if len(f.read) != 1 || f.read[0].URL != url || f.read[0].Recorder != rec {
@@ -198,12 +224,26 @@ func TestAShortPageIsReadWhole(t *testing.T) {
 // next starts, the last says it is the end, and the parts hold every word of
 // the page, in order, none split between two. The page is asked for once: the
 // parts after the first are cut from it, though the page has changed since,
-// and reading it from the start asks for it as it is now.
+// and reading it from the start asks for it as it is now. A part is as long as
+// the section says, or as the call asks for when it asks for less.
 func TestALongPageIsReadAPartAtATime(t *testing.T) {
+	for _, tc := range []struct {
+		name, section, asked string
+		part                 int
+	}{
+		{"the default", "    runner: tavily\n", "", 20000},
+		{"the section's", "    runner: tavily\n    read: 15000\n", "", 15000},
+		{"the call's", "    runner: tavily\n", `,"characters":12000`, 12000},
+	} {
+		t.Run(tc.name, func(t *testing.T) { readsInParts(t, tc.section, tc.asked, tc.part) })
+	}
+}
+
+func readsInParts(t *testing.T, section, asked string, part int) {
 	text := page(t, "long.md")
 	total := utf8.RuneCountInString(text)
 	f := &fakeSearcher{page: text}
-	read := opened(t, f, "    runner: tavily\n", "read_page")
+	read := opened(t, f, section, "read_page")
 	url := "https://pt.wikipedia.org/wiki/Santo_Ant%C3%B3nio_de_Lisboa"
 	onward := regexp.MustCompile(`\n\nThe page goes on: this is characters (\d+) to (\d+) of (\d+), and read_page with from (\d+) reads on\.$`)
 	end := regexp.MustCompile(`\n\nThat is the end of the page: characters (\d+) to (\d+) of (\d+)\.$`)
@@ -211,7 +251,7 @@ func TestALongPageIsReadAPartAtATime(t *testing.T) {
 	var parts []string
 	from := 0
 	for {
-		got, err := read.Call(context.Background(), fakeEnv{}, json.RawMessage(fmt.Sprintf(`{"url":%q,"from":%d}`, url, from)))
+		got, err := read.Call(context.Background(), fakeEnv{}, json.RawMessage(fmt.Sprintf(`{"url":%q,"from":%d%s}`, url, from, asked)))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -253,7 +293,7 @@ func TestALongPageIsReadAPartAtATime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.read) != 2 || again != strings.TrimSpace(f.page) {
+	if len(f.read) != 2 || again != whole(f.page) {
 		t.Errorf("reading the page from its start again asked %d times and read %.60q…, want it asked for as it is now",
 			len(f.read), again)
 	}
@@ -276,7 +316,7 @@ func TestOnlyThePagesReadLatestAreKept(t *testing.T) {
 		page  int
 		asked int
 	}{{kept, kept + 1}, {0, kept + 2}} {
-		if _, err := read.Call(context.Background(), fakeEnv{}, json.RawMessage(at(tc.page, part))); err != nil {
+		if _, err := read.Call(context.Background(), fakeEnv{}, json.RawMessage(at(tc.page, 20000))); err != nil {
 			t.Fatal(err)
 		}
 		if len(f.read) != tc.asked {
@@ -285,15 +325,20 @@ func TestOnlyThePagesReadLatestAreKept(t *testing.T) {
 	}
 }
 
-// A read with no address, or from before the start, is refused without
-// asking; one from past the end is said to be; a page with no text says so.
+// A read with no address, from before the start, or of fewer than one
+// character or more than a part at once, the most a number can be among them,
+// is refused without asking; one from past the end is said to be; a page with
+// no text says so.
 func TestAReadOfNothingOrPastThePageSaysSo(t *testing.T) {
 	text := page(t, "short.md")
 	url := `"url":"https://www.timeout.pt/lisboa/pt/musica/os-melhores-concertos-em-lisboa-esta-semana"`
-	for _, args := range []string{`{"url":"  "}`, `{` + url + `,"from":-1}`} {
+	for _, args := range []string{
+		`{"url":"  "}`, `{` + url + `,"from":-1}`, `{` + url + `,"characters":-1}`,
+		`{` + url + `,"characters":20001}`, `{` + url + `,"from":20,"characters":9223372036854775807}`,
+	} {
 		f := &fakeSearcher{page: text}
 		if got, err := call(t, f, "    runner: tavily\n", "read_page", nil, args); err == nil || len(f.read) != 0 {
-			t.Errorf("reading with %s answered %q, %v, and asked %d times", args, got, err, len(f.read))
+			t.Errorf("reading with %s answered %.60q…, %v, and asked %d times", args, got, err, len(f.read))
 		}
 	}
 	past := fmt.Sprintf(`{%s,"from":%d}`, url, utf8.RuneCountInString(text))
@@ -308,6 +353,20 @@ func TestAReadOfNothingOrPastThePageSaysSo(t *testing.T) {
 	}
 }
 
+// A part as long as a number can be, read on from inside the page, is the rest
+// of the page.
+func TestAPartAsLongAsANumberCanBeIsTheRestOfThePage(t *testing.T) {
+	text := page(t, "short.md")
+	url := `"url":"https://www.timeout.pt/lisboa/pt/musica/os-melhores-concertos-em-lisboa-esta-semana"`
+	got, err := call(t, &fakeSearcher{page: text}, "    runner: tavily\n    read: 9223372036854775807\n",
+		"read_page", nil, `{`+url+`,"from":20}`)
+	total := utf8.RuneCountInString(text)
+	if want := fmt.Sprintf("\n\nThat is the end of the page: characters 20 to %d of %d.", total, total); err != nil ||
+		!strings.HasSuffix(got, want) {
+		t.Errorf("the read answered %.80q…, %v, want the rest of the page", got, err)
+	}
+}
+
 // The section names a runner that searches, and asks for no more results than
 // that runner answers a search with; every problem is named under its key.
 func TestTheSectionNamesARunnerThatSearches(t *testing.T) {
@@ -316,6 +375,7 @@ func TestTheSectionNamesARunnerThatSearches(t *testing.T) {
 		{"    runner: openrouter\n", `tools.web: runner: no runner called "openrouter" searches the web, want one of [tavily]`},
 		{"    runner: tavily\n    results: 0\n", "tools.web: results: 0 is below one"},
 		{"    runner: tavily\n    results: 21\n", "tools.web: results: 21 is above the 20 tavily answers a search with"},
+		{"    runner: tavily\n    read: 0\n", "tools.web: read: 0 is below one"},
 		{"    runner: tavily\n    pages: 3\n", "pages: unknown key"},
 	} {
 		_, err := Open(load(t, tc.section), host(&fakeSearcher{}))

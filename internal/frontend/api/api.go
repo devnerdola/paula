@@ -203,12 +203,13 @@ type (
 	OtherChannels interface {
 		ShowUserMessage(ctx context.Context, m *store.Message) error
 	}
-	// HistoryShower shows what was said before this frontend opened, and says
-	// how much of it it wants. An adapter that shows none does not implement
-	// this, so there is one answer to whether history is shown.
+	// HistoryShower shows what was said before this frontend opened, of how
+	// many messages were said in all, and says how much of it it wants. An
+	// adapter that shows none does not implement this, so there is one answer
+	// to whether history is shown.
 	HistoryShower interface {
 		History() int
-		ShowHistory(ctx context.Context, ms []store.Message) error
+		ShowHistory(ctx context.Context, ms []store.Message, said int) error
 	}
 	// Backlog shows what was said before what is on the screen already, which
 	// a frontend asks for with Input.Older as it is scrolled back. It is given

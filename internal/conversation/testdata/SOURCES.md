@@ -3,9 +3,13 @@
 test sends one.
 
 `past.json.gz` is the conversation the live test starts from: 100 days of
-texting between the two people of `personas/paula.example.yaml`, written by
-`openai/gpt-5-mini` through OpenRouter playing both of them, on the date the
-file names. `../gen.go` wrote it, by hand, with the prompts it holds: one answer
+texting between the two people of `personas/paula.example.yaml` as the card
+was on the date the file names, written by `openai/gpt-5-mini` through
+OpenRouter playing both of them. Beside her voice, the card it was written
+with told her to keep to one to three sentences and one emoji a message, and to
+part her texts with a blank line, which `personas/paula.example.yaml` leaves to
+the app's system message. `../gen.go` wrote it, by hand, with the prompts it
+holds: one answer
 plans the days and says who Caio is, and one writes each day, which is asked
 again when its times are not those of a day in order. The file holds the plan
 and the days as the model wrote them. It is read as it is; a past that must

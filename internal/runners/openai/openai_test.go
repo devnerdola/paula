@@ -541,6 +541,54 @@ func TestAStreamThatIsCutOff(t *testing.T) {
 	}
 }
 
+// A stream the host closes cleanly before the answer is done, with neither the
+// event a stream ends with nor a reason the answer finished, is an error and
+// not a short answer, and its record says so. Either of the two ends one where
+// the answer does.
+func TestAStreamThatEndsBeforeTheAnswer(t *testing.T) {
+	const chunk = `data: {"choices":[{"index":0,"delta":{"content":"one "}}]}` + "\n\n"
+	for _, tc := range []struct {
+		name, body string
+		whole      bool
+	}{
+		{"with neither", chunk, false},
+		{"with a finish reason", `data: {"choices":[{"index":0,"delta":{"content":"one "},"finish_reason":"stop"}]}` + "\n\n", true},
+		{"with the end of the stream", chunk + "data: [DONE]\n\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ts, _ := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, tc.body)
+			})
+			rec := &recorder{}
+			var text strings.Builder
+			_, err := Chat(context.Background(), client(t, ts.URL), parts{}, api.ChatRequest{
+				Model:    "some/model",
+				Messages: []api.Message{api.Text(api.RoleUser, "hey")},
+				Recorder: rec,
+			}, func(c api.Chunk) error {
+				text.WriteString(c.Text)
+				return nil
+			})
+			if text.String() != "one " {
+				t.Errorf("text = %q, want what the host sent", text.String())
+			}
+			if tc.whole {
+				if err != nil {
+					t.Errorf("error = %v, want the answer whole", err)
+				}
+				return
+			}
+			if !errors.Is(err, api.ErrUnfinished) {
+				t.Errorf("error = %v, want the stream said to have ended before the answer", err)
+			}
+			if len(rec.ended) != 1 || rec.ended[0].Error != "the stream ended before the answer did" {
+				t.Errorf("recorded %+v, want the request ended with why", rec.ended)
+			}
+		})
+	}
+}
+
 // A picture a chat carries goes to the host as its bytes and into the record
 // as the sha256 it is kept under in the media directory, so the record of a
 // prompt of pictures is a line for each. A chat with no picture is recorded as

@@ -85,17 +85,27 @@ func TestImagesList(t *testing.T) {
 		}
 	}
 
+	// A list ends with which of how many pictures it holds.
+	if !strings.HasSuffix(out, "\n\n1 to 2 of 2 pictures\n") {
+		t.Errorf("the list ends\n%s\nwant which of how many pictures it holds", out)
+	}
+
 	// A list is paged from the newest, and says when there is nothing past
 	// what was passed over.
-	if _, out, _ := exec(t, "-config", cfg, "images", "list", "-n", "1"); strings.Count(strings.TrimSpace(out), "\n") != 1 ||
-		!strings.Contains(out, "Ada") {
-		t.Errorf("-n 1 listed:\n%s", out)
+	for _, c := range []struct {
+		flags      []string
+		who, which string
+	}{
+		{[]string{"-n", "1"}, "Ada", "1 to 1 of 2 pictures"},
+		{[]string{"-n", "1", "-from", "1"}, "Caio", "2 to 2 of 2 pictures"},
+	} {
+		_, out, _ := exec(t, append([]string{"-config", cfg, "images", "list"}, c.flags...)...)
+		rows := strings.Split(strings.TrimSpace(out), "\n")
+		if len(rows) != 4 || !strings.Contains(rows[1], c.who) || rows[3] != c.which {
+			t.Errorf("%v listed:\n%s\nwant %s's picture alone, and %q", c.flags, out, c.who, c.which)
+		}
 	}
-	if _, out, _ := exec(t, "-config", cfg, "images", "list", "-n", "1", "-from", "1"); strings.Count(strings.TrimSpace(out), "\n") != 1 ||
-		!strings.Contains(out, "Caio") {
-		t.Errorf("-from 1 listed:\n%s", out)
-	}
-	if _, out, _ := exec(t, "-config", cfg, "images", "list", "-from", "5"); strings.TrimSpace(out) != "no pictures past the newest 5" {
+	if _, out, _ := exec(t, "-config", cfg, "images", "list", "-from", "5"); strings.TrimSpace(out) != "no pictures past the newest 5: there are 2 in all" {
 		t.Errorf("-from 5 listed %q", out)
 	}
 	if code, _, _ := exec(t, "-config", cfg, "images", "list", "extra"); code != 2 {
